@@ -22,3 +22,8 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+
+# Rust build artifacts
+**/target/
+**/*.rs.bk
+Cargo.lock
