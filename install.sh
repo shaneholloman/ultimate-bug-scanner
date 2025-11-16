@@ -46,6 +46,8 @@ RUN_VERIFICATION=1
 TEMP_FILES=()
 # Lock file for concurrent execution prevention (MUST be fixed name, not $$)
 LOCK_FILE="/tmp/ubs-install.lock"
+# Track if we own the lock (only remove it if we created it)
+LOCK_OWNED=0
 
 cleanup_on_exit() {
   # Clean up temporary files
@@ -58,8 +60,10 @@ cleanup_on_exit() {
   rm -f /tmp/ast-grep-install.log /tmp/jq-install.log /tmp/ripgrep-install.log 2>/dev/null
   rm -f /tmp/download-error.log /tmp/sed-error.log /tmp/bug-scan.txt 2>/dev/null
   rm -rf /tmp/ripgrep.tar.gz /tmp/ripgrep-* /tmp/ast-grep.zip /tmp/ast-grep 2>/dev/null
-  # Remove lock file
-  rmdir "$LOCK_FILE" 2>/dev/null
+  # Remove lock file ONLY if we created it (don't remove another process's lock!)
+  if [ "$LOCK_OWNED" -eq 1 ]; then
+    rmdir "$LOCK_FILE" 2>/dev/null
+  fi
 }
 
 # Set up cleanup trap
@@ -1969,6 +1973,8 @@ main() {
     error "If this is incorrect, remove: $LOCK_FILE"
     exit 1
   fi
+  # Mark that we own the lock (so cleanup will remove it)
+  LOCK_OWNED=1
 
   # Save original arguments for potential re-exec during update
   local ORIGINAL_ARGS=("$@")
