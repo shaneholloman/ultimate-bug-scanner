@@ -199,6 +199,21 @@ ubs . --fail-on-warning || exit 1
 
 Commits will be blocked if issues are found.
 
+## Task Planning & Memory (Beads)
+
+We now use Steve Yegge’s Beads (`bd`) as the mandatory dependency-aware issue tracker for this project, and it’s already initialized under `.beads/` with git hooks and merge driver support. The CLI is purpose-built for AI agents: it stores issues in SQLite for fast queries, syncs via git-backed JSONL, detects ready work automatically, and exposes `--json` output everywhere so you can script against it.citeturn0search0
+
+### Daily Beads workflow
+- **First-time setup:** Run `bd quickstart` once per environment to review command summaries and confirm the database is healthy. (If `bd doctor` reports problems, fix them before coding.)citeturn0search1
+- **Pick work intentionally:** At the start of every session run `bd ready --json` (or `bd list --status open`) and claim a ready issue by calling `bd update <issue-id> --status in_progress --assignee <your-handle>`. Never freehand a plan; always anchor work to an issue ID.citeturn0search1
+- **Log discovered tasks immediately:** Whenever you encounter new work, create an issue with `bd create "Title" -d "context" -t <type> -p <priority> --json`, then relate it using `bd dep add <new> <parent> --type discovered-from` or `--type blocks` as appropriate. This replaces ad-hoc TODO lists and preserves provenance automatically.citeturn0search1
+- **Keep dependencies accurate:** Use `bd dep tree <issue-id>` and `bd show <issue-id>` to reason about blockers/parents before making changes. Update relationships instead of encoding them in prose.citeturn0search1
+- **Maintain status hygiene:** While working, keep the issue updated via `bd update <issue-id> --status in_progress|blocked|review --assignee <you>`. When the work is done and the scanner is clean, close it with `bd close <issue-id> --reason "Finished"` (optionally with `--json` for logs).citeturn0search1
+- **Sync before commits:** bd auto-flushes every few seconds and the installer added git hooks, but you must still run `bd sync` (to force export/import), then `git add .beads/issues.jsonl` (and any `.beads/*.meta.json` updates) as part of your session-ending “land the plane” steps. Resolve any merge prompts with `bd merge` instead of ad-hoc editing.citeturn0search1
+- **Use bd for handoffs:** When you pause or finish, reference the issue ID(s) you touched in your summary and point the next agent to the top entries from `bd ready --json`. Never leave new work undocumented—agents are expected to live entirely within Beads for planning.citeturn0search1
+
+Remember: “Tell your coding agent to start using the `bd` tool instead of markdown for all new work” is official guidance from the Beads project. Follow it here—every task, dependency, and follow-up belongs in bd so future sessions can resume instantly.citeturn0search0
+
 ## Troubleshooting
 
 ### Scanner Not Found
