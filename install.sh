@@ -38,6 +38,9 @@ SKIP_RIPGREP=0
 SKIP_JQ=0
 SKIP_HOOKS=0
 INSTALL_DIR=""
+FORCE_REINSTALL=0
+SKIP_VERSION_CHECK=0
+RUN_VERIFICATION=1
 
 print_header() {
   echo -e "${BOLD}${BLUE}"
@@ -101,9 +104,19 @@ can_use_sudo() {
 detect_platform() {
   local os
   os="$(uname -s)"
+
+  # WSL detection (uname shows Linux, but /proc/version mentions Microsoft)
+  if [[ "$os" == "Linux" ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+    echo "wsl"
+    return 0
+  fi
+
   case "$os" in
     Linux*)   echo "linux" ;;
     Darwin*)  echo "macos" ;;
+    FreeBSD*) echo "freebsd" ;;
+    OpenBSD*) echo "openbsd" ;;
+    NetBSD*)  echo "netbsd" ;;
     CYGWIN*|MINGW*|MSYS*) echo "windows" ;;
     *)        echo "unknown" ;;
   esac
@@ -169,7 +182,11 @@ install_ast_grep() {
         return 1
       fi
       ;;
-    linux)
+    wsl|linux)
+      # WSL and Linux use same package managers
+      if [ "$platform" = "wsl" ]; then
+        log "Detected WSL environment - using Linux package managers"
+      fi
       # Try package managers with proper error handling
       if command -v cargo >/dev/null 2>&1; then
         log "Attempting installation via cargo..."
@@ -191,8 +208,43 @@ install_ast_grep() {
         fi
       fi
 
-      warn "All installation methods failed. No package manager available (cargo, npm)"
-      log "Download from: https://github.com/ast-grep/ast-grep/releases"
+      warn "Package managers failed. Trying binary download..."
+      if download_binary_release "ast-grep" "$platform"; then
+        return 0
+      fi
+
+      error "All installation methods failed"
+      log "Download manually from: https://github.com/ast-grep/ast-grep/releases"
+      return 1
+      ;;
+    freebsd|openbsd|netbsd)
+      log "BSD platform detected: $platform"
+      # Try cargo first
+      if command -v cargo >/dev/null 2>&1; then
+        log "Attempting installation via cargo..."
+        if cargo install ast-grep 2>&1 | tee /tmp/ast-grep-install.log; then
+          success "ast-grep installed via cargo"
+          return 0
+        fi
+      fi
+
+      # Try npm
+      if command -v npm >/dev/null 2>&1; then
+        log "Attempting installation via npm..."
+        if npm install -g @ast-grep/cli 2>&1 | tee /tmp/ast-grep-install.log; then
+          success "ast-grep installed via npm"
+          return 0
+        fi
+      fi
+
+      # Try binary download
+      warn "Package managers failed. Trying binary download..."
+      if download_binary_release "ast-grep" "$platform"; then
+        return 0
+      fi
+
+      error "All installation methods failed for BSD"
+      log "Download manually from: https://github.com/ast-grep/ast-grep/releases"
       return 1
       ;;
     windows)
@@ -241,6 +293,254 @@ check_jq() {
   fi
 }
 
+# ==============================================================================
+# TIER 1 ENHANCEMENTS: Version Checking, Binary Fallbacks, Verification
+# ==============================================================================
+
+check_for_updates() {
+  [ "$SKIP_VERSION_CHECK" -eq 1 ] && return 0
+
+  local current_version="$VERSION"
+  local latest_url="$REPO_URL/VERSION"
+
+  log "Checking for updates..."
+  local latest_version
+  if latest_version=$(curl -fsSL --max-time 5 "$latest_url" 2>/dev/null); then
+    # Strip whitespace
+    latest_version=$(echo "$latest_version" | tr -d '[:space:]')
+
+    if [ "$current_version" != "$latest_version" ]; then
+      warn "New version available: $latest_version (you have $current_version)"
+      if ask "Update to latest version now?"; then
+        log "Re-running installer with latest version..."
+        exec bash <(curl -fsSL "$REPO_URL/install.sh") "${ORIGINAL_ARGS[@]}"
+      fi
+    else
+      success "You have the latest version ($current_version)"
+    fi
+  else
+    warn "Could not check for updates (network issue or rate limit)"
+  fi
+}
+
+download_binary_release() {
+  local tool="$1"  # ast-grep, ripgrep, or jq
+  local platform="$2"
+  local arch
+
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch="x86_64" ;;
+    aarch64|arm64) arch="aarch64" ;;
+    armv7*) arch="armv7" ;;
+    *) error "Unsupported architecture: $arch"; return 1 ;;
+  esac
+
+  local install_dir="$HOME/.local/bin"
+  mkdir -p "$install_dir" 2>/dev/null || { error "Cannot create $install_dir"; return 1; }
+
+  log "Attempting binary download for $tool ($platform-$arch)..."
+
+  case "$tool" in
+    ripgrep)
+      local version="14.1.0"
+      local asset tarball_dir
+      case "$platform" in
+        linux|wsl)
+          asset="ripgrep-${version}-${arch}-unknown-linux-musl.tar.gz"
+          tarball_dir="ripgrep-${version}-${arch}-unknown-linux-musl"
+          ;;
+        macos)
+          asset="ripgrep-${version}-${arch}-apple-darwin.tar.gz"
+          tarball_dir="ripgrep-${version}-${arch}-apple-darwin"
+          ;;
+        freebsd)
+          asset="ripgrep-${version}-${arch}-unknown-freebsd.tar.gz"
+          tarball_dir="ripgrep-${version}-${arch}-unknown-freebsd"
+          ;;
+        *) warn "No binary release for $platform"; return 1 ;;
+      esac
+
+      local url="https://github.com/BurntSushi/ripgrep/releases/download/${version}/${asset}"
+
+      if curl -fsSL "$url" -o /tmp/ripgrep.tar.gz 2>/dev/null; then
+        if tar -xzf /tmp/ripgrep.tar.gz -C /tmp 2>/dev/null; then
+          if [ -f "/tmp/${tarball_dir}/rg" ]; then
+            mv "/tmp/${tarball_dir}/rg" "$install_dir/rg"
+            chmod +x "$install_dir/rg"
+            rm -rf /tmp/ripgrep.tar.gz "/tmp/${tarball_dir}"
+            success "ripgrep binary installed to $install_dir/rg"
+            return 0
+          fi
+        fi
+      fi
+      ;;
+
+    ast-grep)
+      local version="0.18.0"
+      local asset
+      case "$platform-$arch" in
+        linux-x86_64|wsl-x86_64) asset="ast-grep-x86_64-unknown-linux-gnu.zip" ;;
+        linux-aarch64|wsl-aarch64) asset="ast-grep-aarch64-unknown-linux-gnu.zip" ;;
+        macos-x86_64) asset="ast-grep-x86_64-apple-darwin.zip" ;;
+        macos-aarch64) asset="ast-grep-aarch64-apple-darwin.zip" ;;
+        *) warn "No binary release for $platform-$arch"; return 1 ;;
+      esac
+
+      local url="https://github.com/ast-grep/ast-grep/releases/download/${version}/${asset}"
+
+      if curl -fsSL "$url" -o /tmp/ast-grep.zip 2>/dev/null; then
+        if command -v unzip >/dev/null 2>&1; then
+          if unzip -q /tmp/ast-grep.zip -d /tmp/ast-grep 2>/dev/null; then
+            if [ -f "/tmp/ast-grep/ast-grep" ]; then
+              mv "/tmp/ast-grep/ast-grep" "$install_dir/ast-grep"
+              chmod +x "$install_dir/ast-grep"
+              rm -rf /tmp/ast-grep.zip /tmp/ast-grep
+              success "ast-grep binary installed to $install_dir/ast-grep"
+              # Ensure $install_dir is in PATH for this session
+              export PATH="$install_dir:$PATH"
+              return 0
+            fi
+          fi
+        else
+          warn "unzip not available, cannot extract ast-grep"
+        fi
+      fi
+      rm -f /tmp/ast-grep.zip
+      ;;
+
+    jq)
+      local version="1.7.1"
+      local asset
+      case "$platform-$arch" in
+        linux-x86_64|wsl-x86_64) asset="jq-linux-amd64" ;;
+        linux-aarch64|wsl-aarch64) asset="jq-linux-arm64" ;;
+        macos-x86_64|macos-aarch64) asset="jq-macos-amd64" ;;
+        *) warn "No binary release for $platform-$arch"; return 1 ;;
+      esac
+
+      local url="https://github.com/jqlang/jq/releases/download/jq-${version}/${asset}"
+
+      if curl -fsSL "$url" -o "$install_dir/jq" 2>/dev/null; then
+        chmod +x "$install_dir/jq"
+        success "jq binary installed to $install_dir/jq"
+        # Ensure $install_dir is in PATH for this session
+        export PATH="$install_dir:$PATH"
+        return 0
+      fi
+      ;;
+  esac
+
+  error "Binary download failed for $tool"
+  return 1
+}
+
+verify_installation() {
+  [ "$RUN_VERIFICATION" -eq 0 ] && return 0
+
+  log "Running post-install verification..."
+  local errors=0
+
+  echo ""
+  echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════${RESET}"
+  echo -e "${BOLD}${BLUE}   POST-INSTALL VERIFICATION${RESET}"
+  echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════${RESET}"
+  echo ""
+
+  # Test 1: Command available
+  if command -v ubs >/dev/null 2>&1; then
+    success "ubs command available in PATH"
+    log "   Location: $(command -v ubs)"
+  else
+    error "ubs command not found in PATH"
+    ((errors++))
+  fi
+
+  # Test 2: Can execute --help
+  if ubs --help >/dev/null 2>&1 || ubs -h >/dev/null 2>&1; then
+    success "ubs executes successfully"
+  else
+    error "ubs command fails to run"
+    ((errors++))
+  fi
+
+  # Test 3: Dependencies
+  echo ""
+  log "Dependency check:"
+  if check_ast_grep; then
+    success "   ast-grep: $(command -v ast-grep || command -v sg)"
+  else
+    warn "   ast-grep: not available (scanner will use regex mode only)"
+  fi
+
+  if check_ripgrep; then
+    success "   ripgrep: $(command -v rg)"
+  else
+    warn "   ripgrep: not available (will fallback to grep)"
+  fi
+
+  if check_jq; then
+    success "   jq: $(command -v jq)"
+  else
+    warn "   jq: not available (JSON/SARIF merging disabled)"
+  fi
+
+  # Test 4: Quick smoke test
+  echo ""
+  log "Running smoke test..."
+  local test_file="/tmp/ubs-test-$$.js"
+  cat > "$test_file" << 'SMOKE'
+// Intentional bugs for smoke test
+eval(userInput);
+const x = null;
+x.foo();
+SMOKE
+
+  if timeout 10 ubs "$test_file" --ci 2>&1 | grep -q "eval\|null"; then
+    success "Smoke test PASSED - scanner detects bugs correctly"
+    rm -f "$test_file"
+  else
+    warn "Smoke test inconclusive - scanner may not be fully functional"
+    rm -f "$test_file"
+  fi
+
+  # Test 5: Module cache directory
+  echo ""
+  local module_dir="${XDG_DATA_HOME:-$HOME/.local/share}/ubs/modules"
+  if mkdir -p "$module_dir" 2>/dev/null && [ -w "$module_dir" ]; then
+    success "Module cache directory writable: $module_dir"
+  else
+    warn "Module cache directory not writable - modules cannot be cached"
+  fi
+
+  # Test 6: Hooks
+  echo ""
+  log "Integration hooks:"
+  [ -f ".git/hooks/pre-commit" ] && grep -q "ubs" ".git/hooks/pre-commit" 2>/dev/null && \
+    success "   Git pre-commit hook installed" || \
+    log "   Git hook: not installed"
+
+  [ -f ".claude/hooks/on-file-write.sh" ] && \
+    success "   Claude Code hook installed" || \
+    log "   Claude hook: not installed"
+
+  echo ""
+  echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════${RESET}"
+
+  if [ $errors -eq 0 ]; then
+    echo ""
+    success "${BOLD}All verification checks passed! ✓${RESET}"
+    echo ""
+    return 0
+  else
+    echo ""
+    error "$errors critical verification checks failed"
+    warn "Installation may be incomplete. Review errors above."
+    echo ""
+    return 1
+  fi
+}
+
 install_jq() {
   local platform
   platform="$(detect_platform)"
@@ -257,7 +557,10 @@ install_jq() {
         error "Homebrew not found. Install jq manually."; return 1
       fi
       ;;
-    linux)
+    wsl|linux)
+      if [ "$platform" = "wsl" ]; then
+        log "Detected WSL environment - using Linux package managers"
+      fi
       if command -v apt-get >/dev/null 2>&1 && can_use_sudo; then
         if timeout 300 sudo apt-get update -qq && timeout 300 sudo apt-get install -y jq 2>&1 | tee /tmp/jq-install.log; then
           success "jq installed via apt-get"; return 0
@@ -278,7 +581,32 @@ install_jq() {
           success "jq installed via snap"; return 0
         fi
       fi
-      warn "All package manager methods failed. Download jq from https://stedolan.github.io/jq/"
+      warn "Package managers failed. Trying binary download..."
+      if download_binary_release "jq" "$platform"; then
+        return 0
+      fi
+      error "All installation methods failed"
+      log "Download manually from: https://stedolan.github.io/jq/"
+      return 1
+      ;;
+    freebsd|openbsd|netbsd)
+      log "BSD platform detected: $platform"
+      if command -v pkg >/dev/null 2>&1 && can_use_sudo; then
+        if timeout 300 sudo pkg install -y jq 2>&1 | tee /tmp/jq-install.log; then
+          success "jq installed via pkg"; return 0
+        fi
+      fi
+      if command -v pkg_add >/dev/null 2>&1 && can_use_sudo; then
+        if timeout 300 sudo pkg_add jq 2>&1 | tee /tmp/jq-install.log; then
+          success "jq installed via pkg_add"; return 0
+        fi
+      fi
+      warn "Package managers failed. Trying binary download..."
+      if download_binary_release "jq" "$platform"; then
+        return 0
+      fi
+      error "All installation methods failed for BSD"
+      log "Download manually from: https://stedolan.github.io/jq/"
       return 1
       ;;
     windows)
@@ -312,7 +640,11 @@ install_ripgrep() {
         return 1
       fi
       ;;
-    linux)
+    wsl|linux)
+      # WSL and Linux use same package managers
+      if [ "$platform" = "wsl" ]; then
+        log "Detected WSL environment - using Linux package managers"
+      fi
       # Try package managers with fallback chain
       if command -v cargo >/dev/null 2>&1; then
         log "Attempting installation via cargo..."
@@ -380,8 +712,54 @@ install_ripgrep() {
         fi
       fi
 
-      warn "All installation methods failed"
-      log "Download from: https://github.com/BurntSushi/ripgrep/releases"
+      warn "All package managers failed. Trying binary download..."
+      if download_binary_release "ripgrep" "$platform"; then
+        return 0
+      fi
+
+      error "All installation methods failed"
+      log "Download manually from: https://github.com/BurntSushi/ripgrep/releases"
+      return 1
+      ;;
+    freebsd|openbsd|netbsd)
+      log "BSD platform detected: $platform"
+      if command -v pkg >/dev/null 2>&1; then
+        if can_use_sudo; then
+          log "Attempting installation via pkg..."
+          if timeout 300 sudo pkg install -y ripgrep 2>&1 | tee /tmp/ripgrep-install.log; then
+            success "ripgrep installed via pkg"
+            return 0
+          fi
+        fi
+      fi
+
+      if command -v pkg_add >/dev/null 2>&1; then
+        if can_use_sudo; then
+          log "Attempting installation via pkg_add..."
+          if timeout 300 sudo pkg_add ripgrep 2>&1 | tee /tmp/ripgrep-install.log; then
+            success "ripgrep installed via pkg_add"
+            return 0
+          fi
+        fi
+      fi
+
+      # Try cargo as fallback
+      if command -v cargo >/dev/null 2>&1; then
+        log "Attempting installation via cargo..."
+        if cargo install ripgrep 2>&1 | tee /tmp/ripgrep-install.log; then
+          success "ripgrep installed via cargo"
+          return 0
+        fi
+      fi
+
+      # Try binary download
+      warn "Package managers failed. Trying binary download..."
+      if download_binary_release "ripgrep" "$platform"; then
+        return 0
+      fi
+
+      error "All installation methods failed for BSD"
+      log "Download manually from: https://github.com/BurntSushi/ripgrep/releases"
       return 1
       ;;
     windows)
@@ -938,7 +1316,16 @@ maybe_setup_hook() {
 }
 
 main() {
+  # Save original arguments for potential re-exec during update
+  local ORIGINAL_ARGS=("$@")
+
   print_header
+
+  # Check for updates (unless skipped or updating)
+  if [ "$SKIP_VERSION_CHECK" -eq 0 ] && [[ ! " ${ORIGINAL_ARGS[*]} " =~ " --update " ]]; then
+    check_for_updates
+    echo ""
+  fi
 
   # Parse arguments
   while [[ $# -gt 0 ]]; do
@@ -966,6 +1353,18 @@ main() {
         ;;
       --skip-hooks)
         SKIP_HOOKS=1
+        shift
+        ;;
+      --skip-version-check)
+        SKIP_VERSION_CHECK=1
+        shift
+        ;;
+      --skip-verification)
+        RUN_VERIFICATION=0
+        shift
+        ;;
+      --update)
+        FORCE_REINSTALL=1
         shift
         ;;
       --install-dir)
