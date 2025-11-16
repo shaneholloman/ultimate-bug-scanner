@@ -325,39 +325,47 @@ run_async_error_checks() {
     print_finding "info" 0 "ast-grep not available" "Install ast-grep to enable async error correlation checks"
     return
   fi
-  local rule_file tmp_json
-  rule_file="$(mktemp 2>/dev/null || mktemp -t js_async_rules.XXXXXX)"
-  cat >"$rule_file" <<'YAML'
-rules:
-  - id: js.async.await-no-try
-    language: javascript
-    rule:
-      pattern: await $EXPR
-      not:
-        inside:
-          kind: try_statement
-  - id: js.async.then-no-catch
-    language: javascript
-    rule:
-      pattern: $PROMISE.then($HANDLER)
-      not:
-        has:
-          pattern: .catch($CATCH)
-  - id: js.async.promiseall-no-try
-    language: javascript
-    rule:
-      pattern: await Promise.all($ARG)
-      not:
-        inside:
-          kind: try_statement
+  local rule_dir tmp_json
+  rule_dir="$(mktemp -d 2>/dev/null || mktemp -d -t js_async_rules.XXXXXX)"
+  if [[ ! -d "$rule_dir" ]]; then
+    print_finding "info" 0 "temp dir creation failed" "Unable to stage ast-grep rules"
+    return
+  fi
+  cat >"$rule_dir/js.async.await-no-try.yml" <<'YAML'
+id: js.async.await-no-try
+language: javascript
+rule:
+  pattern: await $EXPR
+  not:
+    inside:
+      kind: try_statement
+YAML
+  cat >"$rule_dir/js.async.then-no-catch.yml" <<'YAML'
+id: js.async.then-no-catch
+language: javascript
+rule:
+  pattern: $PROMISE.then($HANDLER)
+  not:
+    has:
+      pattern: .catch($CATCH)
+YAML
+  cat >"$rule_dir/js.async.promiseall-no-try.yml" <<'YAML'
+id: js.async.promiseall-no-try
+language: javascript
+rule:
+  pattern: await Promise.all($ARG)
+  not:
+    inside:
+      kind: try_statement
 YAML
   tmp_json="$(mktemp 2>/dev/null || mktemp -t js_async_matches.XXXXXX)"
-  if ! "${AST_GREP_CMD[@]}" scan -r "$rule_file" "$PROJECT_DIR" --json >"$tmp_json" 2>/dev/null; then
-    rm -f "$rule_file" "$tmp_json"
+  if ! "${AST_GREP_CMD[@]}" scan -r "$rule_dir" "$PROJECT_DIR" --json >"$tmp_json" 2>/dev/null; then
+    rm -rf "$rule_dir"
+    rm -f "$tmp_json"
     print_finding "info" 0 "ast-grep scan failed" "Unable to compute async error coverage"
     return
   fi
-  rm -f "$rule_file"
+  rm -rf "$rule_dir"
   if ! [[ -s "$tmp_json" ]]; then
     rm -f "$tmp_json"
     print_finding "good" "All async operations appear protected"
