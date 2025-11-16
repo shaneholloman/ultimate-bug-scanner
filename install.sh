@@ -42,6 +42,29 @@ FORCE_REINSTALL=0
 SKIP_VERSION_CHECK=0
 RUN_VERIFICATION=1
 
+# Temporary files tracking for cleanup
+TEMP_FILES=()
+# Lock file for concurrent execution prevention
+LOCK_FILE="/tmp/ubs-install-$$.lock"
+
+cleanup_on_exit() {
+  # Clean up temporary files
+  if [ ${#TEMP_FILES[@]} -gt 0 ]; then
+    for temp_file in "${TEMP_FILES[@]}"; do
+      rm -rf "$temp_file" 2>/dev/null
+    done
+  fi
+  # Clean up common temp files from this script
+  rm -f /tmp/ast-grep-install.log /tmp/jq-install.log /tmp/ripgrep-install.log 2>/dev/null
+  rm -f /tmp/download-error.log /tmp/sed-error.log /tmp/bug-scan.txt 2>/dev/null
+  rm -rf /tmp/ripgrep.tar.gz /tmp/ripgrep-* /tmp/ast-grep.zip /tmp/ast-grep 2>/dev/null
+  # Remove lock file
+  rmdir "$LOCK_FILE" 2>/dev/null
+}
+
+# Set up cleanup trap
+trap cleanup_on_exit EXIT INT TERM
+
 print_header() {
   echo -e "${BOLD}${BLUE}"
   cat << 'HEADER'
@@ -1881,6 +1904,13 @@ maybe_setup_hook() {
 }
 
 main() {
+  # Concurrent execution lock to prevent race conditions
+  if ! mkdir "$LOCK_FILE" 2>/dev/null; then
+    error "Another installation is already in progress"
+    error "If this is incorrect, remove: $LOCK_FILE"
+    exit 1
+  fi
+
   # Save original arguments for potential re-exec during update
   local ORIGINAL_ARGS=("$@")
 
