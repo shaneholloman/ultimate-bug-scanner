@@ -27,3 +27,6 @@ temp/
 **/target/
 **/*.rs.bk
 Cargo.lock
+
+# Test artifacts
+test-suite/artifacts/
