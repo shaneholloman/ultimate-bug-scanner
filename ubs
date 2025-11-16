@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 # UBS Meta-Runner (v1.0)
-# Unified dispatcher for Ultimate Bug Scanner across JS/TS, Python, C++, Rust
+# Unified dispatcher for Ultimate Bug Scanner across JS/TS, Python, C/C++, Rust, Go, Java, Ruby
 # - Detects languages
 # - Ensures modules (lazy download)
 # - Runs modules concurrently
@@ -54,7 +54,7 @@ Options:
   --ci                    CI mode (stable timestamps)
   --fail-on-warning       Exit non-zero if warnings or critical exist
   -v, --verbose           Pass -v to child scanners (if supported)
-  --only=CSV              Restrict to languages: js,python,cpp,rust
+  --only=CSV              Restrict to languages: js,python,cpp,rust,golang,java,ruby
   --exclude=CSV           Exclude languages
   --module-dir=DIR        Where to store/lookup modules (default: $MODULE_DIR_DEFAULT)
   --update-modules        Force re-download of modules before run
@@ -99,7 +99,7 @@ script_dir(){ local src="${BASH_SOURCE[0]}"; while [ -h "$src" ]; do src="$(read
 # ─────────────────────────────────────────────────────────────────────────────
 # Language catalog
 # ─────────────────────────────────────────────────────────────────────────────
-ALL_LANGS=(js python cpp rust)
+ALL_LANGS=(js python cpp rust golang java ruby)
 
 # Detectors (fast ripgrep if available, else find)
 detect_lang(){
@@ -138,6 +138,33 @@ detect_lang(){
       else
         find "$PROJECT_DIR" \( -name target -o -name .cargo -o -name .git \) -prune -o \
           -type f \( -name '*.rs' -o -name 'Cargo.toml' \) -print -quit 2>/dev/null | grep -q . && found=0
+      fi
+      ;;
+    golang)
+      if need_cmd rg; then
+        rg -q --hidden -g '!vendor/**' -g '!bin/**' -g '!dist/**' -g '!build/**' \
+           -g '*.go' -g 'go.mod' -g 'go.sum' -g 'go.work' . "$PROJECT_DIR" 2>/dev/null && found=0
+      else
+        find "$PROJECT_DIR" \( -name vendor -o -name bin -o -name dist -o -name build -o -name .git \) -prune -o \
+          -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' -o -name 'go.work' \) -print -quit 2>/dev/null | grep -q . && found=0
+      fi
+      ;;
+    java)
+      if need_cmd rg; then
+        rg -q --hidden -g '!target/**' -g '!build/**' -g '!out/**' -g '!dist/**' \
+           -g '*.java' -g 'pom.xml' -g 'build.gradle' -g 'build.gradle.kts' -g 'settings.gradle' -g 'settings.gradle.kts' -g 'gradlew' -g 'mvnw' . "$PROJECT_DIR" 2>/dev/null && found=0
+      else
+        find "$PROJECT_DIR" \( -name target -o -name build -o -name out -o -name dist -o -name .git \) -prune -o \
+          -type f \( -name '*.java' -o -name 'pom.xml' -o -name 'build.gradle' -o -name 'build.gradle.kts' -o -name 'settings.gradle' -o -name 'settings.gradle.kts' -o -name 'gradlew' -o -name 'mvnw' \) -print -quit 2>/dev/null | grep -q . && found=0
+      fi
+      ;;
+    ruby)
+      if need_cmd rg; then
+        rg -q --hidden -g '!vendor/bundle/**' -g '!tmp/**' -g '!dist/**' \
+           -g '*.rb' -g 'Gemfile' -g 'Gemfile.lock' -g '*.gemspec' -g 'Rakefile' . "$PROJECT_DIR" 2>/dev/null && found=0
+      else
+        find "$PROJECT_DIR" \( -name vendor -o -name bundle -o -name tmp -o -name dist -o -name .git \) -prune -o \
+          -type f \( -name '*.rb' -o -name 'Gemfile' -o -name 'Gemfile.lock' -o -name '*.gemspec' -o -name 'Rakefile' \) -print -quit 2>/dev/null | grep -q . && found=0
       fi
       ;;
   esac
@@ -358,8 +385,8 @@ cat <<'BANNER'
 ║  ███████║  ██████╗  ██║  ██║██║ ╚████║██║ ╚████║███████╗██║  ██║             ║
 ║  ╚══════╝  ╚═════╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝                  ║
 ║                                                                              ║
-║     JS / TS • PYTHON • C / C++ • RUST  |  UBS: ULTIMATE BUG SCANNER          ║
-║     Multi-agent static analysis with ANSI lasers & SARIF fusion ☄️          ║
+║     JS / TS • PYTHON • C / C++ • RUST • GO • JAVA • RUBY                     ║
+║                    UBS: ULTIMATE BUG SCANNER • SARIF FUSION ☄️               ║
 ║                                                                              ║
 ║                                                                              ║
 ║                     Night Owl QA                                             ║

@@ -11,7 +11,7 @@ The Ultimate Bug Scanner (`ubs`) is a static analysis tool that **must be run pr
 - Completing a feature implementation
 - Finishing a bug fix
 - Responding to "done" or "ready to commit"
-- After writing more than 50 lines of new JavaScript/TypeScript code
+- After writing more than 50 lines of new code in UBS-supported languages (JavaScript/TypeScript, Python, C/C++, Rust, Go, Java, Ruby)
 
 ### ✅ Run Upon Request:
 - User asks "check code quality"
@@ -177,11 +177,11 @@ done
 
 ### Claude Code Hook
 
-If using Claude Code, the scanner runs automatically on file saves via hooks:
+If using Claude Code, the scanner runs automatically on file saves via hooks for every UBS-supported language:
 
 ```.claude/hooks/on-file-write.sh
 #!/bin/bash
-if [[ "$FILE_PATH" =~ \.(js|jsx|ts|tsx)$ ]]; then
+if [[ "$FILE_PATH" =~ \.(js|jsx|ts|tsx|mjs|cjs|py|pyw|pyi|c|cc|cpp|cxx|h|hh|hpp|hxx|rs|go|java|rb)$ ]]; then
   ubs "$PROJECT_DIR" --ci 2>&1 | head -20
 fi
 ```

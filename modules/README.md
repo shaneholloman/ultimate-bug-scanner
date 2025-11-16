@@ -1,6 +1,6 @@
 # UBS Language Modules
 
-Each `ubs-<lang>.sh` provides a consistent CLI:
+Each `ubs-<lang>.sh` provides a consistent CLI (current modules: `js`, `python`, `cpp`, `rust`, `golang`, `java`, `ruby`):
 
 ```
 ubs-<lang>.sh [PROJECT_DIR] [options]
@@ -28,4 +28,3 @@ Modules are auto-downloaded by the `ubs` meta-runner with this priority:
 When a module is missing, `ubs` fetches it from
 `https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/main/modules/ubs-<lang>.sh`,
 validates the shebang, marks it executable, and caches it for future runs.
-

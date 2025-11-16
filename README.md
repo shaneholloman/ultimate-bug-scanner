@@ -57,7 +57,7 @@ const zipCode = parseInt(userInput);  // 💥 "08" becomes 0 in old browsers (oc
 ## 🎯 **The Solution: Your 24/7 Bug Hunting Partner**
 
 ### 🧠 Language-Aware Meta-Runner
-- `ubs` auto-detects **JavaScript/TypeScript, Python, C++, and Rust** in the same repo and fanns out to per-language scanners.
+- `ubs` auto-detects **JavaScript/TypeScript, Python, C/C++, Rust, Go, Java, and Ruby** in the same repo and fans out to per-language scanners.
 - Each scanner lives under `modules/ubs-<lang>.sh`, ships independently, and supports `--format text|json|sarif` for consistent downstream tooling.
 - Modules download lazily (PATH → repo `modules/` → cached under `${XDG_DATA_HOME:-$HOME/.local/share}/ubs/modules`) and are validated before execution.
 - Results from every language merge into one text/JSON/SARIF report via `jq`, so CI systems and AI agents only have to parse a single artifact.
@@ -72,7 +72,7 @@ $ ubs .
 ╚══════════════════════════════════════════════════════════════════════╝
 
 Project:  /Users/you/awesome-app
-Files:    247 JavaScript/TypeScript files
+Files:    247 JS/TS + 58 Python + 24 Go + 16 Java + 11 Ruby + 12 C++/Rust files
 Finished: 3.2 seconds
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -149,7 +149,7 @@ Unlike traditional linters that fight AI-generated code, this scanner **embraces
 
 ```markdown
 ✅ Designed for Claude Code, Cursor, Windsurf, Aider, Continue, Copilot
-✅ Zero configuration - works with ANY JavaScript/TypeScript project
+✅ Zero configuration - works with ANY JS/TS, Python, C/C++, Rust, Go, Java, or Ruby project
 ✅ Integrates with git hooks, CI/CD, file watchers
 ✅ Actionable output (tells you WHAT's wrong and HOW to fix it)
 ✅ Fails fast in CI (catch bugs before they merge)
@@ -418,9 +418,9 @@ Drop this into `.claude/hooks/on-file-write.sh`:
 
 ```bash
 #!/bin/bash
-# Auto-scan JavaScript/TypeScript files on save
+# Auto-scan UBS-supported languages (JS/TS, Python, C/C++, Rust, Go, Java, Ruby) on save
 
-if [[ "$FILE_PATH" =~ \.(js|jsx|ts|tsx|mjs|cjs)$ ]]; then
+if [[ "$FILE_PATH" =~ \.(js|jsx|ts|tsx|mjs|cjs|py|pyw|pyi|c|cc|cpp|cxx|h|hh|hpp|hxx|rs|go|java|rb)$ ]]; then
   echo "🔬 Quality check running..."
 
   if ubs "${PROJECT_DIR}" --ci 2>&1 | head -30; then
@@ -831,8 +831,13 @@ Layer 4: STATISTICAL (Insightful)  │
 - Manually set: --jobs=N
 
 # Smart file filtering (only scans relevant files)
-- Default: .js, .jsx, .ts, .tsx, .mjs, .cjs
-- Excludes: node_modules, dist, build (automatic)
+- JS/TS: .js, .jsx, .ts, .tsx, .mjs, .cjs (auto-skip node_modules/dist/build)
+- Python: .py + pyproject/requirements (skip venv/__pycache__)
+- C/C++: .c/.cc/.cpp/.cxx + headers + CMake files (skip build/out)
+- Rust: .rs + Cargo manifests (skip target/.cargo)
+- Go: .go + go.mod/go.sum/go.work (skip vendor/bin)
+- Java: .java + pom.xml + Gradle scripts (skip target/build/out)
+- Ruby: .rb + Gemfile/Gemspec/Rakefile (skip vendor/bundle,tmp)
 - Custom: --include-ext=js,ts,vue
 
 # Efficient streaming (low memory usage)

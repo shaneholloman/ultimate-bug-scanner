@@ -55,7 +55,7 @@ HEADER
   echo -e "    ║         ${GREEN}🔬 ULTIMATE BUG SCANNER INSTALLER v${VERSION} 🔬${BLUE}         ║"
   cat << 'HEADER'
     ║                                                                  ║
-    ║         Industrial-Grade Static Analysis for JavaScript         ║
+    ║   Industrial-Grade Static Analysis for Polyglot AI Codebases    ║
     ║              Catch 1000+ Bug Patterns Before Production         ║
     ║                                                                  ║
     ╚══════════════════════════════════════════════════════════════════╝
@@ -731,9 +731,9 @@ setup_claude_code_hook() {
   cat > "$hook_file" << 'HOOK_EOF'
 #!/bin/bash
 # Ultimate Bug Scanner - Claude Code Hook
-# Runs on every file save for JavaScript/TypeScript files
+# Runs on every file save for UBS-supported languages (JS/TS, Python, C/C++, Rust, Go, Java, Ruby)
 
-if [[ "$FILE_PATH" =~ \.(js|jsx|ts|tsx|mjs|cjs)$ ]]; then
+if [[ "$FILE_PATH" =~ \.(js|jsx|ts|tsx|mjs|cjs|py|pyw|pyi|c|cc|cpp|cxx|h|hh|hpp|hxx|rs|go|java|rb)$ ]]; then
   echo "🔬 Running bug scanner..."
   if command -v ubs >/dev/null 2>&1; then
     ubs "${PROJECT_DIR}" --ci 2>&1 | head -50
@@ -890,7 +890,7 @@ add_to_agents_md() {
 
 ### When to Use
 
-Run the bug scanner **before committing** any JavaScript/TypeScript code changes:
+Run the bug scanner **before committing** any JavaScript/TypeScript, Python, C/C++, Rust, Go, Java, or Ruby code changes:
 
 ```bash
 ubs .
