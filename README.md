@@ -294,6 +294,13 @@ The installer will:
 - ✅ Set up Claude Code hooks (scan on file save)
 - ✅ Add documentation to your AGENTS.md
 
+Need the “just make it work” button? Run the installer with `--easy-mode` to auto-install every dependency, accept all prompts, detect local coding agents, and wire their quality guardrails with zero extra questions:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/main/install.sh \
+  | bash -s -- --easy-mode
+```
+
 **Total time:** 30 seconds to 2 minutes (depending on dependencies)
 
 ### **Option 2: Manual Install**
@@ -355,6 +362,20 @@ ubs . --include-ext=js,ts,vue,svelte
 ---
 
 ## 🤖 **AI Agent Integration (The Real Magic)**
+
+### On-Device Agent Guardrails
+
+`install.sh` now inspects your workstation for the most common coding agents (the same set listed below) and, when asked, drops guardrails that remind those agents to run `ubs --fail-on-warning .` before claiming a task is done. In `--easy-mode` this happens automatically; otherwise you can approve each integration individually.
+
+| Agent / IDE | What we wire up | Why it helps |
+|-------------|-----------------|--------------|
+| **Claude Code Desktop** (`.claude/hooks/on-file-write.sh`) | File-save hook that shells out to `ubs --ci` whenever Claude saves JS/TS files. | Keeps Claude from accepting “Apply Patch” without a fresh scan. |
+| **Cursor** (`.cursor/rules`) | Shared rule block that tells Cursor plans/tasks to run `ubs --fail-on-warning .` and summarize outstanding issues. | Cursor’s autonomous jobs inherit the same QA checklist as humans. |
+| **Codex CLI** (`.codex/rules`) | Adds the identical rule block for Anthropic’s Codex terminal workflow. | Ensures Codex sessions never skip the scanner during long refactors. |
+| **Gemini Code Assist** (`.gemini/rules`) | Guidance instructing Gemini agents to run `ubs` before closing a ticket. | Keeps Gemini’s asynchronous fixes aligned with UBS exit criteria. |
+| **Windsurf** (`.windsurf/rules`) | Guardrail text + sample command palette snippet referencing `ubs`. | Windsurf’s multi-step plans stay grounded in the same quality gate. |
+| **Cline** (`.cline/rules`) | Markdown instructions that Cline’s VS Code extension ingests. | Forces every “tool call” from Cline to mention scanner findings. |
+| **OpenCode MCP** (`.opencode/rules`) | Local MCP instructions so HTTP tooling always calls `ubs` before replying. | Makes OpenCode’s multi-agent swarms share the same notion of “done”. |
 
 ### **Why This Matters for AI Workflows**
 
