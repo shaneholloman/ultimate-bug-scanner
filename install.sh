@@ -5,6 +5,13 @@ set -euo pipefail
 # https://github.com/Dicklesworthstone/ultimate_bug_scanner
 
 VERSION="4.4"
+
+# Validate bash version (requires 4.0+)
+if ((BASH_VERSINFO[0] < 4)); then
+  echo "Error: This installer requires Bash 4.0 or later (you have $BASH_VERSION)" >&2
+  echo "Please upgrade bash or install manually." >&2
+  exit 1
+fi
 SCRIPT_NAME="bug-scanner.sh"
 INSTALL_NAME="ubs"
 REPO_URL="https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/main"
@@ -69,6 +76,22 @@ ask() {
   [[ "$response" =~ ^[Yy]$ ]]
 }
 
+can_use_sudo() {
+  # Check if sudo is available and can be used without password prompt
+  if ! command -v sudo >/dev/null 2>&1; then
+    return 1
+  fi
+  # Check if we can run sudo -n (non-interactive)
+  if sudo -n true 2>/dev/null; then
+    return 0
+  fi
+  # If interactive mode, we can potentially use sudo with password
+  if [ "$NON_INTERACTIVE" -eq 0 ]; then
+    return 0
+  fi
+  return 1
+}
+
 detect_platform() {
   local os
   os="$(uname -s)"
@@ -128,27 +151,53 @@ install_ast_grep() {
   case "$platform" in
     macos)
       if command -v brew >/dev/null 2>&1; then
-        brew install ast-grep
+        if brew install ast-grep 2>&1 | tee /tmp/ast-grep-install.log; then
+          success "ast-grep installed via Homebrew"
+          return 0
+        else
+          error "Homebrew installation failed. Check /tmp/ast-grep-install.log"
+          return 1
+        fi
       else
         error "Homebrew not found. Please install from: https://ast-grep.github.io/guide/quick-start.html"
         return 1
       fi
       ;;
     linux)
-      # Try package managers
+      # Try package managers with proper error handling
       if command -v cargo >/dev/null 2>&1; then
-        cargo install ast-grep
-      elif command -v npm >/dev/null 2>&1; then
-        npm install -g @ast-grep/cli
-      else
-        warn "No package manager found (cargo, npm)"
-        log "Download from: https://github.com/ast-grep/ast-grep/releases"
-        return 1
+        log "Attempting installation via cargo..."
+        if cargo install ast-grep 2>&1 | tee /tmp/ast-grep-install.log; then
+          success "ast-grep installed via cargo"
+          return 0
+        else
+          warn "Cargo installation failed, trying npm..."
+        fi
       fi
+
+      if command -v npm >/dev/null 2>&1; then
+        log "Attempting installation via npm..."
+        if npm install -g @ast-grep/cli 2>&1 | tee /tmp/ast-grep-install.log; then
+          success "ast-grep installed via npm"
+          return 0
+        else
+          warn "npm installation failed"
+        fi
+      fi
+
+      warn "All installation methods failed. No package manager available (cargo, npm)"
+      log "Download from: https://github.com/ast-grep/ast-grep/releases"
+      return 1
       ;;
     windows)
       if command -v cargo >/dev/null 2>&1; then
-        cargo install ast-grep
+        if cargo install ast-grep 2>&1 | tee /tmp/ast-grep-install.log; then
+          success "ast-grep installed via cargo"
+          return 0
+        else
+          error "Cargo installation failed"
+          return 1
+        fi
       else
         warn "Install Rust/Cargo or download from: https://ast-grep.github.io/"
         return 1
@@ -160,11 +209,12 @@ install_ast_grep() {
       ;;
   esac
 
+  # Final verification
   if check_ast_grep; then
     success "ast-grep installed successfully"
     return 0
   else
-    error "ast-grep installation failed"
+    error "ast-grep installation failed - command not found after install"
     return 1
   fi
 }
@@ -186,42 +236,124 @@ install_ripgrep() {
   case "$platform" in
     macos)
       if command -v brew >/dev/null 2>&1; then
-        brew install ripgrep
+        if brew install ripgrep 2>&1 | tee /tmp/ripgrep-install.log; then
+          success "ripgrep installed via Homebrew"
+          return 0
+        else
+          error "Homebrew installation failed. Check /tmp/ripgrep-install.log"
+          return 1
+        fi
       else
         error "Homebrew not found. Please install from: https://github.com/BurntSushi/ripgrep#installation"
         return 1
       fi
       ;;
     linux)
-      # Try package managers in order of preference
+      # Try package managers with fallback chain
       if command -v cargo >/dev/null 2>&1; then
-        cargo install ripgrep
-      elif command -v apt-get >/dev/null 2>&1; then
-        sudo apt-get update && sudo apt-get install -y ripgrep
-      elif command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y ripgrep
-      elif command -v pacman >/dev/null 2>&1; then
-        sudo pacman -S --noconfirm ripgrep
-      elif command -v snap >/dev/null 2>&1; then
-        sudo snap install ripgrep --classic
-      else
-        warn "No supported package manager found"
-        log "Download from: https://github.com/BurntSushi/ripgrep/releases"
-        return 1
+        log "Attempting installation via cargo..."
+        if cargo install ripgrep 2>&1 | tee /tmp/ripgrep-install.log; then
+          success "ripgrep installed via cargo"
+          return 0
+        else
+          warn "Cargo installation failed, trying system package managers..."
+        fi
       fi
+
+      if command -v apt-get >/dev/null 2>&1; then
+        if can_use_sudo; then
+          log "Attempting installation via apt-get..."
+          if timeout 300 sudo apt-get update -qq && timeout 300 sudo apt-get install -y ripgrep 2>&1 | tee /tmp/ripgrep-install.log; then
+            success "ripgrep installed via apt-get"
+            return 0
+          else
+            warn "apt-get installation failed, trying next method..."
+          fi
+        else
+          warn "sudo not available or not configured, skipping apt-get..."
+        fi
+      fi
+
+      if command -v dnf >/dev/null 2>&1; then
+        if can_use_sudo; then
+          log "Attempting installation via dnf..."
+          if timeout 300 sudo dnf install -y ripgrep 2>&1 | tee /tmp/ripgrep-install.log; then
+            success "ripgrep installed via dnf"
+            return 0
+          else
+            warn "dnf installation failed, trying next method..."
+          fi
+        else
+          warn "sudo not available, skipping dnf..."
+        fi
+      fi
+
+      if command -v pacman >/dev/null 2>&1; then
+        if can_use_sudo; then
+          log "Attempting installation via pacman..."
+          if timeout 300 sudo pacman -S --noconfirm ripgrep 2>&1 | tee /tmp/ripgrep-install.log; then
+            success "ripgrep installed via pacman"
+            return 0
+          else
+            warn "pacman installation failed, trying next method..."
+          fi
+        else
+          warn "sudo not available, skipping pacman..."
+        fi
+      fi
+
+      if command -v snap >/dev/null 2>&1; then
+        if can_use_sudo; then
+          log "Attempting installation via snap..."
+          if timeout 300 sudo snap install ripgrep --classic 2>&1 | tee /tmp/ripgrep-install.log; then
+            success "ripgrep installed via snap"
+            return 0
+          else
+            warn "snap installation failed"
+          fi
+        else
+          warn "sudo not available, skipping snap..."
+        fi
+      fi
+
+      warn "All installation methods failed"
+      log "Download from: https://github.com/BurntSushi/ripgrep/releases"
+      return 1
       ;;
     windows)
       if command -v cargo >/dev/null 2>&1; then
-        cargo install ripgrep
-      elif command -v scoop >/dev/null 2>&1; then
-        scoop install ripgrep
-      elif command -v choco >/dev/null 2>&1; then
-        choco install ripgrep
-      else
-        warn "Install Rust/Cargo, Scoop, or Chocolatey"
-        log "Download from: https://github.com/BurntSushi/ripgrep/releases"
-        return 1
+        log "Attempting installation via cargo..."
+        if cargo install ripgrep 2>&1 | tee /tmp/ripgrep-install.log; then
+          success "ripgrep installed via cargo"
+          return 0
+        else
+          warn "Cargo installation failed, trying Windows package managers..."
+        fi
       fi
+
+      if command -v scoop >/dev/null 2>&1; then
+        log "Attempting installation via scoop..."
+        if scoop install ripgrep 2>&1 | tee /tmp/ripgrep-install.log; then
+          success "ripgrep installed via scoop"
+          return 0
+        else
+          warn "scoop installation failed, trying choco..."
+        fi
+      fi
+
+      if command -v choco >/dev/null 2>&1; then
+        log "Attempting installation via chocolatey..."
+        if choco install ripgrep 2>&1 | tee /tmp/ripgrep-install.log; then
+          success "ripgrep installed via chocolatey"
+          return 0
+        else
+          warn "chocolatey installation failed"
+        fi
+      fi
+
+      warn "Install Rust/Cargo, Scoop, or Chocolatey"
+      log "Download from: https://github.com/BurntSushi/ripgrep/releases"
+      return 1
       ;;
     *)
       error "Unknown platform. Install manually from: https://github.com/BurntSushi/ripgrep#installation"
@@ -229,17 +361,51 @@ install_ripgrep() {
       ;;
   esac
 
+  # Final verification
   if check_ripgrep; then
     success "ripgrep installed successfully"
     return 0
   else
-    error "ripgrep installation failed"
+    error "ripgrep installation failed - command not found after install"
     return 1
   fi
 }
 
+validate_install_dir() {
+  local dir="$1"
+
+  # Security: Prevent installation to dangerous locations
+  case "$dir" in
+    /|/bin|/sbin|/usr/bin|/usr/sbin|/boot|/dev|/proc|/sys)
+      error "Refusing to install to system directory: $dir"
+      return 1
+      ;;
+    /*/../*|*/..|../*|*/../*)
+      error "Invalid path (contains ..): $dir"
+      return 1
+      ;;
+    ""|" "*|*" "*)
+      error "Invalid path (empty or contains spaces): $dir"
+      return 1
+      ;;
+  esac
+
+  # Must be an absolute path
+  if [[ "$dir" != /* ]]; then
+    error "Installation directory must be an absolute path: $dir"
+    return 1
+  fi
+
+  return 0
+}
+
 determine_install_dir() {
   if [ -n "$INSTALL_DIR" ]; then
+    # Validate user-provided directory
+    if ! validate_install_dir "$INSTALL_DIR"; then
+      error "Invalid installation directory: $INSTALL_DIR"
+      exit 1
+    fi
     echo "$INSTALL_DIR"
     return
   fi
@@ -268,75 +434,220 @@ install_scanner() {
 
   # Download or copy script
   local script_path="$install_dir/$INSTALL_NAME"
+  local temp_path="${script_path}.tmp"
 
   if [ -f "./$SCRIPT_NAME" ]; then
     # Local installation
-    cp "./$SCRIPT_NAME" "$script_path"
+    log "Installing from local file..."
+    if cp "./$SCRIPT_NAME" "$temp_path" 2>/dev/null; then
+      # Verify it's a bash script
+      if head -n 1 "$temp_path" | grep -q '^#!/.*bash'; then
+        mv "$temp_path" "$script_path"
+        success "Copied from local directory"
+      else
+        error "Local file doesn't appear to be a bash script"
+        rm -f "$temp_path"
+        return 1
+      fi
+    else
+      error "Failed to copy local file"
+      return 1
+    fi
   else
     # Remote installation
+    log "Downloading from GitHub..."
+    local download_url="${REPO_URL}/${SCRIPT_NAME}"
+
     if command -v curl >/dev/null 2>&1; then
-      curl -fsSL "${REPO_URL}/${SCRIPT_NAME}" -o "$script_path"
+      if curl -fsSL "$download_url" -o "$temp_path" 2>/tmp/download-error.log; then
+        log "Downloaded successfully via curl"
+      else
+        error "Download failed. Check /tmp/download-error.log"
+        rm -f "$temp_path"
+        return 1
+      fi
     elif command -v wget >/dev/null 2>&1; then
-      wget -q "${REPO_URL}/${SCRIPT_NAME}" -O "$script_path"
+      if wget -q "$download_url" -O "$temp_path" 2>/tmp/download-error.log; then
+        log "Downloaded successfully via wget"
+      else
+        error "Download failed. Check /tmp/download-error.log"
+        rm -f "$temp_path"
+        return 1
+      fi
     else
       error "Neither curl nor wget found. Cannot download script."
       return 1
     fi
+
+    # Verify downloaded file
+    if [ ! -s "$temp_path" ]; then
+      error "Downloaded file is empty"
+      rm -f "$temp_path"
+      return 1
+    fi
+
+    # Check minimum file size (legitimate script should be >10KB)
+    local file_size
+    file_size=$(wc -c < "$temp_path" 2>/dev/null || echo "0")
+    if [ "$file_size" -lt 10240 ]; then
+      error "Downloaded file too small ($file_size bytes) - likely incomplete"
+      rm -f "$temp_path"
+      return 1
+    fi
+
+    # Verify shebang (allow for UTF-8 BOM or whitespace)
+    local first_line
+    first_line=$(head -n 1 "$temp_path" | tr -d '\r\n\t ' | head -c 50)
+    if [[ ! "$first_line" =~ ^(\xEF\xBB\xBF)?#!.*bash ]]; then
+      error "Downloaded file doesn't appear to be a bash script"
+      log "First line: $(head -n 1 "$temp_path" | cat -v)"
+      rm -f "$temp_path"
+      return 1
+    fi
+
+    # Verify critical content markers
+    if ! grep -q "ULTIMATE BUG SCANNER" "$temp_path"; then
+      error "Downloaded file doesn't appear to be the bug scanner script"
+      rm -f "$temp_path"
+      return 1
+    fi
+
+    # Move to final location
+    mv "$temp_path" "$script_path"
   fi
 
-  chmod +x "$script_path"
+  # Make executable
+  chmod +x "$script_path" 2>/dev/null || {
+    error "Failed to make script executable"
+    return 1
+  }
 
-  if [ -x "$script_path" ]; then
+  # Final verification
+  if [ -x "$script_path" ] && [ -s "$script_path" ]; then
     success "Installed to: $script_path"
-    return 0
+
+    # Verify it can run
+    if "$script_path" --help >/dev/null 2>&1 || "$script_path" -h >/dev/null 2>&1; then
+      success "Installation verified - script is functional"
+      return 0
+    else
+      warn "Script installed but may not be fully functional"
+      return 0
+    fi
   else
-    error "Installation failed"
+    error "Installation failed - file not executable or empty"
     return 1
   fi
+}
+
+is_in_path() {
+  local dir="$1"
+  local normalized_dir
+
+  # Normalize path (resolve symlinks, remove trailing slashes)
+  if command -v realpath >/dev/null 2>&1; then
+    normalized_dir=$(realpath -s "$dir" 2>/dev/null || echo "$dir")
+  else
+    normalized_dir="${dir%/}"  # Remove trailing slash
+  fi
+
+  # Check each PATH entry
+  local IFS=':'
+  for path_entry in $PATH; do
+    local normalized_entry
+    if command -v realpath >/dev/null 2>&1; then
+      normalized_entry=$(realpath -s "$path_entry" 2>/dev/null || echo "$path_entry")
+    else
+      normalized_entry="${path_entry%/}"
+    fi
+
+    if [ "$normalized_dir" = "$normalized_entry" ]; then
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 add_to_path() {
   local install_dir
   install_dir="$(determine_install_dir)"
 
-  # Check if already in PATH
-  if echo "$PATH" | grep -q "$install_dir"; then
+  # Check if already in PATH (robust checking)
+  if is_in_path "$install_dir"; then
+    log "Directory already in PATH"
     return 0
   fi
 
   local rc_file
   rc_file="$(get_rc_file)"
+
+  # Check if rc_file is writable
+  if [ ! -w "$rc_file" ] && [ ! -w "$(dirname "$rc_file")" ]; then
+    error "Cannot write to $rc_file - check permissions"
+    return 1
+  fi
 
   log "Adding $install_dir to PATH in $rc_file..."
 
-  # Add PATH export if not already present
-  if ! grep -q "export PATH.*$install_dir" "$rc_file" 2>/dev/null; then
-    echo "" >> "$rc_file"
-    echo "# Ultimate Bug Scanner" >> "$rc_file"
-    echo "export PATH=\"\$PATH:$install_dir\"" >> "$rc_file"
-    success "Added to PATH in $rc_file"
-  else
-    log "Already in PATH"
-  fi
-}
-
-create_alias() {
-  local rc_file
-  rc_file="$(get_rc_file)"
-
-  log "Creating 'ubs' alias in $rc_file..."
-
-  # Check if alias already exists
-  if grep -q "alias ubs=" "$rc_file" 2>/dev/null; then
-    log "Alias already exists"
+  # Check if PATH entry already exists in file (multiple possible formats)
+  if grep -qE "(export )?PATH=.*$install_dir" "$rc_file" 2>/dev/null; then
+    log "PATH entry already exists in $rc_file"
     return 0
   fi
 
-  # Add alias
+  # Add PATH export
+  {
+    echo ""
+    echo "# Ultimate Bug Scanner (added $(date +%Y-%m-%d))"
+    echo "export PATH=\"\$PATH:$install_dir\""
+  } >> "$rc_file"
+
+  success "Added to PATH in $rc_file"
+  warn "⚠ IMPORTANT: Restart your shell or run: source $rc_file"
+  return 0
+}
+
+create_alias() {
+  local install_dir
+  install_dir="$(determine_install_dir)"
+  local script_path="$install_dir/$INSTALL_NAME"
+
+  # Since the binary is named 'ubs' and will be in PATH, an alias isn't strictly needed
+  # But we'll create one for backward compatibility and to ensure it works immediately
+
+  local rc_file
+  rc_file="$(get_rc_file)"
+
+  log "Configuring 'ubs' command..."
+
+  # Check if ubs command is already available
+  if command -v ubs >/dev/null 2>&1; then
+    success "'ubs' command is already available"
+    return 0
+  fi
+
+  # Check if alias already exists with correct target
+  if grep -qF "alias ubs=" "$rc_file" 2>/dev/null; then
+    log "Alias already exists, verifying..."
+    if grep -qF "alias ubs='$script_path'" "$rc_file" 2>/dev/null || \
+       grep -qF "alias ubs=\"$script_path\"" "$rc_file" 2>/dev/null; then
+      log "Existing alias is correct"
+      return 0
+    else
+      warn "Existing alias points to different location, updating..."
+      # Remove old alias (note: macOS requires the .bak extension, Linux doesn't mind)
+      sed -i.bak "/alias ubs=/d" "$rc_file" 2>/dev/null && rm -f "${rc_file}.bak" || {
+        warn "Could not update existing alias - you may need to manually remove it"
+      }
+    fi
+  fi
+
+  # Add alias pointing to the installed location
   echo "" >> "$rc_file"
   echo "# Ultimate Bug Scanner alias" >> "$rc_file"
-  echo "alias ubs='bug-scanner.sh'" >> "$rc_file"
-  success "Created 'ubs' alias"
+  echo "alias ubs='$script_path'" >> "$rc_file"
+  success "Created 'ubs' alias pointing to: $script_path"
 
   log "Restart your shell or run: source $rc_file"
 }
@@ -362,9 +673,9 @@ setup_claude_code_hook() {
 if [[ "$FILE_PATH" =~ \.(js|jsx|ts|tsx|mjs|cjs)$ ]]; then
   echo "🔬 Running bug scanner..."
   if command -v ubs >/dev/null 2>&1; then
-    ubs "$PROJECT_DIR" --ci 2>&1 | head -50
+    ubs "${PROJECT_DIR}" --ci 2>&1 | head -50
   else
-    bug-scanner.sh "$PROJECT_DIR" --ci 2>&1 | head -50
+    bug-scanner.sh "${PROJECT_DIR}" --ci 2>&1 | head -50
   fi
 fi
 HOOK_EOF
@@ -424,13 +735,24 @@ add_to_agents_md() {
     return 0
   fi
 
-  # Check if already added
-  if grep -q "Ultimate Bug Scanner" "$agents_file" 2>/dev/null; then
+  # Check if file is writable
+  if [ ! -w "$agents_file" ]; then
+    error "AGENTS.md exists but is not writable - check permissions"
+    return 1
+  fi
+
+  # Check if already added (look for the specific section header)
+  if grep -qF "## Code Quality: Ultimate Bug Scanner" "$agents_file" 2>/dev/null; then
     log "AGENTS.md already contains scanner documentation"
     return 0
   fi
 
   log "Adding scanner section to AGENTS.md..."
+
+  # Backup original file
+  if ! cp "$agents_file" "${agents_file}.backup" 2>/dev/null; then
+    warn "Could not create backup of AGENTS.md"
+  fi
 
   cat >> "$agents_file" << 'AGENTS_EOF'
 
@@ -600,17 +922,35 @@ main() {
 SUCCESS
   echo -e "${RESET}"
   echo ""
-  echo -e "${BOLD}${BLUE}┌─ Quick Start${RESET}"
-  echo -e "${BLUE}│${RESET}"
-  echo -e "${BLUE}├──${RESET} ${BOLD}Run scanner:${RESET}    ${GREEN}ubs .${RESET}"
-  echo -e "${BLUE}├──${RESET} ${BOLD}Get help:${RESET}       ${GREEN}ubs --help${RESET}"
-  echo -e "${BLUE}└──${RESET} ${BOLD}Verbose mode:${RESET}   ${GREEN}ubs -v .${RESET}"
-  echo ""
-  echo -e "${BOLD}${YELLOW}┌─ Next Steps${RESET}"
-  echo -e "${YELLOW}│${RESET}"
-  echo -e "${YELLOW}├──${RESET} ${BOLD}1.${RESET} Reload shell:     ${BLUE}source $(get_rc_file)${RESET}"
-  echo -e "${YELLOW}├──${RESET} ${BOLD}2.${RESET} Test scanner:     ${BLUE}ubs --help${RESET}"
-  echo -e "${YELLOW}└──${RESET} ${BOLD}3.${RESET} Run first scan:   ${BLUE}ubs .${RESET}"
+
+  # Check if ubs command is immediately available
+  local cmd_available=0
+  if command -v ubs >/dev/null 2>&1; then
+    cmd_available=1
+  fi
+
+  if [ "$cmd_available" -eq 1 ]; then
+    echo -e "${BOLD}${GREEN}┌─ Ready to Use! ✓${RESET}"
+    echo -e "${GREEN}│${RESET}"
+    echo -e "${GREEN}└──${RESET} The ${BOLD}ubs${RESET} command is available now!"
+    echo ""
+    echo -e "${BOLD}${BLUE}┌─ Quick Start${RESET}"
+    echo -e "${BLUE}│${RESET}"
+    echo -e "${BLUE}├──${RESET} ${BOLD}Run scanner:${RESET}    ${GREEN}ubs .${RESET}"
+    echo -e "${BLUE}├──${RESET} ${BOLD}Get help:${RESET}       ${GREEN}ubs --help${RESET}"
+    echo -e "${BLUE}└──${RESET} ${BOLD}Verbose mode:${RESET}   ${GREEN}ubs -v .${RESET}"
+  else
+    echo -e "${BOLD}${YELLOW}┌─ Almost Done! (Reload Required)${RESET}"
+    echo -e "${YELLOW}│${RESET}"
+    echo -e "${YELLOW}└──${RESET} Run: ${BOLD}${GREEN}source $(get_rc_file)${RESET}"
+    echo ""
+    echo -e "${BOLD}${BLUE}┌─ Then Try${RESET}"
+    echo -e "${BLUE}│${RESET}"
+    echo -e "${BLUE}├──${RESET} ${BOLD}Run scanner:${RESET}    ${GREEN}ubs .${RESET}"
+    echo -e "${BLUE}├──${RESET} ${BOLD}Get help:${RESET}       ${GREEN}ubs --help${RESET}"
+    echo -e "${BLUE}└──${RESET} ${BOLD}Verbose mode:${RESET}   ${GREEN}ubs -v .${RESET}"
+  fi
+
   echo ""
   echo -e "${BOLD}${BLUE}📚 Documentation:${RESET} ${BLUE}https://github.com/Dicklesworthstone/ultimate_bug_scanner${RESET}"
   echo ""
