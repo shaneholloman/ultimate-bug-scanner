@@ -375,6 +375,18 @@ show_ast_samples_from_json() {
   done
 }
 
+persist_metric_json() {
+  local key=$1; local payload=$2
+  [[ -n "$key" && -n "$payload" ]] || return 0
+  [[ -n "${UBS_METRICS_DIR:-}" ]] || return 0
+  mkdir -p "$UBS_METRICS_DIR" 2>/dev/null || true
+  {
+    printf '{"%s":' "$key"
+    printf '%s' "$payload"
+    printf '}'
+  } >"$UBS_METRICS_DIR/$key.json"
+}
+
 write_ast_rules() {
   [[ "$HAS_AST_GREP" -eq 1 ]] || return 0
   AST_RULE_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t ag_rules.XXXXXX)"
@@ -713,9 +725,19 @@ count=
 if [[ "$HAS_AST_GREP" -eq 1 ]]; then
   deep_guard_json=$(analyze_deep_property_guards "$DETAIL_LIMIT")
   if [[ -n "$deep_guard_json" ]]; then
-    if command -v jq >/dev/null 2>&1; then
-      count=$(jq -r '.unguarded // 0' <<<"$deep_guard_json")
-      guarded_inside=$(jq -r '.guarded // 0' <<<"$deep_guard_json")
+    local parsed_counts
+    parsed_counts=$(python3 - <<'PY' <<<"$deep_guard_json"
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    pass
+else:
+    print(f"{data.get('unguarded', 0)} {data.get('guarded', 0)}")
+PY
+)
+    if [[ -n "$parsed_counts" ]]; then
+      read -r count guarded_inside <<<"$parsed_counts"
     else
       deep_guard_json=""
     fi
@@ -747,6 +769,9 @@ fi
 
 if [[ -n "$deep_guard_json" && "$guarded_inside" -gt 0 ]]; then
   say "    ${DIM}Suppressed $guarded_inside guarded chain(s) detected inside if conditions${RESET}"
+fi
+if [[ -n "$deep_guard_json" ]]; then
+  persist_metric_json "deep_guard" "$deep_guard_json"
 fi
 fi
 

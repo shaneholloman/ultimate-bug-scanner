@@ -258,6 +258,31 @@ show_detailed_finding() {
   done < <("${GREP_RN[@]}" -e "$pattern" "$PROJECT_DIR" 2>/dev/null | head -n "$limit" || true) || true
 }
 
+show_ast_samples_from_json() {
+  local blob=$1
+  [[ -n "$blob" ]] || return 0
+  if ! command -v jq >/dev/null 2>&1; then return 0; fi
+  jq -cr '.samples[]?' <<<"$blob" | while IFS= read -r sample; do
+    local file line code
+    file=$(printf '%s' "$sample" | jq -r '.file')
+    line=$(printf '%s' "$sample" | jq -r '.line')
+    code=$(printf '%s' "$sample" | jq -r '.code')
+    print_code_sample "$file" "$line" "$code"
+  done
+}
+
+persist_metric_json() {
+  local key=$1; local payload=$2
+  [[ -n "$key" && -n "$payload" ]] || return 0
+  [[ -n "${UBS_METRICS_DIR:-}" ]] || return 0
+  mkdir -p "$UBS_METRICS_DIR" 2>/dev/null || true
+  {
+    printf '{"%s":' "$key"
+    printf '%s' "$payload"
+    printf '}'
+  } >"$UBS_METRICS_DIR/$key.json"
+}
+
 begin_scan_section(){ if [[ "$DISABLE_PIPEFAIL_DURING_SCAN" -eq 1 ]]; then set +o pipefail; fi; }
 end_scan_section(){ if [[ "$DISABLE_PIPEFAIL_DURING_SCAN" -eq 1 ]]; then set -o pipefail; fi; }
 
@@ -290,6 +315,96 @@ ast_search() {
   else
     return 1
   fi
+}
+
+analyze_rb_chain_guards() {
+  local limit=${1:-$DETAIL_LIMIT}
+  if [[ "$HAS_AST_GREP" -ne 1 ]]; then return 1; fi
+  if ! command -v python3 >/dev/null 2>&1; then return 1; fi
+  local tmp_chains tmp_ifs result
+  tmp_chains="$(mktemp -t ubs-rb-chains.XXXXXX 2>/dev/null || mktemp -t ubs-rb-chains)"
+  tmp_ifs="$(mktemp -t ubs-rb-ifs.XXXXXX 2>/dev/null || mktemp -t ubs-rb-ifs)"
+
+  ( set +o pipefail; "${AST_GREP_CMD[@]}" --pattern '$OBJ.$P1.$P2.$P3' --lang ruby "$PROJECT_DIR" --json=stream 2>/dev/null || true ) >"$tmp_chains"
+  ( set +o pipefail; "${AST_GREP_CMD[@]}" --pattern $'if $COND\n  $BODY\nend' --lang ruby "$PROJECT_DIR" --json=stream 2>/dev/null || true ) >"$tmp_ifs"
+
+  result=$(python3 - "$tmp_chains" "$tmp_ifs" "$limit" <<'PYHELP'
+import json, sys
+from collections import defaultdict
+
+def load_stream(path):
+    data = []
+    try:
+        with open(path, 'r', encoding='utf-8') as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except FileNotFoundError:
+        return data
+    return data
+
+matches_path, guards_path, limit_raw = sys.argv[1:4]
+limit = int(limit_raw)
+matches = load_stream(matches_path)
+guards = load_stream(guards_path)
+
+def as_pos(node):
+    return (node.get('line', 0), node.get('column', 0))
+
+def ge(a, b):
+    return a[0] > b[0] or (a[0] == b[0] and a[1] >= b[1])
+
+def le(a, b):
+    return a[0] < b[0] or (a[0] == b[0] and a[1] <= b[1])
+
+def within(target, region):
+    start, end = target
+    rs, re = region
+    return ge(start, rs) and le(end, re)
+
+guards_by_file = defaultdict(list)
+for guard in guards:
+    file_path = guard.get('file')
+    cond = guard.get('metaVariables', {}).get('single', {}).get('COND')
+    if not file_path or not cond:
+        continue
+    rng = cond.get('range') or {}
+    start = rng.get('start'); end = rng.get('end')
+    if not start or not end:
+        continue
+    guards_by_file[file_path].append((as_pos(start), as_pos(end)))
+
+unguarded = 0
+guarded = 0
+samples = []
+
+for match in matches:
+    file_path = match.get('file')
+    rng = match.get('range') or {}
+    start = rng.get('start'); end = rng.get('end')
+    if not file_path or not start or not end:
+        continue
+    start_pos = as_pos(start); end_pos = as_pos(end)
+    regions = guards_by_file.get(file_path, [])
+    if any(within((start_pos, end_pos), region) for region in regions):
+        guarded += 1
+        continue
+    unguarded += 1
+    if len(samples) < limit:
+        snippet = (match.get('lines') or '').strip()
+        samples.append({'file': file_path, 'line': start_pos[0] + 1, 'code': snippet})
+
+print(json.dumps({'unguarded': unguarded, 'guarded': guarded, 'samples': samples}, ensure_ascii=False))
+PYHELP
+  )
+
+  rm -f "$tmp_chains" "$tmp_ifs"
+  printf '%s' "$result"
 }
 
 write_ast_rules() {
@@ -616,14 +731,54 @@ else
 fi
 
 print_subheader "Deep method chains (use &. / guards)"
-count=$(
-  ast_search '$X.$Y.$Z.$W' \
-  || ( "${GREP_RN[@]}" -e "\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*" "$PROJECT_DIR" 2>/dev/null || true ) | count_lines
+deep_chain_json=""
+guarded_chain_count=0
+count=
+if [[ "$HAS_AST_GREP" -eq 1 ]]; then
+  deep_chain_json=$(analyze_rb_chain_guards "$DETAIL_LIMIT")
+  if [[ -n "$deep_chain_json" ]]; then
+    parsed_counts=$(python3 - <<'PY' <<<"$deep_chain_json"
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    pass
+else:
+    print(f"{data.get('unguarded', 0)} {data.get('guarded', 0)}")
+PY
 )
+    if [[ -n "$parsed_counts" ]]; then
+      read -r count guarded_chain_count <<<"$parsed_counts"
+    else
+      deep_chain_json=""
+    fi
+  fi
+fi
+if [[ -z "${count:-}" ]]; then
+  count=$(
+    ast_search '$X.$Y.$Z.$W' \
+    || ( "${GREP_RN[@]}" -e "\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*" "$PROJECT_DIR" 2>/dev/null || true ) | count_lines
+  )
+  guarded_chain_count=0
+fi
 if [ "$count" -gt 15 ]; then
   print_finding "info" "$count" "Fragile deep chaining" "Consider &. or guard clauses"
+  if [[ -n "$deep_chain_json" ]]; then
+    show_ast_samples_from_json "$deep_chain_json"
+  else
+    show_detailed_finding "\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*" 3
+  fi
 elif [ "$count" -gt 0 ]; then
   print_finding "info" "$count" "Some deep chaining detected"
+  [[ -n "$deep_chain_json" ]] && show_ast_samples_from_json "$deep_chain_json"
+elif [ "$guarded_chain_count" -gt 0 ]; then
+  print_finding "good" "$guarded_chain_count" "Deep chains guarded" "Scanner suppressed method chains guarded by explicit if blocks"
+fi
+if [[ -n "$deep_chain_json" && "$guarded_chain_count" -gt 0 ]]; then
+  say "    ${DIM}Suppressed $guarded_chain_count guarded chain(s) detected inside if statements${RESET}"
+fi
+if [[ -n "$deep_chain_json" ]]; then
+  persist_metric_json "deep_guard" "$deep_chain_json"
 fi
 
 print_subheader "Hash#[] chained without dig"
