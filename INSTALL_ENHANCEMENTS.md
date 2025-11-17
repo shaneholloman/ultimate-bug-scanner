@@ -198,6 +198,11 @@ Comprehensive enhancement of the UBS installation script with enterprise-grade f
 - `--no-path-modify` now skips both PATH edits **and** the alias helper, so CI installs or reproducible environments can avoid touching shell rc files entirely.
 - Synced the repo `VERSION` file with the installer’s hard-coded version (4.6.0) so update checks behave predictably.
 - Added `test-suite/install/run_tests.sh`, a disposable `$HOME` harness that exercises the installer in non-interactive mode and guards against regressions in automation.
+- Extended `--dry-run` so *every* mutating operation (binary downloads, rc file edits, hook writes, installation of ripgrep/jq/ast-grep, PATH/alias creation, verification smoke files, etc.) now logs intent instead of touching disk. You can safely demo the installer without leaving residue anywhere.
+- Added a repo-scoped `--self-test` flag that shells out to `test-suite/install/run_tests.sh` after install. It fails fast if the harness is missing (e.g., when piping from GitHub), ensuring CI never silently “passes” without an actual regression test.
+- New stale-binary warning: after installation we compare the freshly written `$install_dir/ubs` with `command -v ubs` and warn if an older binary shadows the new one on PATH.
+- Installer now keeps *all* temporary logs under `mktemp`-managed directories via `register_temp_path`, replacing hard-coded `/tmp/*.log` writes and guaranteeing cleanup on exit.
+- Ripgrep/jq installers now share the dry-run + temp-log behavior introduced for ast-grep, so binary fetches and package-manager attempts are auditable and respect non-mutating runs.
 
 ---
 

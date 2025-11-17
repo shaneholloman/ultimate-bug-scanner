@@ -999,6 +999,27 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scan
 ./ubs .
 ```
 
+### Installer Safety Nets
+
+| Flag | What it does | Why it matters |
+|------|--------------|----------------|
+| `--dry-run` | Prints every install action (downloads, PATH edits, hook writes, cleanup) without touching disk. Dry runs still resolve config, detect agents, and show you exactly what *would* change. | Audit the installer, demo it to teammates, or validate CI steps without modifying a workstation. |
+| `--self-test` | Immediately runs `test-suite/install/run_tests.sh` after installation and exits non-zero if the smoke suite fails. | CI/CD jobs and verified setups can prove the installer still works end-to-end before trusting a release. |
+
+> ⚠️ `--self-test` requires running `install.sh` from a working tree that contains `test-suite/install/run_tests.sh` (i.e., the repo root). Curl-piping the installer from GitHub can’t self-test because the harness isn’t present, so the flag will error out early instead of giving a false sense of safety.
+
+> ℹ️ After every install the script now double-checks `command -v ubs`. If another copy shadows the freshly written binary, you’ll get an explicit warning with both paths so you can fix PATH order before running scans.
+
+**Common combos**
+
+```bash
+# Preview everything without touching dotfiles or hooks
+bash install.sh --dry-run --no-path-modify --skip-hooks --non-interactive
+
+# CI-friendly install that self-tests the smoke harness
+bash install.sh --easy-mode --self-test --skip-hooks
+```
+
 ---
 
 ## 💡 **Basic Usage**
@@ -1566,6 +1587,16 @@ bash test-suite/install/run_tests.sh
 ```
 
 The harness boots `install.sh` inside disposable `$HOME` directories, asserts that the post-install verification banner appears, and ensures `--no-path-modify` truly leaves shell rc files untouched. CI jobs can call the same script to get signal in under a second.
+
+Prefer a single-command workflow? The installer now has a built-in `--self-test` flag:
+
+```bash
+bash install.sh --easy-mode --self-test --skip-hooks
+```
+
+It installs UBS, runs the same harness above, and fails the whole run if smoke tests fail—perfect for CI or pre-release validation.
+
+> 🧠 When adding or updating JavaScript module test fixtures, prefer authoring AST-grep rules (see `modules/ubs-js.sh` and `test-suite/js/*`) instead of brittle regex-only checks. AST-aware expectations keep manifests stable even as formatting or whitespace shifts.
 
 ---
 

@@ -62,6 +62,16 @@ test-suite/
 └── README.md                   # This file
 ```
 
+## 🧠 Pattern Authoring Philosophy
+
+When expanding the JavaScript/TypeScript module (or any language module with AST support), favor **ast-grep-first** rules instead of brittle regex spot checks. Every new manifest fixture should document the AST shape you expect and include at least one "clean" counterpart proving the rule suppresses good code. Regex-only prototypes are fine for experiments, but before landing changes:
+
+1. Build the detector in ast-grep (or the language’s semantic engine) so it reasons over syntax trees, not whitespace.
+2. Add/update fixtures under `test-suite/js/` (buggy + clean) to cover the rule and hook them into `manifest.json` so `test-suite/run_all.sh` enforces the regression.
+3. Use regex-based ripgrep passes only as a fast pre-filter feeding into AST verification—not as the primary signal.
+
+This keeps the JS module maintainable and ensures future contributors extend structured analyzers instead of stacking fragile grep snippets.
+
 ## Cross-language quick reference
 
 | Language | Buggy path | Clean path | Highlights |
