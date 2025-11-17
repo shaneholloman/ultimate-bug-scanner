@@ -251,9 +251,13 @@ run_rust_type_narrowing_checks() {
   fi
   local output status ast_bin=""
   if [[ "$HAS_AST_GREP" -eq 1 ]]; then
-    ast_bin="${AST_GREP_CMD[*]}"
+    ast_bin="${AST_GREP_CMD[0]}"
   fi
-  output="$(AST_GREP_BIN="$ast_bin" python3 "$helper" "$PROJECT_DIR" 2>&1)"
+  if [[ -n "$ast_bin" ]]; then
+    output="$(python3 "$helper" "$PROJECT_DIR" "$ast_bin" 2>&1)"
+  else
+    output="$(python3 "$helper" "$PROJECT_DIR" 2>&1)"
+  fi
   status=$?
   if [[ $status -ne 0 ]]; then
     print_finding "info" 0 "Rust type narrowing helper failed" "$output"

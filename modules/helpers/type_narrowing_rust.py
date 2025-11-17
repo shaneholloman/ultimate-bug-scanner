@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -17,6 +15,7 @@ UNWRAP_PATTERN = "{name}\\s*\\.(?:unwrap|expect)\\s*\\("
 ASSIGN_PATTERN = "{name}\\s*="
 EXIT_PATTERN = re.compile(r"\b(return|break|continue)\b")
 IDENT_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+BASE_DIR = Path.cwd().resolve()
 
 
 @dataclass(frozen=True)
@@ -25,6 +24,14 @@ class GuardMatch:
     expr: str
     start: int
     end: int
+
+
+def is_safe_path(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(BASE_DIR)
+        return True
+    except ValueError:
+        return False
 
 
 def read_file(path: Path, cache: dict[Path, str]) -> str:
@@ -44,6 +51,8 @@ def line_col(text: str, pos: int) -> tuple[int, int]:
 
 
 def iter_rust_files(root: Path) -> Iterable[Path]:
+    if not is_safe_path(root):
+        return
     if root.is_file():
         if root.suffix == ".rs" and not any(part in SKIP_DIRS for part in root.parts):
             yield root
@@ -55,19 +64,10 @@ def iter_rust_files(root: Path) -> Iterable[Path]:
             yield path
 
 
-def run_ast_grep(pattern: str, root: Path) -> List[dict]:
-    bin_cmd = os.environ.get("AST_GREP_BIN", "").strip()
-    if not bin_cmd:
+def run_ast_grep(pattern: str, root: Path, ast_bin: str) -> List[dict]:
+    if not ast_bin or not is_safe_path(root):
         return []
-    cmd = shlex.split(bin_cmd) + [
-        "run",
-        "--pattern",
-        pattern,
-        "-l",
-        "rust",
-        "--json",
-        str(root),
-    ]
+    cmd = [ast_bin, "run", "--pattern", pattern, "-l", "rust", "--json", str(root)]
     try:
         result = subprocess.run(cmd, capture_output=True, check=True, text=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -81,14 +81,14 @@ def run_ast_grep(pattern: str, root: Path) -> List[dict]:
         return []
 
 
-def collect_ast_guards(root: Path) -> List[GuardMatch]:
+def collect_ast_guards(root: Path, ast_bin: str) -> List[GuardMatch]:
     patterns = [
         "if let Some($BIND) = $SOURCE { $BODY }",
         "if let Ok($BIND) = $SOURCE { $BODY }",
     ]
     guards: List[GuardMatch] = []
     for pattern in patterns:
-        for match in run_ast_grep(pattern, root):
+        for match in run_ast_grep(pattern, root, ast_bin):
             singles = match.get("metaVariables", {}).get("single", {})
             source_node = singles.get("SOURCE") or singles.get("S")
             if not source_node:
@@ -129,8 +129,8 @@ def analyze_guard(text: str, guard: GuardMatch) -> tuple[int, int] | None:
     return line_col(text, absolute_pos)
 
 
-def analyze_with_ast_grep(root: Path) -> List[tuple[Path, int, int, str]]:
-    guards = collect_ast_guards(root)
+def analyze_with_ast_grep(root: Path, ast_bin: str) -> List[tuple[Path, int, int, str]]:
+    guards = collect_ast_guards(root, ast_bin)
     if not guards:
         return []
     cache: dict[Path, str] = {}
@@ -212,13 +212,14 @@ def analyze_with_regex(root: Path) -> List[tuple[Path, int, int, str]]:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("Usage: type_narrowing_rust.py <project_dir>", file=sys.stderr)
+        print("Usage: type_narrowing_rust.py <project_dir> [ast_grep_path]", file=sys.stderr)
         return 1
     root = Path(sys.argv[1]).resolve()
     if not root.exists():
         return 0
 
-    issues = analyze_with_ast_grep(root)
+    ast_bin = sys.argv[2] if len(sys.argv) > 2 else ""
+    issues = analyze_with_ast_grep(root, ast_bin)
     if not issues:
         issues = analyze_with_regex(root)
 
