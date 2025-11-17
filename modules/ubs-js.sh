@@ -1483,8 +1483,9 @@ id: js.error.throw-string
 language: javascript
 rule:
   pattern: throw $VALUE
-  where:
-    - pattern: '$VALUE'
+  constraints:
+    VALUE:
+      kind: string
 severity: warning
 message: "Throwing string literals loses stack traces; use throw new Error('message')"
 YAML
