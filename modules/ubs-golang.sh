@@ -642,7 +642,7 @@ def analyze_file(path: Path, issues):
     lines = text.splitlines()
     assignments = parse_assignments(lines)
     tainted = record_taint(assignments)
-    for idx, raw in enumerate(lines, start=1):
+for idx, raw in enumerate(lines, start=1):
         stripped = strip_comments(raw)
         if not stripped:
             continue
@@ -651,9 +651,11 @@ def analyze_file(path: Path, issues):
             if not match:
                 continue
             expr = match.group(1)
-            if rule == 'go.taint.sql' and '?' in expr and ',' in expr:
+            raw_match = regex.search(raw)
+            expr_raw = raw_match.group(1) if raw_match else expr
+            if rule == 'go.taint.sql' and expr_raw and '?' in expr_raw and ',' in expr_raw:
                 continue
-            if not expr or expr_has_sanitizer(expr, rule):
+            if not expr or expr_has_sanitizer(expr_raw or expr, rule):
                 continue
             direct = find_sources(expr)
             if direct:

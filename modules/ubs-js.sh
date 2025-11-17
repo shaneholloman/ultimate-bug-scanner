@@ -150,33 +150,6 @@ declare -A TAINT_SEVERITY=(
   [js.taint.sql]='critical'
 )
 
-# Resource lifecycle correlation spec (acquire vs release pairs)
-RESOURCE_LIFECYCLE_IDS=(dom_event interval observer)
-declare -A RESOURCE_LIFECYCLE_SEVERITY=(
-  [dom_event]="critical"
-  [interval]="warning"
-  [observer]="warning"
-)
-declare -A RESOURCE_LIFECYCLE_ACQUIRE=(
-  [dom_event]='addEventListener'
-  [interval]='setInterval[[:space:]]*\('
-  [observer]='new[[:space:]]+MutationObserver'
-)
-declare -A RESOURCE_LIFECYCLE_RELEASE=(
-  [dom_event]='removeEventListener'
-  [interval]='clearInterval[[:space:]]*\('
-  [observer]='\.disconnect[[:space:]]*\('
-)
-declare -A RESOURCE_LIFECYCLE_SUMMARY=(
-  [dom_event]='Event listeners missing cleanup'
-  [interval]='Intervals never cleared'
-  [observer]='MutationObserver not disconnected'
-)
-declare -A RESOURCE_LIFECYCLE_REMEDIATION=(
-  [dom_event]='Call removeEventListener with the same handler during cleanup'
-  [interval]='Store the interval id and call clearInterval when disposing components'
-  [observer]='Hold the observer handle and invoke disconnect before teardown'
-)
 
 print_usage() {
   cat >&2 <<USAGE
@@ -461,43 +434,9 @@ show_detailed_finding() {
 }
 
 run_resource_lifecycle_checks() {
-  local header_shown=0
-  local rid
-  for rid in "${RESOURCE_LIFECYCLE_IDS[@]}"; do
-    local acquire_regex="${RESOURCE_LIFECYCLE_ACQUIRE[$rid]:-}"
-    local release_regex="${RESOURCE_LIFECYCLE_RELEASE[$rid]:-}"
-    [[ -z "$acquire_regex" || -z "$release_regex" ]] && continue
-    local file_list
-    file_list=$("${GREP_RN[@]}" -e "$acquire_regex" "$PROJECT_DIR" 2>/dev/null | cut -d: -f1 | sort -u || true)
-    [[ -n "$file_list" ]] || continue
-    while IFS= read -r file; do
-      [[ -z "$file" ]] && continue
-      local acquire_hits release_hits
-      acquire_hits=$("${GREP_RN[@]}" -e "$acquire_regex" "$file" 2>/dev/null | count_lines || true)
-      release_hits=$("${GREP_RN[@]}" -e "$release_regex" "$file" 2>/dev/null | count_lines || true)
-      acquire_hits=${acquire_hits:-0}
-      release_hits=${release_hits:-0}
-      if (( acquire_hits > release_hits )); then
-        if [[ $header_shown -eq 0 ]]; then
-          print_subheader "Resource lifecycle correlation"
-          header_shown=1
-        fi
-        local delta=$((acquire_hits - release_hits))
-        local relpath=${file#"$PROJECT_DIR"/}
-        [[ "$relpath" == "$file" ]] && relpath="$file"
-        local summary="${RESOURCE_LIFECYCLE_SUMMARY[$rid]:-Resource imbalance}"
-        local remediation="${RESOURCE_LIFECYCLE_REMEDIATION[$rid]:-Ensure matching cleanup call}"
-        local severity="${RESOURCE_LIFECYCLE_SEVERITY[$rid]:-warning}"
-        local title="$summary [$relpath]"
-        local desc="$remediation (acquire=$acquire_hits, release=$release_hits)"
-        print_finding "$severity" "$delta" "$title" "$desc"
-      fi
-    done <<<"$file_list"
-  done
-  if [[ $header_shown -eq 0 ]]; then
-    print_subheader "Resource lifecycle correlation"
-    print_finding "good" "All tracked resource acquisitions have matching cleanups"
-  fi
+  print_subheader "Resource lifecycle correlation"
+  emit_ast_rule_group RESOURCE_RULE_IDS RESOURCE_RULE_SEVERITY RESOURCE_RULE_SUMMARY RESOURCE_RULE_REMEDIATION \
+    "All tracked resource acquisitions have matching cleanups" "Resource lifecycle checks"
 }
 
 run_async_error_checks() {
@@ -1530,10 +1469,29 @@ rule:
 severity: warning
 message: "Non-null assertion (!) in property chain; prefer guards or optional chaining"
 YAML
+  # Error-handling rules
+  cat >"$AST_RULE_DIR/error-empty-catch.yml" <<'YAML'
+id: js.error.empty-catch
+language: javascript
+rule:
+  pattern: catch ($$) { }
+severity: warning
+message: "Empty catch block hides errors; log or rethrow the exception"
+YAML
+  cat >"$AST_RULE_DIR/error-throw-string.yml" <<'YAML'
+id: js.error.throw-string
+language: javascript
+rule:
+  pattern: throw $VALUE
+  where:
+    - pattern: '$VALUE'
+severity: warning
+message: "Throwing string literals loses stack traces; use throw new Error('message')"
+YAML
   # JSON.parse without try/catch
-  cat >"$AST_RULE_DIR/json-parse-no-try.yml" <<'YAML'
+  cat >"$AST_RULE_DIR/json-parse-without-try.yml" <<'YAML'
 id: js.json-parse-without-try
-language: typescript
+language: javascript
 rule:
   pattern: JSON.parse($X)
   not:
@@ -1941,102 +1899,6 @@ print_category "Detects: Missing await, unhandled rejections, race conditions" \
 async_count=$("${GREP_RN[@]}" -e "async[[:space:]]+function|async[[:space:]]*\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
 print_finding "info" "$async_count" "Async functions found" "Verifying proper await/error handling..."
 
-print_subheader "Promises without .catch() or try/catch"
-count=$("${GREP_RN[@]}" -e "\.then\(" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -v -E "\.catch\(|\.finally\(" || true) | count_lines)
-if [ "$count" -gt 5 ]; then
-  print_finding "critical" "$count" "Unhandled promise rejections" "Ensure .catch or try/catch around awaits"
-  show_detailed_finding "\.then\(" 3
-elif [ "$count" -gt 0 ]; then
-  print_finding "warning" "$count" "Some promises may lack error handling"
-fi
-
-print_subheader "Async function calls without await"
-count=$("${GREP_RNW[@]}" "async" "$PROJECT_DIR" 2>/dev/null | (grep "function" || true) | count_lines)
-await_count=$("${GREP_RNW[@]}" "await" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
-if [ "$async_count" -gt "$await_count" ]; then
-  ratio=$((async_count - await_count))
-  print_finding "warning" "$ratio" "More async functions than awaits" "Check for floating promises or unawaited calls"
-fi
-
-print_subheader "await inside loops (performance issue)"
-count=$("${GREP_RN[@]}" -e "for[[:space:]]*\(|while[[:space:]]*\(" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -A5 "await " || true) | (grep -cw "await" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
-if [ "$count" -gt 3 ]; then
-  print_finding "warning" "$count" "await inside loops - consider Promise.all()" "Sequential awaits are slow"
-fi
-
-print_subheader "Missing 'async' keyword on functions using await"
-violations=$(python3 - "$PROJECT_DIR" <<'PY'
-import re, sys
-from pathlib import Path
-
-ROOT = Path(sys.argv[1]).resolve()
-EXTS = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
-pat_async_fn = re.compile(r'\basync\s+function\b')
-pat_async_arrow = re.compile(r'=\s*async\s*(?:\([^)]*\)|[A-Za-z0-9_]+)\s*=>')
-pat_inline_async = re.compile(r'\basync\s*\([^)]*\)\s*=>')
-pat_async_method = re.compile(r'\basync\s+[A-Za-z_][\w]*\s*\(')
-
-def iter_files():
-    for path in ROOT.rglob('*'):
-        if path.suffix.lower() in EXTS and path.is_file():
-            yield path
-
-def strip_comment(text):
-    if '//' in text:
-        idx = text.find('//')
-        if idx >= 0:
-            return text[:idx]
-    return text
-
-violations = []
-for path in iter_files():
-    try:
-        lines = path.read_text(encoding='utf-8').splitlines()
-    except UnicodeDecodeError:
-        continue
-    stack = []
-    pending_async = False
-    for idx, raw in enumerate(lines, start=1):
-        line = strip_comment(raw)
-        if pat_async_fn.search(line) or pat_async_arrow.search(line) or pat_inline_async.search(line) or pat_async_method.search(line):
-            pending_async = True
-        for ch in line:
-            if ch == '{':
-                async_flag = pending_async or (stack[-1] if stack else False)
-                stack.append(async_flag)
-                pending_async = False
-            elif ch == '}':
-                if stack:
-                    stack.pop()
-        current_async = stack[-1] if stack else False
-        if 'await' not in line:
-            continue
-        if re.search(r'\bfor\s+await\b', line):
-            continue
-        if current_async:
-            continue
-        stripped = line.strip()
-        if not stripped:
-            continue
-        violations.append((path.relative_to(ROOT), idx, stripped))
-
-for relpath, idx, text in violations[:50]:
-    print(f"{relpath}\t{idx}\t{text}")
-PY
-)
-if [[ -n "$violations" ]]; then
-  violation_count=$(printf '%s\n' "$violations" | grep -c .)
-  print_finding "critical" "$violation_count" "await used in non-async function" "Ensure surrounding function is declared async"
-  printf '%s\n' "$violations" | head -n 3 | while IFS=$'\t' read -r file line snippet; do
-    say "    ${DIM}${file}:${line}${RESET} ${snippet}"
-  done
-else
-  print_finding "good" "No await usage outside async functions"
-fi
-
 print_subheader "Race conditions with Promise.race/any"
 count=$("${GREP_RN[@]}" -e "Promise\.(race|any)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
 if [ "$count" -gt 0 ]; then
@@ -2054,46 +1916,9 @@ if should_skip 6; then
 print_header "6. ERROR HANDLING ANTI-PATTERNS"
 print_category "Detects: Swallowed errors, missing cleanup, poor error messages" \
   "Bad error handling makes debugging impossible and causes production failures"
-
-print_subheader "Empty catch blocks (swallowing errors)"
-count=$("${GREP_RN[@]}" -e "catch[[:space:]]*(\(.*\))?[[:space:]]*\{[[:space:]]*\}" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
-silent_catch=$("${GREP_RN[@]}" -e "catch[[:space:]]*(\([^)]+\))?[[:space:]]*\{" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -A1 -E "catch" || true) | (grep -v -E "console|log|error|throw|catch|--" || true) | count_lines)
-total=$((count + silent_catch / 2))
-if [ "$total" -gt 3 ]; then
-  print_finding "critical" "$total" "Silent error swallowing detected" "At minimum: catch(e){ console.error(e) }"
-  show_detailed_finding "catch[[:space:]]*(\(.*\))?[[:space:]]*\{[[:space:]]*\}" 3
-elif [ "$total" -gt 0 ]; then
-  print_finding "warning" "$total" "Some catch blocks may be too silent"
-fi
-
-print_subheader "Try without finally (resource leaks)"
-try_count=$("${GREP_RN[@]}" -e "try[[:space:]]*\{" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
-finally_count=$("${GREP_RN[@]}" -e "finally[[:space:]]*\{" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
-if [ "$try_count" -gt $((finally_count * 3)) ]; then
-  ratio=$((try_count - finally_count))
-  print_finding "warning" "$ratio" "Try blocks without finally - check resource cleanup" "Files, locks, timers need cleanup"
-fi
-
-print_subheader "Generic error messages"
-count=$("${GREP_RN[@]}" -e "throw new Error\(['\"]Error" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
-if [ "$count" -gt 0 ]; then
-  print_finding "warning" "$count" "Generic 'Error' messages - be specific" "Include context/ids"
-  show_detailed_finding "throw new Error\(['\"]Error" 3
-fi
-
-print_subheader "Throwing strings instead of Error objects"
-count=$("${GREP_RN[@]}" -e "throw[[:space:]]+['\"]" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
-if [ "$count" -gt 0 ]; then
-  print_finding "warning" "$count" "Throwing strings - use Error objects" "throw new Error('message')"
-  show_detailed_finding "throw[[:space:]]+['\"]" 3
-fi
-
-print_subheader "Catch without error parameter"
-count=$("${GREP_RN[@]}" -e "catch[[:space:]]*\{|catch[[:space:]]*\(\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
-if [ "$count" -gt 0 ]; then
-  print_finding "info" "$count" "Catch blocks ignoring error - intentional?" "Prefer catch(e){...}"
-fi
+print_subheader "Error handling best practices"
+emit_ast_rule_group ERROR_RULE_IDS ERROR_RULE_SEVERITY ERROR_RULE_SUMMARY ERROR_RULE_REMEDIATION \
+  "Error handling patterns look healthy" "Error handling AST rules"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
