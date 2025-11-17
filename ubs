@@ -42,6 +42,7 @@ ONLY_LANGS=""              # csv: js,python,cpp,rust
 EXCLUDE_LANGS=""           # csv
 IGNORE_FILE=""
 GLOBAL_EXCLUDE_PATTERNS=""
+FILTERED_PROJECT_DIR=""
 MODULE_DIR_DEFAULT="${XDG_DATA_HOME:-$HOME/.local/share}/ubs/modules"
 MODULE_DIR="$MODULE_DIR_DEFAULT"
 UPDATE_MODULES=0
@@ -90,6 +91,25 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -d "$PROJECT_DIR" ]]; then
+  if ! PROJECT_DIR="$(cd "$PROJECT_DIR" 2>/dev/null && pwd -P)"; then
+    say "${RED}$X cannot access project directory${RESET}: $PROJECT_DIR"
+    exit 2
+  fi
+elif [[ -f "$PROJECT_DIR" ]]; then
+  proj_dir="$(dirname "$PROJECT_DIR")"
+  proj_base="$(basename "$PROJECT_DIR")"
+  if ! proj_dir="$(cd "$proj_dir" 2>/dev/null && pwd -P)"; then
+    say "${RED}$X cannot access project path${RESET}: $PROJECT_DIR"
+    exit 2
+  fi
+  PROJECT_DIR="$proj_dir/$proj_base"
+else
+  say "${RED}$X path not found${RESET}: $PROJECT_DIR"
+  exit 2
+fi
+SOURCE_PROJECT_DIR="$PROJECT_DIR"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Capabilities & helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -108,10 +128,10 @@ prepare_metrics_dir(){
 
 load_ignore_patterns(){
   local file="$1"
-  [[ -f "$file" ]] || return
+  [[ -f "$file" ]] || return 0
   if ! need_cmd python3; then
     say "${YELLOW}${WARN}${RESET} python3 is required to parse ignore file $file (skipping)"
-    return
+    return 0
   fi
   local csv
   csv=$(python3 - "$file" <<'PY' 2>/dev/null
@@ -144,8 +164,52 @@ PY
   fi
 }
 
-if [[ -z "$IGNORE_FILE" && -f "$PROJECT_DIR/.ubsignore" ]]; then
-  IGNORE_FILE="$PROJECT_DIR/.ubsignore"
+apply_ignore_filters(){
+  [[ -n "$GLOBAL_EXCLUDE_PATTERNS" ]] || return 0
+  [[ -d "$SOURCE_PROJECT_DIR" ]] || return 0
+  if ! need_cmd rsync; then
+    say "${YELLOW}${WARN}${RESET} rsync not available; .ubsignore entries will be advisory only"
+    return 0
+  fi
+  local dest="$TMPDIR_RUN/scan"
+  rm -rf "$dest" 2>/dev/null || true
+  ensure_dir "$dest"
+  local -a patterns args
+  IFS=',' read -r -a patterns <<<"$GLOBAL_EXCLUDE_PATTERNS"
+  args=(-a --delete)
+  for pat in "${patterns[@]}"; do
+    [[ -z "$pat" ]] && continue
+    args+=( "--exclude=$pat" )
+  done
+  if rsync "${args[@]}" "$SOURCE_PROJECT_DIR"/ "$dest"/ >/dev/null 2>&1; then
+    FILTERED_PROJECT_DIR="$dest"
+    PROJECT_DIR="$FILTERED_PROJECT_DIR"
+    say "${DIM}${INFO}${RESET} Created filtered scan workspace at ${FILTERED_PROJECT_DIR}"
+  else
+    say "${YELLOW}${WARN}${RESET} Failed to apply ignore filters; scanning original tree"
+    rm -rf "$dest" || true
+  fi
+}
+
+restore_original_paths(){
+  local file="$1"
+  [[ -n "$FILTERED_PROJECT_DIR" && -f "$file" ]] || return 0
+  if ! need_cmd python3; then return 0; fi
+  python3 - "$FILTERED_PROJECT_DIR" "$SOURCE_PROJECT_DIR" "$file" <<'PY' 2>/dev/null || true
+import sys, pathlib
+src = sys.argv[1]
+dst = sys.argv[2]
+path = pathlib.Path(sys.argv[3])
+try:
+    data = path.read_text()
+except OSError:
+    sys.exit(0)
+path.write_text(data.replace(src, dst))
+PY
+}
+
+if [[ -z "$IGNORE_FILE" && -f "$SOURCE_PROJECT_DIR/.ubsignore" ]]; then
+  IGNORE_FILE="$SOURCE_PROJECT_DIR/.ubsignore"
 fi
 if [[ -n "$IGNORE_FILE" ]]; then
   load_ignore_patterns "$IGNORE_FILE"
@@ -277,6 +341,8 @@ TMPDIR_RUN="$(mktemp -d 2>/dev/null || mktemp -d -t ubsrun.XXXXXX)"
 cleanup(){ rm -rf "$TMPDIR_RUN" || true; }
 trap cleanup EXIT
 
+apply_ignore_filters
+
 # Build selected language set
 select_langs(){
   local detected=()
@@ -316,17 +382,19 @@ run_lang(){
   local metrics_dir="$TMPDIR_RUN/$lang.metrics"
   local module_status=0
 
-  local args=("$PROJECT_DIR" "--ci")
+  local args=("--ci")
   [[ "$FAIL_ON_WARNING" -eq 1 ]] && args+=("--fail-on-warning")
   [[ "$VERBOSE" -eq 1 ]] && args+=('-v')
   [[ "$JOBS" -gt 0 ]] && args+=("--jobs=$JOBS")
   [[ -n "$GLOBAL_EXCLUDE_PATTERNS" ]] && args+=("--exclude=$GLOBAL_EXCLUDE_PATTERNS")
+  args+=("$PROJECT_DIR")
 
   case "$fmt" in
     json)
       prepare_metrics_dir "$metrics_dir"
       if UBS_METRICS_DIR="$metrics_dir" UBS_LANG="$lang" "$module" "${args[@]}" --format=json >"$out_json" 2>"$err"; then
         module_status=$?
+        restore_original_paths "$out_json"
         if need_cmd jq && jq -e . "$out_json" >/dev/null 2>&1; then
           jq --arg language "$lang" '. + {language: $language}' "$out_json" > "$out_json.tmp" && mv "$out_json.tmp" "$out_json"
           attach_metrics_to_json "$out_json" "$metrics_dir"
@@ -340,6 +408,7 @@ run_lang(){
       if ! UBS_METRICS_DIR="$metrics_dir" UBS_LANG="$lang" "$module" "${args[@]}" >"$out_txt" 2>>"$err"; then
         module_status=$?
       fi
+      restore_original_paths "$out_txt"
       parse_text_to_json "$lang" "$out_txt" "$out_json"
       attach_metrics_to_json "$out_json" "$metrics_dir"
       ;;
@@ -347,6 +416,7 @@ run_lang(){
       prepare_metrics_dir "$metrics_dir"
       if UBS_METRICS_DIR="$metrics_dir" UBS_LANG="$lang" "$module" "${args[@]}" --format=sarif >"$out_sarif" 2>"$err"; then
         module_status=$?
+        restore_original_paths "$out_sarif"
         if need_cmd jq && jq -e . "$out_sarif" >/dev/null 2>&1; then
           attach_metrics_to_json "$out_json" "$metrics_dir" 2>/dev/null || true
           echo "$module_status" >"$status_file"
@@ -359,6 +429,7 @@ run_lang(){
       if ! UBS_METRICS_DIR="$metrics_dir" UBS_LANG="$lang" "$module" "${args[@]}" >"$out_txt" 2>>"$err"; then
         module_status=$?
       fi
+      restore_original_paths "$out_txt"
       minimal_sarif_from_text "$lang" "$out_txt" >"$out_sarif"
       parse_text_to_json "$lang" "$out_txt" "$out_json"
       attach_metrics_to_json "$out_json" "$metrics_dir"
@@ -368,6 +439,7 @@ run_lang(){
       if ! UBS_METRICS_DIR="$metrics_dir" UBS_LANG="$lang" "$module" "${args[@]}" >"$out_txt" 2>"$err"; then
         module_status=$?
       fi
+      restore_original_paths "$out_txt"
       parse_text_to_json "$lang" "$out_txt" "$out_json"
       attach_metrics_to_json "$out_json" "$metrics_dir"
       ;;
@@ -394,8 +466,9 @@ parse_text_to_json(){
       | head -n1 || true)
   fi
   critical=${critical:-0}; warning=${warning:-0}; info=${info:-0}; files=${files:-0}
+  local proj_display="${SOURCE_PROJECT_DIR:-$PROJECT_DIR}"
   cat >"$json" <<JSON
-{"language":"$lang","project":"$PROJECT_DIR","files":$files,"critical":$critical,"warning":$warning,"info":$info,"timestamp":"$(date_iso)"}
+{"language":"$lang","project":"$proj_display","files":$files,"critical":$critical,"warning":$warning,"info":$info,"timestamp":"$(date_iso)"}
 JSON
 }
 
@@ -515,7 +588,7 @@ cat <<'BANNER'
 BANNER
 say "${RESET}"
 say "${CYAN}${BOLD}UBS Meta-Runner v${UBS_VERSION}${RESET}  ${DIM}$(date_iso)${RESET}"
-say "${WHITE}Project:${RESET} ${CYAN}$PROJECT_DIR${RESET}"
+say "${WHITE}Project:${RESET} ${CYAN}$SOURCE_PROJECT_DIR${RESET}"
 say "${WHITE}Format:${RESET}  ${CYAN}$FORMAT${RESET}"
 
 langs=( $(select_langs) )
