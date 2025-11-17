@@ -855,7 +855,8 @@ say "${WHITE}Project:${RESET}  ${CYAN}$PROJECT_DIR${RESET}"
 say "${WHITE}Started:${RESET}  ${GRAY}$(eval "$DATE_CMD")${RESET}"
 
 # Count files with robust find
-TOTAL_FILES=$(( ( set +o pipefail; "${FIND_CMD[@]}" 2>/dev/null || true ) | safe_count_files ))
+TOTAL_FILES=$( ( set +o pipefail; "${FIND_CMD[@]}" 2>/dev/null || true ) | safe_count_files )
+TOTAL_FILES=$(( TOTAL_FILES + 0 ))
 say "${WHITE}Files:${RESET}    ${CYAN}$TOTAL_FILES source files (${INCLUDE_EXT})${RESET}"
 
 # ast-grep availability

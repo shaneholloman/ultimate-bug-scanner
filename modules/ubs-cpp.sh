@@ -202,8 +202,8 @@ AST_JSON_FILE=""
 # Resource lifecycle correlation spec (acquire vs release pairs)
 RESOURCE_LIFECYCLE_IDS=(thread_join malloc_heap fopen_handle)
 declare -A RESOURCE_LIFECYCLE_SEVERITY=(
-  [thread_join]="critical"
-  [malloc_heap]="critical"
+  [thread_join]="warning"
+  [malloc_heap]="warning"
   [fopen_handle]="warning"
 )
 declare -A RESOURCE_LIFECYCLE_ACQUIRE=(
@@ -264,8 +264,8 @@ fi
 # Helper: robust numeric end-of-pipeline counter
 count_lines() { awk 'END{print (NR+0)}'; }
 
-# Targets for all searches (dirs or explicit files)
-TARGETS=( "${SCAN_PATHS[@]}" )
+# Targets placeholder; populated after SCAN_PATHS is finalized
+TARGETS=()
 
 # ─── Unified search wrappers (path-list aware) ─────────────────────────────
 run_search_raw() { "${GREP_RN[@]}" -e "$1" "${TARGETS[@]}" 2>/dev/null || true; }
@@ -341,7 +341,7 @@ show_detailed_finding() {
     [[ -z "$file" ]] && continue
     print_code_sample "$file" "$line" "$code"; printed=$((printed+1))
     [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
-  done
+  done || true
 }
 
 run_resource_lifecycle_checks() {
@@ -922,6 +922,9 @@ if [[ -n "$PATHS_FILE" ]]; then
   fi
 fi
 
+# refresh search targets now that SCAN_PATHS is finalized
+TARGETS=( "${SCAN_PATHS[@]}" )
+
 # Count files (robust find; avoid dangling -o)
 EX_PRUNE=()
 for d in "${EXCLUDE_DIRS[@]}"; do EX_PRUNE+=( -name "$d" -o ); done
@@ -1263,7 +1266,7 @@ print_category "Detects: non-C++20 standard settings, missing warnings, no sanit
 print_subheader "CMAKE_CXX_STANDARD and target_compile_features"
 cxxstd=$(search_count "CMAKE_CXX_STANDARD|target_compile_features")
 if [ "$cxxstd" -eq 0 ]; then
-  print_finding "warning" 1 "CMake lacks explicit C++ standard settings" "Set CMAKE_CXX_STANDARD 20 and/or target_compile_features(... cxx_std_20)"
+  print_finding "info" 1 "CMake lacks explicit C++ standard settings" "Set CMAKE_CXX_STANDARD 20 and/or target_compile_features(... cxx_std_20)"
 else
   print_finding "info" "$cxxstd" "C++ standard declarations present"
 fi

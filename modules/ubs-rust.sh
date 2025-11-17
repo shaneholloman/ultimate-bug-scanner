@@ -1131,6 +1131,30 @@ run_ast_rules() {
 # ────────────────────────────────────────────────────────────────────────────
 # Cargo helpers
 # ────────────────────────────────────────────────────────────────────────────
+check_cargo() {
+  HAS_CARGO=0
+  HAS_CLIPPY=0
+  HAS_FMT=0
+  HAS_AUDIT=0
+  HAS_DENY=0
+  HAS_UDEPS=0
+  HAS_OUTDATED=0
+
+  if [[ "$RUN_CARGO" -eq 0 ]]; then
+    return
+  fi
+
+  if command -v cargo >/dev/null 2>&1; then
+    HAS_CARGO=1
+    if command -v cargo-fmt >/dev/null 2>&1 || command -v rustfmt >/dev/null 2>&1; then HAS_FMT=1; fi
+    if command -v cargo-clippy >/dev/null 2>&1; then HAS_CLIPPY=1; fi
+    if command -v cargo-audit >/dev/null 2>&1; then HAS_AUDIT=1; fi
+    if command -v cargo-deny >/dev/null 2>&1; then HAS_DENY=1; fi
+    if command -v cargo-udeps >/dev/null 2>&1; then HAS_UDEPS=1; fi
+    if command -v cargo-outdated >/dev/null 2>&1; then HAS_OUTDATED=1; fi
+  fi
+}
+
 run_cargo_subcmd() {
   local name="$1"; shift
   local logfile="$1"; shift
