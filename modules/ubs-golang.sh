@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-# ULTIMATE GO BUG SCANNER v6.1 - Industrial-Grade Code Quality Analysis
+# ULTIMATE GO BUG SCANNER v6.2 - Industrial-Grade Code Quality Analysis
 # ═══════════════════════════════════════════════════════════════════════════
 # Comprehensive static analysis for modern Go (Go 1.23+) using ast-grep
 # + smart ripgrep/grep heuristics and module/build hygiene checks.
 # Detects: goroutine leaks, context misuse, HTTP client/server timeouts,
 # resource leaks, panic/recover pitfalls, error handling issues, crypto risks,
 # unsafe/reflect hazards, import hygiene problems, and modernization gaps.
-# v6.1 adds: true JSON/SARIF passthrough, single cached AST scan, extended Go rules
-# (loop var capture, select w/o default, http.NewRequest w/o context, exec w/o context,
-# TLS MinVersion missing, context.TODO), robust include patterns (go.mod/go.sum),
-# safer traps, more precise counts, better CI/quiet handling.
+# v6.2 adds: fixed embedded Python bug, new AST rules (context.TODO),
+# corrected http.Client Timeout rule, safer AST cache counting,
+# better test & DB Tx heuristics, optional gofmt/vet/govulncheck section,
+# improved list-rules, dependency/build drift checks, and sturdier scans.
 # ═══════════════════════════════════════════════════════════════════════════
 
 set -Eeuo pipefail
@@ -67,6 +67,8 @@ LIST_RULES=0
 AST_JSON=""
 AST_SARIF=""
 AST_SCAN_OK=0
+RUN_GO_TOOLS=0
+GOTEST_PKGS="./..."
 
 # Async error coverage metadata
 ASYNC_ERROR_RULE_IDS=(go.async.goroutine-err-no-check)
@@ -144,6 +146,8 @@ Options:
   --skip=CSV               Skip categories by number (e.g. --skip=2,7,11)
   --fail-on-warning        Exit non-zero on warnings or critical
   --rules=DIR              Additional ast-grep rules directory (merged)
+  --go-tools               Also run gofmt -s -l, go vet, and govulncheck (if available)
+  --test-pkgs=PKGS         Package pattern for tests/vet (default: ./...)
   -h, --help               Show help
 Env:
   JOBS, NO_COLOR, CI
@@ -153,6 +157,7 @@ Args:
 USAGE
 }
 
+# Parse CLI
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -v|--verbose) VERBOSE=1; DETAIL_LIMIT=10; shift;;
@@ -168,11 +173,13 @@ while [[ $# -gt 0 ]]; do
     --skip=*)     SKIP_CATEGORIES="${1#*=}"; shift;;
     --fail-on-warning) FAIL_ON_WARNING=1; shift;;
     --rules=*)    USER_RULE_DIR="${1#*=}"; shift;;
+    --go-tools)   RUN_GO_TOOLS=1; shift;;
+    --test-pkgs=*) GOTEST_PKGS="${1#*=}"; shift;;
     -h|--help)    print_usage; exit 0;;
     *)
-      if [[ -z "$PROJECT_DIR" || "$PROJECT_DIR" == "." ]] && ! [[ "$1" =~ ^- ]]; then
+      if [[ "$PROJECT_DIR" == "." && ! "$1" =~ ^- ]]; then
         PROJECT_DIR="$1"; shift
-      elif [[ -z "$OUTPUT_FILE" ]] && ! [[ "$1" =~ ^- ]]; then
+      elif [[ -z "$OUTPUT_FILE" && ! "$1" =~ ^- ]]; then
         OUTPUT_FILE="$1"; shift
       else
         echo "Unexpected argument: $1" >&2; exit 2
@@ -277,7 +284,7 @@ print_finding() {
       ;;
     *)
       local raw_count=$2; local title=$3; local description="${4:-}"
-      local count; count=$(printf '%s\n' "$raw_count" | awk 'END{print $0+0}')
+      local count; count=$(printf '%s\n' "${raw_count:-0}" | awk 'END{print ($1+0)}')
       case $severity in
         critical)
           CRITICAL_COUNT=$((CRITICAL_COUNT + count))
@@ -451,7 +458,6 @@ PY
   fi
 }
 
-
 run_taint_analysis_checks() {
   print_subheader "Lightweight taint analysis"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -514,7 +520,6 @@ ASSIGN_PATTERNS = [
 def should_skip(path: Path) -> bool:
     return any(part in SKIP_DIRS for part in path.parts)
 
-
 def iter_files(root: Path):
     if root.is_file():
         if root.suffix.lower() in EXTS:
@@ -527,7 +532,6 @@ def iter_files(root: Path):
             continue
         if path.suffix.lower() in EXTS:
             yield path
-
 
 def strip_comments(line: str) -> str:
     out, quote, escape = [], '', False
@@ -561,7 +565,6 @@ def strip_comments(line: str) -> str:
         i += 1
     return ''.join(out).strip()
 
-
 def parse_assignments(lines):
     assignments = []
     for idx, raw in enumerate(lines, start=1):
@@ -579,14 +582,12 @@ def parse_assignments(lines):
             break
     return assignments
 
-
 def find_sources(expr: str):
     matches = []
     for regex in SOURCE_PATTERNS:
         for m in regex.finditer(expr):
             matches.append(m.group(0))
     return matches
-
 
 def expr_has_sanitizer(expr: str, sink_rule: str | None = None) -> bool:
     for regex in SANITIZER_REGEXES:
@@ -599,14 +600,12 @@ def expr_has_sanitizer(expr: str, sink_rule: str | None = None) -> bool:
             return True
     return False
 
-
 def expr_has_tainted(expr: str, tainted):
     for name, meta in tainted.items():
         pattern = rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])"
         if re.search(pattern, expr):
             return name, meta
     return None, None
-
 
 def record_taint(assignments):
     tainted = {}
@@ -633,7 +632,6 @@ def record_taint(assignments):
             break
     return tainted
 
-
 def analyze_file(path: Path, issues):
     try:
         text = path.read_text(encoding='utf-8')
@@ -642,7 +640,7 @@ def analyze_file(path: Path, issues):
     lines = text.splitlines()
     assignments = parse_assignments(lines)
     tainted = record_taint(assignments)
-for idx, raw in enumerate(lines, start=1):
+    for idx, raw in enumerate(lines, start=1):
         stripped = strip_comments(raw)
         if not stripped:
             continue
@@ -679,7 +677,6 @@ for idx, raw in enumerate(lines, start=1):
             if len(bucket['samples']) < 3:
                 bucket['samples'].append(sample)
 
-
 issues = defaultdict(lambda: {'count': 0, 'samples': []})
 for file_path in iter_files(ROOT):
     analyze_file(file_path, issues)
@@ -711,10 +708,20 @@ ensure_ast_scan_json(){
   [[ "$HAS_AST_GREP" -eq 1 && -n "$AST_RULE_DIR" ]] || return 1
   [[ -n "$AST_JSON" && -f "$AST_JSON" ]] && return 0
   AST_JSON="$(mktemp -t ag_json.XXXXXX.json 2>/dev/null || mktemp -t ag_json.XXXXXX)"
-  "${AST_GREP_CMD[@]}" scan -r "$AST_RULE_DIR" "$PROJECT_DIR" --json 2>/dev/null >"$AST_JSON" || true
-  AST_SCAN_OK=1
+  if "${AST_GREP_CMD[@]}" scan -r "$AST_RULE_DIR" "$PROJECT_DIR" --json 2>/dev/null >"$AST_JSON"; then
+    AST_SCAN_OK=1
+  else
+    AST_SCAN_OK=0
+    rm -f "$AST_JSON"
+    AST_JSON=""
+    return 1
+  fi
 }
-ast_count(){ local id="$1"; [[ -f "$AST_JSON" ]] || return 1; grep -o "\"id\"[[:space:]]*:[[:space:]]*\"${id}\"" "$AST_JSON" | wc -l | awk '{print $1+0}'; }
+ast_count(){
+  local id="$1"
+  [[ -n "$AST_JSON" && -f "$AST_JSON" ]] || { echo 0; return 0; }
+  grep -o "\"id\"[[:space:]]*:[[:space:]]*\"${id//\//\\/}\"" "$AST_JSON" 2>/dev/null | wc -l | awk '{print $1+0}'
+}
 
 # ────────────────────────────────────────────────────────────────────────────
 # ast-grep: detection, rule packs, and wrappers (Go heavy)
@@ -839,6 +846,15 @@ severity: info
 message: "context.With* called without a deferred cancel() in the same scope (heuristic)."
 YAML
 
+  cat >"$AST_RULE_DIR/go-context-todo.yml" <<'YAML'
+id: go.context-todo
+language: go
+rule:
+  pattern: context.TODO()
+severity: info
+message: "context.TODO() present; replace with ctx or With* for production flows."
+YAML
+
   cat >"$AST_RULE_DIR/go-resource-ticker.yml" <<'YAML'
 id: go.resource.ticker-no-stop
 language: go
@@ -901,8 +917,8 @@ language: go
 rule:
   pattern: http.Client{$$}
   not:
-    any:
-      - has: { pattern: Timeout: $X }
+    has:
+      pattern: Timeout: $X
 severity: warning
 message: "http.Client without Timeout configured."
 YAML
@@ -961,12 +977,16 @@ YAML
 id: go.json-decode-without-disallow
 language: go
 rule:
-  pattern: json.NewDecoder($R).Decode($V)
+  any:
+    - pattern: json.NewDecoder($R).Decode($V)
+    - pattern: |
+        $DEC := json.NewDecoder($R)
+        $DEC.Decode($V)
   not:
-    inside:
-      pattern: $DEC.DisallowUnknownFields()
+    has:
+      pattern: DisallowUnknownFields()
 severity: info
-message: "json.Decoder used without DisallowUnknownFields; may hide input mistakes."
+message: "json.Decoder used without DisallowUnknownFields; may hide input mistakes (heuristic)."
 YAML
 
   # ───── Security & exec ───────────────────────────────────────────────────
@@ -1130,7 +1150,10 @@ echo ""
 if check_ast_grep; then
   [[ "$FORMAT" == "text" ]] && say "${GREEN}${CHECK} ast-grep available (${AST_GREP_CMD[*]}) - full AST analysis enabled${RESET}"
   write_ast_rules || true
-  [[ "$LIST_RULES" -eq 1 ]] && { printf "%s\n" "$AST_RULE_DIR"/*.yml | sed 's/.*\///;s/\.yml$//' ; exit 0; }
+  if [[ "$LIST_RULES" -eq 1 ]]; then
+    awk 'BEGIN{FS=":"}/^id:[[:space:]]*/{gsub(/^[[:space:]]*id:[[:space:]]*/,"");print;}' "$AST_RULE_DIR"/*.yml | sort -u
+    exit 0
+  fi
   ensure_ast_scan_json || true
 else
   [[ "$FORMAT" == "text" ]] && say "${YELLOW}${WARN} ast-grep unavailable - using regex fallback mode${RESET}"
@@ -1306,6 +1329,12 @@ if [ "$rows_open" -gt 0 ] && [ "$rows_close" -lt "$rows_open" ]; then
   diff=$((rows_open - rows_close)); print_finding "info" "$diff" "Potential missing rows.Close() (heuristic)"
 fi
 
+print_subheader "database/sql Tx Commit/Rollback (heuristic)"
+tx_begin=$("${GREP_RN[@]}" -e "\b(Begin|BeginTx)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+tx_end=$("${GREP_RN[@]}" -e "\.(Commit|Rollback)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+if [ "$tx_begin" -gt 0 ] && [ "$tx_end" -lt "$tx_begin" ]; then
+  diff=$((tx_begin - tx_end)); print_finding "warning" "$diff" "Tx started without Commit/Rollback (heuristic)"; fi
+
 print_subheader "time.Tick usage"
 count=$([[ "$HAS_AST_GREP" -eq 1 && -f "$AST_JSON" ]] && ast_count "go.time-tick" || echo 0)
 if [ "$count" -gt 0 ]; then print_finding "warning" "$count" "time.Tick leaks; prefer NewTicker"; fi
@@ -1479,6 +1508,10 @@ if [ "$s_count" -eq 0 ]; then print_finding "info" 1 "go.sum not found"; else pr
 print_subheader "toolchain directive usage (informational)"
 tool_count=$("${GREP_RN[@]}" -e "^[[:space:]]*toolchain[[:space:]]+go[0-9]+\.[0-9]+" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
 if [ "$tool_count" -gt 0 ]; then print_finding "info" "$tool_count" "toolchain directive present"; fi
+
+print_subheader "replace directives (informational)"
+repl=$("${GREP_RN[@]}" -e "^[[:space:]]*replace[[:space:]]+" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+if [ "$repl" -gt 0 ]; then print_finding "info" "$repl" "replace directives present - validate dev overrides not shipped"; fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1490,13 +1523,13 @@ print_category "Detects: tests existence, t.Parallel usage (heuristic), race-pro
   "Healthy tests parallelize safely and fail fast"
 
 print_subheader "Test files"
-tests=$(( $("${GREP_RN[@]}" -e "_test\.go$" "$PROJECT_DIR" 2>/dev/null || true | wc -l | awk '{print $1+0}') ))
+tests=$("${GREP_RN[@]}" -e "_test\.go$" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
 if [ "$tests" -gt 0 ]; then print_finding "info" "$tests" "Test files detected"; else print_finding "info" 0 "No test files found"; fi
 
 print_subheader "t.Parallel usage (heuristic)"
-tpar=$("${GREP_RN[@]}" -e "\bT\)\s*\{|\*testing\.T\)" "$PROJECT_DIR" 2>/dev/null | (grep -c "t\.Parallel\(\)" || true)
-tpar=$(printf '%s\n' "$tpar" | awk 'END{print $0+0}')
-if [ "$tpar" -eq 0 ] && [ "$tests" -gt 5 ]; then print_finding "info" "$tests" "Consider t.Parallel() in independent tests"; fi
+test_funcs=$("${GREP_RN[@]}" -e "^func[[:space:]]+Test[[:alnum:]_]*\(t[[:space:]]+\*testing\.T\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+tpar=$("${GREP_RN[@]}" -e "t\.Parallel\(\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+if [ "$test_funcs" -gt 0 ] && [ "$tpar" -eq 0 ]; then print_finding "info" "$test_funcs" "Consider t.Parallel() for independent tests"; fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1572,6 +1605,81 @@ print_category "Detects: context.With* without cancel, tickers/timers without St
   "Go resources must be explicitly cleaned up to avoid leaks"
 
 run_resource_lifecycle_checks
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CATEGORY 18: GO TOOLING (OPTIONAL)
+# ═══════════════════════════════════════════════════════════════════════════
+if should_skip 18; then
+print_header "18. GO TOOLING (OPTIONAL)"
+print_category "Detects: formatting drift, vet findings, known vulnerabilities (govulncheck)" \
+  "This section runs only with --go-tools and if Go tools are available"
+if [ "$RUN_GO_TOOLS" -eq 1 ] && command -v go >/dev/null 2>&1; then
+  print_subheader "gofmt -s -l (unformatted files)"
+  gofmt_out="$( ( set +o pipefail; find "$PROJECT_DIR" "${EX_PRUNE[@]}" -o \( -type f -name '*.go' -print \) 2>/dev/null || true ) | xargs -r gofmt -s -l 2>/dev/null || true )"
+  gf_count=$(printf "%s\n" "$gofmt_out" | sed '/^$/d' | wc -l | awk '{print $1+0}')
+  if [ "$gf_count" -gt 0 ]; then print_finding "info" "$gf_count" "Files not gofmt -s clean"
+    printf "%s\n" "$gofmt_out" | head -n "$DETAIL_LIMIT" | sed "s/^/${DIM}      /;s/$/${RESET}/" | sed "s/^/$(printf '')/"
+  else
+    print_finding "good" "All Go files are gofmt -s clean"
+  fi
+
+  print_subheader "go vet"
+  if out_vet=$( ( set +o pipefail; cd "$PROJECT_DIR" && go vet "$GOTEST_PKGS" 2>&1 || true ) ); then
+    vet_lines=$(printf "%s" "$out_vet" | sed '/^$/d' | wc -l | awk '{print $1+0}')
+    if [ "$vet_lines" -gt 0 ]; then print_finding "warning" "$vet_lines" "go vet findings (review output)"
+      printf "%s\n" "$out_vet" | head -n "$((DETAIL_LIMIT*3))" | sed "s/^/${DIM}      /;s/$/${RESET}/"
+    else
+      print_finding "good" "go vet reported no issues"
+    fi
+  else
+    print_finding "info" 0 "go vet skipped"
+  fi
+
+  print_subheader "govulncheck"
+  if command -v govulncheck >/dev/null 2>&1; then
+    gv_out="$( ( set +o pipefail; cd "$PROJECT_DIR" && govulncheck -format=text "$GOTEST_PKGS" 2>/dev/null || true ) )"
+    gv_cnt=$(printf "%s" "$gv_out" | grep -E '^(Vulnerability|module:|package:|symbol:)' | wc -l | awk '{print $1+0}')
+    if [ "$gv_cnt" -gt 0 ]; then print_finding "warning" "$gv_cnt" "govulncheck reported potential vulnerabilities"
+      printf "%s\n" "$gv_out" | head -n "$((DETAIL_LIMIT*4))" | sed "s/^/${DIM}      /;s/$/${RESET}/"
+    else
+      print_finding "good" "govulncheck did not report known vulnerabilities"
+    fi
+  else
+    print_finding "info" 0 "govulncheck not installed"
+  fi
+else
+  print_finding "info" 0 "Go tools disabled (use --go-tools) or Go not found"
+fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CATEGORY 19: DEPENDENCY & BUILD DRIFT
+# ═══════════════════════════════════════════════════════════════════════════
+if should_skip 19; then
+print_header "19. DEPENDENCY & BUILD DRIFT"
+print_category "Detects: multiple modules, inconsistent go directives, missing replace cleanup" \
+  "Prevents subtle build reproducibility problems"
+mods_mismatch=0
+if [ "$mods_count" -gt 1 ]; then
+  print_subheader "Multiple modules detected"
+  print_finding "info" "$mods_count" "Multiple go.mod; check for monorepo consistency"
+fi
+
+print_subheader "Inconsistent go directive versions across modules (heuristic)"
+if [ "$mods_count" -gt 1 ]; then
+  versions="$( while IFS= read -r mf; do grep -E '^[[:space:]]*go[[:space:]]+[0-9]+\.[0-9]+' "$mf" 2>/dev/null | head -n1 | awk '{print $2"  "FILENAME}'; done <<<"$mod_files" )"
+  base_ver="$(printf "%s\n" "$versions" | head -n1 | awk '{print $1}')"
+  diff_ver=$(printf "%s\n" "$versions" | awk -v b="$base_ver" '$1!=b{print}' | wc -l | awk '{print $1+0}')
+  if [ "$diff_ver" -gt 0 ]; then
+    print_finding "info" "$diff_ver" "Mixed module 'go' directives; align to a single baseline"
+    printf "%s\n" "$versions" | head -n "$((DETAIL_LIMIT*2))" | sed "s/^/${DIM}      /;s/$/${RESET}/"
+  else
+    print_finding "good" "All modules share the same 'go' directive"
+  fi
+else
+  print_finding "good" "Single module repository"
+fi
 fi
 
 # restore pipefail if we relaxed it
