@@ -63,6 +63,13 @@ test_basic_smoke() {
   local log="$ctx/install.log"
 
   if run_installer "$home" "$log"; then
+    if grep -q "typos not found" "$log"; then
+      echo "[PASS] typos warning emitted"
+    else
+      echo "[FAIL] expected typos warning missing (log: $log)"
+      tests_failed=1
+      return
+    fi
     echo "[PASS] basic_smoke"
   fi
 }
@@ -90,8 +97,27 @@ test_no_alias_written_when_no_path_modify() {
   fi
 }
 
+test_skip_typos_flag() {
+  echo "[TEST] skip_typos_flag"
+  local ctx
+  ctx="$(mktemp -d)"
+  tmpdirs+=("$ctx")
+  local home="$ctx/home"
+  local log="$ctx/install.log"
+
+  if run_installer "$home" "$log" --skip-typos; then
+    if grep -q "typos not found" "$log"; then
+      echo "[FAIL] typos warning appeared despite --skip-typos"
+      tests_failed=1
+    else
+      echo "[PASS] skip_typos_flag"
+    fi
+  fi
+}
+
 test_basic_smoke
 test_no_alias_written_when_no_path_modify
+test_skip_typos_flag
 
 if [ "$tests_failed" -ne 0 ]; then
   echo ""
