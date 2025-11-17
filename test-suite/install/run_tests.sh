@@ -55,8 +55,8 @@ run_installer() {
     return 1
   fi
 
-  if [ -e /tmp/ubs-install.lock ]; then
-    echo "[FAIL] lock file /tmp/ubs-install.lock left behind (log: $log_file)"
+  if [ -d /tmp/ubs-install.lock ]; then
+    echo "[FAIL] lock directory /tmp/ubs-install.lock left behind (log: $log_file)"
     rm -rf /tmp/ubs-install.lock 2>/dev/null || true
     tests_failed=1
     return 1
