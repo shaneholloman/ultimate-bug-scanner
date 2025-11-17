@@ -53,6 +53,8 @@ INSTALL_DIR=""
 FORCE_REINSTALL=0
 SKIP_VERSION_CHECK=0
 RUN_VERIFICATION=1
+DRY_RUN=0
+RUN_SELF_TEST=0
 
 # Temporary files tracking for cleanup
 TEMP_FILES=()
@@ -63,24 +65,60 @@ TEMP_FILES+=("$WORKDIR")
 LOCK_FILE="/tmp/ubs-install.lock"
 # Track if we own the lock (only remove it if we created it)
 LOCK_OWNED=0
+LOCK_METHOD="dir"
+LOCK_FD=""
+
+dry_run_enabled() { [ "$DRY_RUN" -eq 1 ]; }
+
+log_dry_run() {
+  local message="$1"
+  log "[dry-run] $message"
+}
+
+log_section() {
+  local title="$1"
+  echo ""
+  echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════${RESET}"
+  echo -e "${BOLD}${BLUE}   ${title}${RESET}"
+  echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════${RESET}"
+  echo ""
+}
+
+register_temp_path() {
+  local path="$1"
+  TEMP_FILES+=("$path")
+}
+
+mktemp_in_workdir() {
+  local template="${1:-ubs.XXXXXX}"
+  local path
+  path="$(mktemp -p "$WORKDIR" "$template" 2>/dev/null || mktemp "${WORKDIR}/${template}")"
+  register_temp_path "$path"
+  echo "$path"
+}
 
 cleanup_on_exit() {
   # Clean up temporary files
   if [ ${#TEMP_FILES[@]} -gt 0 ]; then
     for temp_file in "${TEMP_FILES[@]}"; do
-      rm -rf "$temp_file" 2>/dev/null
+      rm -rf "$temp_file" 2>/dev/null || true
     done
   fi
-  # Clean up common temp files from this script
-  rm -f /tmp/ast-grep-install.log /tmp/jq-install.log /tmp/ripgrep-install.log 2>/dev/null
-  rm -f /tmp/download-error.log /tmp/sed-error.log /tmp/bug-scan.txt 2>/dev/null
-  rm -rf /tmp/ripgrep.tar.gz /tmp/ripgrep-* /tmp/ast-grep.zip /tmp/ast-grep 2>/dev/null
-  # Ensure workdir is gone
-  [ -n "${WORKDIR:-}" ] && rm -rf "$WORKDIR" 2>/dev/null || true
-  # Remove lock file ONLY if we created it (don't remove another process's lock!)
+  if [ -n "${WORKDIR:-}" ]; then
+    rm -rf "$WORKDIR" 2>/dev/null || true
+  fi
+  release_lock
+}
+
+release_lock() {
   if [ "$LOCK_OWNED" -eq 1 ]; then
-    rmdir "$LOCK_FILE" 2>/dev/null || true  # || true prevents set -e from killing cleanup
-    LOCK_OWNED=0  # Mark that we no longer own it (prevents double-remove in EXIT trap)
+    if [ "$LOCK_METHOD" = "flock" ] && [ -n "$LOCK_FD" ]; then
+      flock -u "$LOCK_FD" 2>/dev/null || true
+      eval "exec ${LOCK_FD}>&-"
+    else
+      rmdir "$LOCK_FILE" 2>/dev/null || true
+    fi
+    LOCK_OWNED=0
   fi
 }
 
@@ -417,17 +455,19 @@ check_for_updates() {
 
   local current_version="$VERSION"
   local latest_url="$REPO_URL/VERSION"
+  local err_log latest_file
+  err_log="$(mktemp_in_workdir "update.err.XXXXXX")"
+  latest_file="$(mktemp_in_workdir "version.latest.XXXXXX")"
 
   log "Checking for updates..."
   local latest_version
-  if latest_version=$(with_backoff 3 curl -fsSL --max-time 5 "$latest_url" 2>/dev/null); then
-    latest_version=$(echo "$latest_version" | tr -d '[:space:]')
+  if with_backoff 3 curl -fsSL --max-time 5 "$latest_url" -o "$latest_file" 2>"$err_log"; then
+    latest_version=$(tr -d '[:space:]' < "$latest_file")
     if version_compare "$latest_version" "$current_version"; then
       warn "New version available: $latest_version (you have $current_version)"
       if ask "Update to latest version now?"; then
         log "Re-running installer with latest version..."
-        LOCK_OWNED=0
-        rmdir "$LOCK_FILE" 2>/dev/null || true
+        release_lock
         if [ "${#ORIGINAL_ARGS[@]}" -gt 0 ]; then
           exec bash <(curl -fsSL "$REPO_URL/install.sh") "${ORIGINAL_ARGS[@]}"
         else
@@ -441,6 +481,9 @@ check_for_updates() {
     fi
   else
     warn "Could not check for updates (network issue or rate limit)"
+    if [ -s "$err_log" ]; then
+      warn "  Last error: $(tail -n 1 "$err_log")"
+    fi
   fi
 }
 
