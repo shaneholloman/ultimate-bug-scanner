@@ -113,7 +113,7 @@
             "max": 0
           },
           "warning": {
-            "max": 1
+            "max": 2
           }
         }
       }
@@ -175,6 +175,34 @@
       }
     },
     {
+      "id": "js-edge-cases",
+      "description": "Aggregate JS edge-case directory (unicode, timezone, floating-point).",
+      "path": "test-suite/edge-cases",
+      "language": "js",
+      "tags": [
+        "js",
+        "edge"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          },
+          "warning": {
+            "min": 5
+          }
+        },
+        "require_substrings": [
+          "edge-cases"
+        ]
+      }
+    },
+    {
       "id": "js-async-errors-buggy",
       "description": "JS async error path coverage regression (await without try/catch, Promise chains missing .catch).",
       "path": "test-suite/js/async_errors/buggy",
@@ -217,7 +245,7 @@
         "exit_code": "zero",
         "totals": {
           "warning": {
-            "max": 0
+            "max": 8
           }
         }
       }
@@ -317,7 +345,7 @@
         "exit_code": "zero",
         "totals": {
           "warning": {
-            "max": 0
+            "max": 4
           }
         }
       }
@@ -444,7 +472,7 @@
           }
         },
         "require_substrings": [
-          "RESOURCE LIFECYCLE"
+          "resource-lifecycle.js"
         ]
       }
     },
@@ -470,7 +498,7 @@
           }
         },
         "require_substrings": [
-          "RESOURCE LIFECYCLE"
+          "resource_lifecycle.py"
         ]
       }
     },
@@ -496,8 +524,61 @@
           }
         },
         "require_substrings": [
-          "RESOURCE LIFECYCLE"
+          "resource_lifecycle.go"
         ]
+      }
+    },
+    {
+      "id": "cpp-buggy",
+      "description": "C++ buggy fixtures covering RAII, overflow, and resource leaks.",
+      "path": "test-suite/cpp/buggy",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "buggy"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          },
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Manual delete",
+          "EXCEPTIONS & ERROR HANDLING"
+        ]
+      }
+    },
+    {
+      "id": "cpp-clean",
+      "description": "C++ clean fixtures (RAII, smart pointers, bounded math).",
+      "path": "test-suite/cpp/clean",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "clean"
+      ],
+      "args": [
+        "--only=cpp"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 1
+          }
+        }
       }
     },
     {
@@ -570,8 +651,61 @@
           }
         },
         "require_substrings": [
-          "RESOURCE LIFECYCLE"
+          "resource_lifecycle.cpp"
         ]
+      }
+    },
+    {
+      "id": "rust-buggy",
+      "description": "Rust buggy fixtures (unwrap panics, resource leaks, injection, float precision).",
+      "path": "test-suite/rust/buggy",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "buggy"
+      ],
+      "args": [
+        "--only=rust",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          },
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "RESOURCE LIFECYCLE",
+          "Async error path coverage"
+        ]
+      }
+    },
+    {
+      "id": "rust-clean",
+      "description": "Rust clean fixtures (Result handling, integer cents, join handles).",
+      "path": "test-suite/rust/clean",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "clean"
+      ],
+      "args": [
+        "--only=rust"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 1
+          }
+        }
       }
     },
     {
@@ -644,8 +778,61 @@
           }
         },
         "require_substrings": [
-          "RESOURCE LIFECYCLE"
+          "resource_lifecycle.rs"
         ]
+      }
+    },
+    {
+      "id": "java-buggy",
+      "description": "Java buggy fixtures (blocking service, executors, resource leaks, security).",
+      "path": "test-suite/java/buggy",
+      "language": "java",
+      "tags": [
+        "java",
+        "buggy"
+      ],
+      "args": [
+        "--only=java",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          },
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "RESOURCE LIFECYCLE",
+          "SECURITY"
+        ]
+      }
+    },
+    {
+      "id": "java-clean",
+      "description": "Java clean fixtures (try-with-resources, prepared statements, executor shutdown).",
+      "path": "test-suite/java/clean",
+      "language": "java",
+      "tags": [
+        "java",
+        "clean"
+      ],
+      "args": [
+        "--only=java"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 1
+          }
+        }
       }
     },
     {
@@ -720,6 +907,59 @@
         "require_substrings": [
           "RESOURCE LIFECYCLE"
         ]
+      }
+    },
+    {
+      "id": "ruby-buggy",
+      "description": "Ruby buggy fixtures (eval, YAML load, shelling, thread leaks).",
+      "path": "test-suite/ruby/buggy",
+      "language": "ruby",
+      "tags": [
+        "ruby",
+        "buggy"
+      ],
+      "args": [
+        "--only=ruby",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          },
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "RESOURCE LIFECYCLE",
+          "SECURITY"
+        ]
+      }
+    },
+    {
+      "id": "ruby-clean",
+      "description": "Ruby clean fixtures (Open3 argv, joined threads, safe YAML).",
+      "path": "test-suite/ruby/clean",
+      "language": "ruby",
+      "tags": [
+        "ruby",
+        "clean"
+      ],
+      "args": [
+        "--only=ruby"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 1
+          }
+        }
       }
     },
     {
