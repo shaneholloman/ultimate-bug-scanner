@@ -63,6 +63,7 @@ cleanup_on_exit() {
   # Remove lock file ONLY if we created it (don't remove another process's lock!)
   if [ "$LOCK_OWNED" -eq 1 ]; then
     rmdir "$LOCK_FILE" 2>/dev/null
+    LOCK_OWNED=0  # Mark that we no longer own it (prevents double-remove in EXIT trap)
   fi
 }
 
