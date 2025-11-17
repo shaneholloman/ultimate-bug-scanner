@@ -10,34 +10,38 @@ async function fetchUserProfile(id) {
   }
 }
 
-function saveSettings(settings) {
-  return window.api
-    .save(settings)
-    .then(() => console.log('saved!'))
-    .catch((err) => {
-      console.error('Save failed', err);
-      throw err;
-    })
-    .finally(() => {
-      console.log('settings sync complete');
-    });
-}
-
-async function loadAllProjects(projectIds) {
+async function saveSettings(settings) {
   try {
-    return await Promise.all(
-      projectIds.map((id) => fetch(`/api/projects/${id}`))
-    );
+    await window.api.save(settings);
   } catch (err) {
-    console.error('Project load failure', err);
+    console.error('Save failed', err);
     throw err;
   } finally {
-    console.log('project fetch attempted');
+    console.log('settings sync complete');
   }
 }
 
+async function loadAllProjects(projectIds) {
+  const projects = [];
+  for (const id of projectIds) {
+    try {
+      const resp = await fetch(`/api/projects/${id}`);
+      projects.push(resp);
+    } catch (err) {
+      console.error('Project load failure', err);
+      throw err;
+    }
+  }
+  return projects;
+}
+
 export async function bootstrapSession(userId) {
-  await fetchUserProfile(userId);
-  await saveSettings({ theme: 'dark' });
-  await loadAllProjects([1, 2, 3]);
+  try {
+    await fetchUserProfile(userId);
+    await saveSettings({ theme: 'dark' });
+    await loadAllProjects([1, 2, 3]);
+  } catch (err) {
+    console.error('bootstrap failure', err);
+    throw err;
+  }
 }

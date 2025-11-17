@@ -1,8 +1,12 @@
-async fn fetch_data() -> Result<String, reqwest::Error> {
-    reqwest::get("https://example.com").await?.text().await
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+async fn fetch_data() -> Result<String, &'static str> {
+    Ok(String::from("data"))
 }
 
-async fn run() -> Result<(), reqwest::Error> {
+async fn run() -> Result<(), &'static str> {
     match fetch_data().await {
         Ok(body) => println!("{}", body),
         Err(err) => {
@@ -15,10 +19,35 @@ async fn run() -> Result<(), reqwest::Error> {
             eprintln!("background error: {err}");
         }
     });
-    handle.await.ok();
+    let _ = handle.await;
     Ok(())
 }
 
 fn main() {
     let _ = run();
+}
+
+mod tokio {
+    use super::*;
+
+    pub struct JoinHandle;
+
+    impl Future for JoinHandle {
+        type Output = Result<(), ()>;
+
+        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl JoinHandle {
+        pub fn abort(&self) {}
+    }
+
+    pub fn spawn<F>(_f: F) -> JoinHandle
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        JoinHandle
+    }
 }

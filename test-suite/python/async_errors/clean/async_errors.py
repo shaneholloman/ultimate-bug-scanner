@@ -10,12 +10,10 @@ async def refresh_dashboard():
     except Exception as exc:
         print('dashboard failed', exc)
         raise
-    task = asyncio.create_task(fetch_user('lazy'))
     try:
-        await task
+        await fetch_user('lazy')
     finally:
-        if not task.done():
-            task.cancel()
+        print('background fetch complete')
 
 async def bootstrap():
     try:
