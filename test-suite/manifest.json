@@ -401,6 +401,59 @@
       }
     },
     {
+      "id": "python-taint-buggy",
+      "description": "Python taint analysis regression (Flask request data flows into HTML/SQL/subprocess).",
+      "path": "test-suite/python/buggy/taint_analysis.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "taint",
+        "buggy"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Lightweight taint analysis"
+        ]
+      }
+    },
+    {
+      "id": "python-taint-clean",
+      "description": "Python taint analysis clean baseline (escaped HTML + parameterized SQL).",
+      "path": "test-suite/python/clean/taint_analysis.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "taint",
+        "clean"
+      ],
+      "args": [
+        "--only=python"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 2
+          }
+        }
+      }
+    },
+    {
       "id": "python-async-errors-buggy",
       "description": "Python async error path regression (await outside try and fire-and-forget tasks).",
       "path": "test-suite/python/async_errors/buggy",
