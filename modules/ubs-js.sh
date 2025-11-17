@@ -1656,9 +1656,11 @@ print_category "Detects: Code injection, XSS, prototype pollution, timing attack
   "Security bugs expose users to attacks and data breaches"
 
 print_subheader "eval() usage (CRITICAL SECURITY RISK)"
-eval_count=$(
-  ( [[ "$HAS_AST_GREP" -eq 1 ]] && ( set +o pipefail; "${AST_GREP_CMD[@]}" --pattern "eval($$)" "$PROJECT_DIR" 2>/dev/null || true ) ) \
-  || ( "${GREP_RN[@]}" -e '(^|[^'"'"'"])[Ee]val[[:space:]]*\(' "$PROJECT_DIR" 2>/dev/null || true ) \
+eval_count=$( \
+  ( \
+    ( [[ "$HAS_AST_GREP" -eq 1 ]] && ( set +o pipefail; "${AST_GREP_CMD[@]}" --pattern "eval($$)" "$PROJECT_DIR" 2>/dev/null || true ) ) \
+    || ( "${GREP_RN[@]}" -e '(^|[^'"'"'])'[Ee]val[[:space:]]*\(' "$PROJECT_DIR" 2>/dev/null || true ) \
+  ) \
   | (grep -Ev "^[[:space:]]*(//|/\*|\*)" || true) \
   | count_lines
 )
@@ -1670,9 +1672,11 @@ else
 fi
 
 print_subheader "new Function() (eval equivalent)"
-count=$(
-  ( [[ "$HAS_AST_GREP" -eq 1 ]] && ( set +o pipefail; "${AST_GREP_CMD[@]}" --pattern "new Function($$)" "$PROJECT_DIR" 2>/dev/null || true ) ) \
-  || ( "${GREP_RN[@]}" -e '(^|[^'"'"'"])\bnew[[:space:]]+Function[[:space:]]*\(' "$PROJECT_DIR" 2>/dev/null || true ) \
+count=$( \
+  ( \
+    ( [[ "$HAS_AST_GREP" -eq 1 ]] && ( set +o pipefail; "${AST_GREP_CMD[@]}" --pattern "new Function($$)" "$PROJECT_DIR" 2>/dev/null || true ) ) \
+    || ( "${GREP_RN[@]}" -e '(^|[^'"'"'])\bnew[[:space:]]+Function[[:space:]]*\(' "$PROJECT_DIR" 2>/dev/null || true ) \
+  ) \
   | (grep -Ev "^[[:space:]]*(//|/\*|\*)" || true) \
   | count_lines
 )
@@ -1682,9 +1686,11 @@ if [ "$count" -gt 0 ]; then
 fi
 
 print_subheader "innerHTML with potential XSS risk"
-count=$(
-  ( [[ "$HAS_AST_GREP" -eq 1 ]] && "${AST_GREP_CMD[@]}" --pattern "$EL.innerHTML = $VAL" "$PROJECT_DIR" 2>/dev/null ) \
-  || "${GREP_RN[@]}" -e "\\.innerHTML[[:space:]]*=" "$PROJECT_DIR" 2>/dev/null \
+count=$( \
+  ( \
+    ( [[ "$HAS_AST_GREP" -eq 1 ]] && "${AST_GREP_CMD[@]}" --pattern "$EL.innerHTML = $VAL" "$PROJECT_DIR" 2>/dev/null ) \
+    || "${GREP_RN[@]}" -e "\.innerHTML[[:space:]]*=" "$PROJECT_DIR" 2>/dev/null \
+  ) \
      | (grep -v -E "escapeHtml|sanitize|DOMPurify" || true) \
      | (grep -Ev "^[[:space:]]*(//|/\*|\*)" || true) \
      | count_lines
@@ -1697,9 +1703,11 @@ elif [ "$count" -gt 0 ]; then
 fi
 
 print_subheader "document.write (deprecated & dangerous)"
-count=$(
-  ( [[ "$HAS_AST_GREP" -eq 1 ]] && "${AST_GREP_CMD[@]}" --pattern "document.write($$)" "$PROJECT_DIR" 2>/dev/null ) \
-  || "${GREP_RNW[@]}" "document\.write" "$PROJECT_DIR" 2>/dev/null \
+count=$( \
+  ( \
+    ( [[ "$HAS_AST_GREP" -eq 1 ]] && "${AST_GREP_CMD[@]}" --pattern "document.write($$)" "$PROJECT_DIR" 2>/dev/null ) \
+    || "${GREP_RNW[@]}" "document\.write" "$PROJECT_DIR" 2>/dev/null \
+  ) \
      | (grep -Ev "^[[:space:]]*(//|/\*|\*)" || true) \
      | count_lines
 )
