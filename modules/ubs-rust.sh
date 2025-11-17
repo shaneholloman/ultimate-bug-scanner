@@ -385,7 +385,7 @@ run_async_error_checks() {
 ' read -r file; do
     [[ -z "$file" ]] && continue
     local missing
-    missing=$(python3 - "$file" <<'PY2'
+    missing=$(python3 <<'PY2' "$file"
 import sys, re
 from pathlib import Path
 path = Path(sys.argv[1])
