@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,54 +63,6 @@ def iter_rust_files(root: Path) -> Iterable[Path]:
             yield path
 
 
-def run_ast_grep(pattern: str, root: Path, ast_bin: str) -> List[dict]:
-    if not ast_bin or not is_safe_path(root):
-        return []
-    cmd = [ast_bin, "run", "--pattern", pattern, "-l", "rust", "--json", str(root)]
-    try:
-        result = subprocess.run(cmd, capture_output=True, check=True, text=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return []
-    stdout = result.stdout.strip()
-    if not stdout:
-        return []
-    try:
-        return json.loads(stdout)
-    except json.JSONDecodeError:
-        return []
-
-
-def collect_ast_guards(root: Path, ast_bin: str) -> List[GuardMatch]:
-    patterns = [
-        "if let Some($BIND) = $SOURCE { $BODY }",
-        "if let Ok($BIND) = $SOURCE { $BODY }",
-    ]
-    guards: List[GuardMatch] = []
-    for pattern in patterns:
-        for match in run_ast_grep(pattern, root, ast_bin):
-            singles = match.get("metaVariables", {}).get("single", {})
-            source_node = singles.get("SOURCE") or singles.get("S")
-            if not source_node:
-                continue
-            expr = source_node.get("text", "")
-            if not IDENT_PATTERN.match(expr):
-                continue
-            guard_range = match.get("range", {}).get("byteOffset", {})
-            start = guard_range.get("start")
-            end = guard_range.get("end")
-            if start is None or end is None:
-                continue
-            guards.append(
-                GuardMatch(
-                    path=Path(match["file"]),
-                    expr=expr,
-                    start=int(start),
-                    end=int(end),
-                )
-            )
-    return guards
-
-
 def analyze_guard(text: str, guard: GuardMatch) -> tuple[int, int] | None:
     block_text = text[guard.start : guard.end]
     if EXIT_PATTERN.search(block_text):
@@ -129,12 +80,50 @@ def analyze_guard(text: str, guard: GuardMatch) -> tuple[int, int] | None:
     return line_col(text, absolute_pos)
 
 
-def analyze_with_ast_grep(root: Path, ast_bin: str) -> List[tuple[Path, int, int, str]]:
-    guards = collect_ast_guards(root, ast_bin)
+def guard_from_match(entry: dict) -> GuardMatch | None:
+    singles = entry.get("metaVariables", {}).get("single", {})
+    source_node = singles.get("SOURCE") or singles.get("S")
+    if not source_node:
+        return None
+    expr = source_node.get("text", "")
+    if not IDENT_PATTERN.match(expr):
+        return None
+    guard_range = entry.get("range", {}).get("byteOffset", {})
+    start = guard_range.get("start")
+    end = guard_range.get("end")
+    file_path = entry.get("file")
+    if start is None or end is None or not file_path:
+        return None
+    guard_path = Path(file_path).resolve()
+    return GuardMatch(guard_path, expr, int(start), int(end))
+
+
+def analyze_with_ast_json(root: Path, json_path: Path) -> List[tuple[Path, int, int, str]]:
+    if not is_safe_path(root):
+        return []
+    if not json_path.exists():
+        return []
+    guards: List[GuardMatch] = []
+    try:
+        with json_path.open(encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    match = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                guard = guard_from_match(match)
+                if guard and is_safe_path(guard.path):
+                    guards.append(guard)
+    except OSError:
+        return []
     if not guards:
         return []
+
     cache: dict[Path, str] = {}
-    issues: List[tuple[Path, int, int, str]] = []
+    findings: List[tuple[Path, int, int, str]] = []
     for guard in guards:
         try:
             text = read_file(guard.path, cache)
@@ -144,15 +133,8 @@ def analyze_with_ast_grep(root: Path, ast_bin: str) -> List[tuple[Path, int, int
         if not loc:
             continue
         line, col = loc
-        issues.append(
-            (
-                guard.path,
-                line,
-                col,
-                f"{guard.expr} unwrap/expect after partial guard",
-            )
-        )
-    return issues
+        findings.append((guard.path, line, col, f"{guard.expr} unwrap/expect after partial guard"))
+    return findings
 
 
 # Legacy regex fallback ----------------------------------------------------- #
@@ -212,14 +194,19 @@ def analyze_with_regex(root: Path) -> List[tuple[Path, int, int, str]]:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("Usage: type_narrowing_rust.py <project_dir> [ast_grep_path]", file=sys.stderr)
+        print("Usage: type_narrowing_rust.py <project_dir> [--ast-json path]", file=sys.stderr)
         return 1
     root = Path(sys.argv[1]).resolve()
     if not root.exists():
         return 0
 
-    ast_bin = sys.argv[2] if len(sys.argv) > 2 else ""
-    issues = analyze_with_ast_grep(root, ast_bin)
+    json_path = None
+    if len(sys.argv) >= 4 and sys.argv[2] == "--ast-json":
+        json_path = Path(sys.argv[3]).resolve()
+
+    issues: List[tuple[Path, int, int, str]] = []
+    if json_path:
+        issues = analyze_with_ast_json(root, json_path)
     if not issues:
         issues = analyze_with_regex(root)
 

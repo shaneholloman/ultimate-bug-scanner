@@ -240,6 +240,24 @@ emit_findings_json() {
   } > "$out"
 }
 
+emit_rust_guard_matches() {
+  local pattern="$1" dest="$2" tmp_json
+  tmp_json="$(mktemp 2>/dev/null || mktemp -t rust-guards.XXXXXX)"
+  if "${AST_GREP_CMD[@]}" run --pattern "$pattern" -l rust --json "$PROJECT_DIR" >"$tmp_json" 2>/dev/null; then
+    python3 - "$tmp_json" <<'PY' >>"$dest" || true
+import json, sys
+path = sys.argv[1]
+try:
+    data = json.load(open(path, encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+for entry in data:
+    print(json.dumps(entry, ensure_ascii=False))
+PY
+  fi
+  rm -f "$tmp_json"
+}
+
 run_rust_type_narrowing_checks() {
   local helper="$SCRIPT_DIR/helpers/type_narrowing_rust.py"
   if [[ ! -f "$helper" ]]; then
@@ -249,12 +267,20 @@ run_rust_type_narrowing_checks() {
     print_finding "info" 0 "Rust type narrowing heuristics skipped" "Set UBS_SKIP_TYPE_NARROWING=0 or remove --skip-type-narrowing to re-enable"
     return
   fi
-  local output status ast_bin=""
-  if [[ "$HAS_AST_GREP" -eq 1 ]]; then
-    ast_bin="${AST_GREP_CMD[0]}"
+  local guard_json=""
+  if [[ "$HAS_AST_GREP" -eq 1 && "$have_python3" -eq 1 ]]; then
+    guard_json="$(mktemp 2>/dev/null || mktemp -t rust-guards-jsonl.XXXXXX)"
+    TMP_FILES+=("$guard_json")
+    : >"$guard_json"
+    emit_rust_guard_matches 'if let Some($BIND) = $SOURCE { $BODY }' "$guard_json"
+    emit_rust_guard_matches 'if let Ok($BIND) = $SOURCE { $BODY }' "$guard_json"
+    if [[ ! -s "$guard_json" ]]; then
+      rm -f "$guard_json"
+      guard_json=""
+    fi
   fi
-  if [[ -n "$ast_bin" ]]; then
-    output="$(python3 "$helper" "$PROJECT_DIR" "$ast_bin" 2>&1)"
+  if [[ -n "$guard_json" ]]; then
+    output="$(python3 "$helper" "$PROJECT_DIR" --ast-json "$guard_json" 2>&1)"
   else
     output="$(python3 "$helper" "$PROJECT_DIR" 2>&1)"
   fi
