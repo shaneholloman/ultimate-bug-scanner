@@ -455,7 +455,7 @@ with open(path, 'r', encoding='utf-8') as fh:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
-        rid = obj.get('rule_id') or obj.get('id')
+        rid = obj.get('rule_id') or obj.get('id') or obj.get('ruleId')
         if not rid:
             continue
         rng = obj.get('range') or {}

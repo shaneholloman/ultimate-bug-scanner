@@ -354,17 +354,21 @@ run_async_error_checks() {
 id: go.async.goroutine-err-no-check
 language: go
 rule:
-  pattern: |
-    go func($PARAMS) {
-      $$$BODY
-    }()
-  has:
-    pattern: err := $CALL
-  not:
-    has:
-      pattern: if err != nil {
-        $$$
-      }
+  all:
+    - pattern: |
+        go func($PARAMS) {
+          $$$BODY
+        }()
+    - any:
+        - has:
+            pattern: err := $CALL
+        - has:
+            pattern: $VAL, err := $CALL
+    - not:
+        has:
+          pattern: if err != nil {
+            $$$
+          }
 YAML
   tmp_json="$(mktemp 2>/dev/null || mktemp -t go_async_matches.XXXXXX)"
   : >"$tmp_json"
@@ -408,7 +412,7 @@ with open(path, 'r', encoding='utf-8') as fh:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
-        rid = obj.get('rule_id') or obj.get('id')
+        rid = obj.get('rule_id') or obj.get('id') or obj.get('ruleId')
         if not rid:
             continue
         rng = obj.get('range') or {}

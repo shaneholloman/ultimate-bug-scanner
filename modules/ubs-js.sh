@@ -55,19 +55,16 @@ USER_RULE_DIR=""
 DISABLE_PIPEFAIL_DURING_SCAN=1
 
 # Async error coverage spec (rule ids -> metadata)
-ASYNC_ERROR_RULE_IDS=(js.async.await-no-try js.async.then-no-catch js.async.promiseall-no-try)
+ASYNC_ERROR_RULE_IDS=(js.async.then-no-catch js.async.promiseall-no-try)
 declare -A ASYNC_ERROR_SUMMARY=(
-  [js.async.await-no-try]='await without try/catch'
   [js.async.then-no-catch]='Promise.then chain missing .catch()'
   [js.async.promiseall-no-try]='Promise.all without try/catch'
 )
 declare -A ASYNC_ERROR_REMEDIATION=(
-  [js.async.await-no-try]='Wrap await-heavy blocks in try/catch and handle failures explicitly'
   [js.async.then-no-catch]='Chain .catch() (or .finally()) to surface rejections'
   [js.async.promiseall-no-try]='Wrap Promise.all in try/catch to handle aggregate failures'
 )
 declare -A ASYNC_ERROR_SEVERITY=(
-  [js.async.await-no-try]='warning'
   [js.async.then-no-catch]='warning'
   [js.async.promiseall-no-try]='warning'
 )
@@ -331,15 +328,6 @@ run_async_error_checks() {
     print_finding "info" 0 "temp dir creation failed" "Unable to stage ast-grep rules"
     return
   fi
-  cat >"$rule_dir/js.async.await-no-try.yml" <<'YAML'
-id: js.async.await-no-try
-language: javascript
-rule:
-  pattern: await $EXPR
-  not:
-    inside:
-      kind: try_statement
-YAML
   cat >"$rule_dir/js.async.then-no-catch.yml" <<'YAML'
 id: js.async.then-no-catch
 language: javascript
@@ -399,7 +387,7 @@ with open(path, 'r', encoding='utf-8') as fh:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
-        rid = obj.get('rule_id') or obj.get('id')
+        rid = obj.get('rule_id') or obj.get('id') or obj.get('ruleId')
         if not rid:
             continue
         rng = obj.get('range') or {}

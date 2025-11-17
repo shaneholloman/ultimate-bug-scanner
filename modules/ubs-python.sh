@@ -88,17 +88,14 @@ SUMMARY_JSON=""
 TIMEOUT_CMD=""                        # resolved later
 
 # Async error coverage metadata
-ASYNC_ERROR_RULE_IDS=(py.async.await-no-try py.async.task-no-await)
+ASYNC_ERROR_RULE_IDS=(py.async.task-no-await)
 declare -A ASYNC_ERROR_SUMMARY=(
-  [py.async.await-no-try]='await outside try/except'
   [py.async.task-no-await]='asyncio.create_task result ignored'
 )
 declare -A ASYNC_ERROR_REMEDIATION=(
-  [py.async.await-no-try]='Wrap await-heavy sections in try/except and handle exceptions explicitly'
   [py.async.task-no-await]='Await or cancel tasks created with asyncio.create_task'
 )
 declare -A ASYNC_ERROR_SEVERITY=(
-  [py.async.await-no-try]='warning'
   [py.async.task-no-await]='warning'
 )
 
@@ -373,15 +370,6 @@ run_async_error_checks() {
     print_finding "info" 0 "temp dir creation failed" "Unable to stage ast-grep rules"
     return
   fi
-  cat >"$rule_dir/py.async.await-no-try.yml" <<'YAML'
-id: py.async.await-no-try
-language: python
-rule:
-  pattern: await $EXPR
-  not:
-    inside:
-      kind: try_statement
-YAML
   cat >"$rule_dir/py.async.task-no-await.yml" <<'YAML'
 id: py.async.task-no-await
 language: python
@@ -436,7 +424,7 @@ with open(path, 'r', encoding='utf-8') as fh:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
-        rid = obj.get('rule_id') or obj.get('id')
+        rid = obj.get('rule_id') or obj.get('id') or obj.get('ruleId')
         if not rid:
             continue
         rng = obj.get('range') or {}
