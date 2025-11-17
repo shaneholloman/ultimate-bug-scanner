@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-# ULTIMATE C++ BUG SCANNER v6.2 - Industrial-Grade Code Quality Analysis
+# ULTIMATE C++ BUG SCANNER v7.0 - Industrial-Grade Code Quality Analysis
 # ═══════════════════════════════════════════════════════════════════════════
 # Comprehensive static analysis for modern C++ (C++20+) using ast-grep
 # + smart regex/ripgrep heuristics and CMake build hygiene checks.
 # Detects: RAII violations, lifetime bugs, exception pitfalls, concurrency
 # hazards, UB-prone code, preprocessor traps, modernization gaps, and more.
-# v6.2 adds: robust ast-grep CLI detection, safer pipelines, --only & --counts,
-# --paths-from, --respect-gitignore/--hidden/--max-filesize, mac/BSD xargs fix,
-# richer rulepack (delete this, empty catch, throw string, vector<bool>, etc.),
-# improved thresholds, better date handling, and portability polish.
+# v7.0 adds: single-pass ast-grep with cached JSON, path-list aware scanning,
+# stronger regexes, mac/BSD portability, fixed min/max regex, ruleset expansion,
+# detail wrappers, category list command, and correctness/robustness fixes.
 # ═══════════════════════════════════════════════════════════════════════════
 
 set -Eeuo pipefail
@@ -63,6 +62,7 @@ RESPECT_GITIGNORE=1
 SCAN_HIDDEN=0
 MAX_FILESIZE=""
 PATHS_FILE=""
+LIST_CATS=0
 
 # Async error coverage metadata
 ASYNC_ERROR_RULE_IDS=(cpp.async.std-async-no-try cpp.async.future-no-get)
@@ -86,7 +86,8 @@ Usage: $(basename "$0") [options] [PROJECT_DIR] [OUTPUT_FILE]
 Options:
   -v, --verbose            More code samples per finding (DETAIL=10)
   -q, --quiet              Reduce non-essential output
-  --format=FMT             Output format: text|json|sarif (default: text)
+  --format=FMT             Output format: text|json|sarif|counts (default: text)
+  --list-categories        Print numeric category map and exit
   --counts                 Output only per-category counts (machine-friendly)
   --ci                     CI mode (no clear, stable timestamps)
   --no-color               Force disable ANSI color
@@ -115,6 +116,7 @@ while [[ $# -gt 0 ]]; do
     -v|--verbose) VERBOSE=1; DETAIL_LIMIT=10; shift;;
     -q|--quiet)   VERBOSE=0; DETAIL_LIMIT=1; QUIET=1; shift;;
     --format=*)   FORMAT="${1#*=}"; shift;;
+    --list-categories) LIST_CATS=1; shift;;
     --counts)     FORMAT="counts"; shift;;
     --ci)         CI_MODE=1; shift;;
     --no-color)   NO_COLOR_FLAG=1; shift;;
@@ -148,6 +150,30 @@ done
 if [[ -n "${CI:-}" ]]; then CI_MODE=1; fi
 if [[ "$NO_COLOR_FLAG" -eq 1 ]]; then USE_COLOR=0; fi
 
+# Early list-categories helper
+if [[ "${LIST_CATS:-0}" -eq 1 ]]; then
+  cat <<CATS
+1  Memory & RAII
+2  Exceptions & Error Handling
+3  Concurrency & Atomics
+4  Modernization (C++20+)
+5  Pointer & Lifetime Hazards
+6  Numeric & Arithmetic Pitfalls
+7  Undefined Behavior Risk Zone
+8  Header & Include Hygiene
+9  STL & Algorithms
+10 String & I/O Safety
+11 Macros & Preprocessor Traps
+12 CMake & Build Hygiene
+13 Code Quality Markers
+14 Performance & Allocation Pressure
+15 Test/Debug Leftovers
+16 Resource Lifecycle Correlation
+AST AST-Grep Rule Pack Findings
+CATS
+  exit 0
+fi
+
 # Redirect output early to capture everything
 if [[ -n "${OUTPUT_FILE}" ]]; then exec > >(tee "${OUTPUT_FILE}") 2>&1; fi
 
@@ -171,6 +197,7 @@ HAS_AST_GREP=0
 AST_GREP_CMD=()      # array-safe
 AST_RULE_DIR=""      # created later if ast-grep exists
 ASTG_VERSION=""
+AST_JSON_FILE=""
 
 # Resource lifecycle correlation spec (acquire vs release pairs)
 RESOURCE_LIFECYCLE_IDS=(thread_join malloc_heap fopen_handle)
@@ -237,6 +264,17 @@ fi
 # Helper: robust numeric end-of-pipeline counter
 count_lines() { awk 'END{print (NR+0)}'; }
 
+# Targets for all searches (dirs or explicit files)
+TARGETS=( "${SCAN_PATHS[@]}" )
+
+# ─── Unified search wrappers (path-list aware) ─────────────────────────────
+run_search_raw() { "${GREP_RN[@]}" -e "$1" "${TARGETS[@]}" 2>/dev/null || true; }
+run_search_raw_i() { "${GREP_RNI[@]}" -e "$1" "${TARGETS[@]}" 2>/dev/null || true; }
+search_count() { run_search_raw "$1" | count_lines; }
+search_count_i() { run_search_raw_i "$1" | count_lines; }
+search_files_for() { run_search_raw "$1" | cut -d: -f1 | sort -u || true; }
+search_show() { local p=$1; local n=${2:-$DETAIL_LIMIT}; run_search_raw "$p" | head -n "$n"; }
+
 # ────────────────────────────────────────────────────────────────────────────
 # Helper Functions
 # ────────────────────────────────────────────────────────────────────────────
@@ -299,10 +337,11 @@ print_code_sample() {
 
 show_detailed_finding() {
   local pattern=$1; local limit=${2:-$DETAIL_LIMIT}; local printed=0
-  while IFS=: read -r file line code; do
+  search_show "$pattern" "$limit" | while IFS=: read -r file line code; do
+    [[ -z "$file" ]] && continue
     print_code_sample "$file" "$line" "$code"; printed=$((printed+1))
     [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
-  done < <("${GREP_RN[@]}" -e "$pattern" "$PROJECT_DIR" 2>/dev/null | head -n "$limit" || true) || true
+  done
 }
 
 run_resource_lifecycle_checks() {
@@ -313,7 +352,7 @@ run_resource_lifecycle_checks() {
     local release_regex="${RESOURCE_LIFECYCLE_RELEASE[$rid]:-}"
     [[ -z "$acquire_regex" || -z "$release_regex" ]] && continue
     local file_list
-    file_list=$("${GREP_RN[@]}" -e "$acquire_regex" "$PROJECT_DIR" 2>/dev/null | cut -d: -f1 | sort -u || true)
+    file_list=$(search_files_for "$acquire_regex")
     [[ -n "$file_list" ]] || continue
     while IFS= read -r file; do
       [[ -z "$file" ]] && continue
@@ -348,7 +387,7 @@ run_resource_lifecycle_checks() {
 run_async_error_checks() {
   print_subheader "Async error path coverage"
   local files has_issues=0
-  files=$("${GREP_RN[@]}" -e "std::async[[:space:]]*\(" "$PROJECT_DIR" 2>/dev/null | cut -d: -f1 | sort -u || true)
+  files=$(search_files_for "std::async[[:space:]]*\\(")
   if [[ -z "$files" ]]; then
     print_finding "good" "No std::async usage detected"
     return
@@ -357,7 +396,7 @@ run_async_error_checks() {
     [[ -z "$file" ]] && continue
     local future_count get_count
     future_count=$("${GREP_RN[@]}" -e "std::future" "$file" 2>/dev/null | count_lines || true)
-    get_count=$("${GREP_RN[@]}" -e "\.get\s*\(" "$file" 2>/dev/null | count_lines || true)
+    get_count=$("${GREP_RN[@]}" -e "\\.get[[:space:]]*\\(" "$file" 2>/dev/null | count_lines || true)
     if (( future_count > 0 && get_count == 0 )); then
       has_issues=1
       local rel="${file#"$PROJECT_DIR"/}"
@@ -443,6 +482,15 @@ severity: warning
 message: "Raw new detected; prefer std::make_unique/make_shared (RAII)."
 YAML
 
+  cat >"$AST_RULE_DIR/cpp-raw-new-array.yml" <<'YAML'
+id: cpp.raw-new-array
+language: cpp
+rule:
+  pattern: new $T[$N]
+severity: warning
+message: "Raw new[] detected; prefer std::vector or std::unique_ptr<T[]>."
+YAML
+
   cat >"$AST_RULE_DIR/cpp-raw-delete.yml" <<'YAML'
 id: cpp.raw-delete
 language: cpp
@@ -505,13 +553,16 @@ severity: info
 message: "Throwing string literal; prefer exceptions derived from std::exception."
 YAML
 
-  cat >"$AST_RULE_DIR/cpp-empty-catch.yml" <<'YAML'
-id: cpp.empty-catch
+  cat >"$AST_RULE_DIR/cpp-throw-raw-value.yml" <<'YAML'
+id: cpp.throw-raw-value
 language: cpp
 rule:
-  pattern: catch (...) { }
-severity: warning
-message: "Empty catch-all swallows exceptions silently."
+  any:
+    - pattern: throw 0
+    - pattern: throw 1
+    - pattern: throw -1
+severity: info
+message: "Throwing raw value; use typed exceptions."
 YAML
 
   # ───── Concurrency & atomics ─────────────────────────────────────────────
@@ -547,6 +598,15 @@ rule:
     - pattern: std::memory_order_consume
 severity: info
 message: "Weak memory order; ensure correctness with happens-before."
+YAML
+
+  cat >"$AST_RULE_DIR/cpp-c-style-cast.yml" <<'YAML'
+id: cpp.c-style-cast
+language: cpp
+rule:
+  kind: c_style_cast_expression
+severity: warning
+message: "C-style cast; prefer C++-style casts for clarity and safety."
 YAML
 
   # ───── Modernization & best practices ─────────────────────────────────────
@@ -606,6 +666,15 @@ severity: warning
 message: "Moving into const& has no effect; value will not be moved."
 YAML
 
+  cat >"$AST_RULE_DIR/cpp-return-move.yml" <<'YAML'
+id: cpp.return-move
+language: cpp
+rule:
+  pattern: return std::move($X);
+severity: info
+message: "return std::move(x) can inhibit NRVO; prefer 'return x;'"
+YAML
+
   # ───── C APIs & unsafe functions ─────────────────────────────────────────
   cat >"$AST_RULE_DIR/cpp-unsafe-c-apis.yml" <<'YAML'
 id: cpp.unsafe-c-apis
@@ -619,6 +688,19 @@ rule:
     - pattern: scanf($$)
 severity: critical
 message: "Unsafe C APIs; prefer safer alternatives (snprintf, std::string, streams, fmt)."
+YAML
+
+  cat >"$AST_RULE_DIR/cpp-atoi-family.yml" <<'YAML'
+id: cpp.atoi-family
+language: cpp
+rule:
+  any:
+    - pattern: atoi($$)
+    - pattern: atof($$)
+    - pattern: atol($$)
+    - pattern: atoll($$)
+severity: info
+message: "atoi/atof family: prefer std::from_chars or std::stoi with validation."
 YAML
 
   cat >"$AST_RULE_DIR/cpp-rand.yml" <<'YAML'
@@ -729,12 +811,38 @@ rule:
 severity: info
 message: "Use unique_ptr::reset(nullptr) instead of manual delete then null."
 YAML
+
+  cat >"$AST_RULE_DIR/cpp-endl.yml" <<'YAML'
+id: cpp.std-endl
+language: cpp
+rule:
+  pattern: std::endl
+severity: info
+message: "std::endl flushes the stream; prefer '\n' unless flushing is required."
+YAML
 }
 
 run_ast_rules() {
   [[ "$HAS_AST_GREP" -eq 1 && -n "$AST_RULE_DIR" ]] || return 1
   local f="json"; [[ "$FORMAT" == "sarif" ]] && f="sarif"
   astg_scan_rules "$f"
+}
+
+# Single-pass AST scan to JSON and keep it around for category checks
+run_ast_once() {
+  [[ "$HAS_AST_GREP" -eq 1 && -n "$AST_RULE_DIR" ]] || return 1
+  AST_JSON_FILE="$(mktemp -t ubs_ast_XXXXXX.json)"
+  trap '[[ -n "${AST_JSON_FILE:-}" ]] && rm -f "$AST_JSON_FILE" || true' EXIT
+  if astg_scan_rules "json" >"$AST_JSON_FILE"; then return 0; fi
+  rm -f "$AST_JSON_FILE" || true
+  AST_JSON_FILE=""
+  return 1
+}
+
+ast_count() {
+  local id="$1"
+  [[ -n "$AST_JSON_FILE" && -f "$AST_JSON_FILE" ]] || { printf '0\n'; return 0; }
+  grep -o "\"id\"[[:space:]]*:[[:space:]]*\"${id//\//\\/}\"" "$AST_JSON_FILE" | count_lines
 }
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -853,44 +961,39 @@ print_category "Detects: raw new/delete, C-style casts, const_cast, nullptr misu
   "Manual memory and unsafe casts are primary sources of UB and leaks"
 
 print_subheader "Raw new allocations (prefer make_unique/make_shared)"
-count=$(
-  ( [[ "$HAS_AST_GREP" -eq 1 ]] && "${AST_GREP_CMD[@]}" --pattern "new $T($$)" --lang cpp "$PROJECT_DIR" 2>/dev/null || true ) \
-  | count_lines
-)
-count2=$(
-  ( [[ "$HAS_AST_GREP" -eq 1 ]] && "${AST_GREP_CMD[@]}" --pattern "new $T" --lang cpp "$PROJECT_DIR" 2>/dev/null || true ) \
-  | count_lines
-)
-total=$((count + count2))
+count1=$(ast_count "cpp.raw-new")
+count2=$(ast_count "cpp.raw-new-array")
+total=$((count1 + count2))
 if [ "$total" -gt 0 ]; then
-  print_finding "warning" "$total" "Raw new found" "Use std::make_unique / std::make_shared"
-  show_detailed_finding "\bnew[[:space:]]+[A-Za-z_:][A-Za-z0-9_:<>]*" 5
+  print_finding "warning" "$total" "Raw new/new[] found" "Use std::make_unique/std::make_shared or containers"
+  show_detailed_finding "\\bnew[[:space:]]+[A-Za-z_:][A-Za-z0-9_:<>]*" 5
 else
   print_finding "good" "No raw new detected"
 fi
 
 print_subheader "Manual delete (leaks/double free risk)"
-count=$("${GREP_RN[@]}" -e "delete[[:space:]]*(\[?\]?)" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "(^|[^A-Za-z0-9_])delete[[:space:]]*(\\[\\])?")
 if [ "$count" -gt 0 ]; then
   print_finding "critical" "$count" "Manual delete/delete[] present" "Prefer RAII via smart pointers or containers"
-  show_detailed_finding "\bdelete(\[\])?" 5
+  show_detailed_finding "\\bdelete(\\[\\])?" 5
 else
   print_finding "good" "No delete/delete[] detected"
 fi
 
 print_subheader "C-style casts"
-count=$("${GREP_RN[@]}" -e "\([[:space:]]*[A-Za-z_][A-Za-z0-9_:<>]*[[:space:]]*\)[[:space:]]*[A-Za-z_\(]" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
-if [ "$count" -gt 10 ]; then
+count_ast_cstyle=$(ast_count "cpp.c-style-cast")
+count=$((count_ast_cstyle))
+if [ "$count" -gt 0 ]; then
   print_finding "warning" "$count" "C-style casts used" "Use static_cast/dynamic_cast/reinterpret_cast/const_cast"
-  show_detailed_finding "\([[:space:]]*[A-Za-z_][A-Za-z0-9_:<>]*[[:space:]]*\)" 5
+  show_detailed_finding "\\([[:space:]]*[A-Za-z_][A-Za-z0-9_:<>]*[[:space:]]*\\)" 5
 fi
 
 print_subheader "const_cast/reinterpret_cast (dangerous)"
-count=$("${GREP_RN[@]}" -e "const_cast<|reinterpret_cast<" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "const_cast<|reinterpret_cast<")
 if [ "$count" -gt 0 ]; then print_finding "warning" "$count" "Dangerous casts present" "Verify lifetime/aliasing"; fi
 
 print_subheader "NULL used instead of nullptr"
-count=$("${GREP_RN[@]}" -e "\bNULL\b" "$PROJECT_DIR" 2>/dev/null | count_lines)
+count=$(search_count "\\bNULL\\b")
 if [ "$count" -gt 0 ]; then print_finding "info" "$count" "Use nullptr in C++ code"; fi
 
 fi
@@ -904,10 +1007,7 @@ print_category "Detects: throw in destructor, catch by value, deprecated specs, 
   "Exception safety errors cause terminate(), leaks, and slicing"
 
 print_subheader "Throw in destructor"
-count=$(
-  ( [[ "$HAS_AST_GREP" -eq 1 ]] && "${AST_GREP_CMD[@]}" scan -r "$AST_RULE_DIR" "$PROJECT_DIR" -f json 2>/dev/null || true ) \
-  | grep -o '"id"[:][ ]*"cpp.throw-in-destructor"' | count_lines
-)
+count=$(ast_count "cpp.throw-in-destructor")
 if [ "$count" -gt 0 ]; then
   print_finding "critical" "$count" "Throwing in destructor" "May call std::terminate during unwinding"
 else
@@ -915,19 +1015,20 @@ else
 fi
 
 print_subheader "Catch by value (prefer const&)"
-count=$("${GREP_RN[@]}" -e "catch[[:space:]]*\([[:space:]]*[A-Za-z_:][A-Za-z0-9_:<>]*[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -v "&" || true) | count_lines)
+count=$(run_search_raw "catch[[:space:]]*\\([[:space:]]*[A-Za-z_:][A-Za-z0-9_:<>]*[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\\)" | (grep -v "&" || true) | count_lines)
 if [ "$count" -gt 0 ]; then
   print_finding "warning" "$count" "Catching exceptions by value" "Use 'catch(const T& e)'"
-  show_detailed_finding "catch[[:space:]]*\([^)]+\)" 5
+  show_detailed_finding "catch[[:space:]]*\\([^)]+\\)" 5
 fi
 
 print_subheader "Deprecated dynamic exception specification"
-count=$("${GREP_RN[@]}" -e "throw[[:space:]]*\([[:space:]]*[^)]" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "throw[[:space:]]*\\([[:space:]]*[^)]")
 if [ "$count" -gt 0 ]; then print_finding "warning" "$count" "Deprecated 'throw(...)' found" "Use noexcept"; fi
 
 print_subheader "Generic throw types"
-count=$("${GREP_RN[@]}" -e "throw[[:space:]]+['\"]|throw[[:space:]]+0|throw[[:space:]]+;?" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count_ast_raw=$(ast_count "cpp.throw-raw-value")
+count_ast_str=$(ast_count "cpp.throw-string")
+count=$((count_ast_raw + count_ast_str))
 if [ "$count" -gt 0 ]; then print_finding "info" "$count" "Throwing raw values/strings"; fi
 fi
 
@@ -940,21 +1041,20 @@ print_category "Detects: manual lock/unlock, async without policy, weak memory o
   "Concurrency bugs are catastrophic under load and hard to reproduce"
 
 print_subheader "Manual mutex lock/unlock (prefer RAII)"
-lock_count=$("${GREP_RN[@]}" -e "\.lock\(|\.unlock\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+lock_count=$(search_count "\\.lock\\(|\\.unlock\\(")
 if [ "$lock_count" -gt 0 ]; then
   print_finding "warning" "$lock_count" "Manual lock/unlock usage" "Use std::lock_guard/std::unique_lock"
-  show_detailed_finding "\.lock\(|\.unlock\(" 5
+  show_detailed_finding "\\.lock\\(|\\.unlock\\(" 5
 else
   print_finding "good" "No manual lock/unlock"
 fi
 
 print_subheader "std::async without explicit launch policy"
-count=$("${GREP_RN[@]}" -e "std::async[[:space:]]*\(" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -v "std::launch::" || true) | count_lines)
+count=$(run_search_raw "std::async[[:space:]]*\\(" | (grep -v "std::launch::" || true) | count_lines)
 if [ "$count" -gt 0 ]; then print_finding "info" "$count" "Async without policy (behavior may vary)"; fi
 
 print_subheader "Weak memory-order usage"
-count=$("${GREP_RN[@]}" -e "memory_order_relaxed|memory_order_consume" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "memory_order_relaxed|memory_order_consume")
 if [ "$count" -gt 0 ]; then print_finding "info" "$count" "Weak memory order in atomics - verify correctness"; fi
 
 run_async_error_checks
@@ -969,22 +1069,22 @@ print_category "Detects: using-namespace in headers, removed types, bind, nullpt
   "Keeps codebase aligned with modern idioms & readability"
 
 print_subheader "'using namespace std;' especially in headers"
-count=$("${GREP_RN[@]}" -e "using[[:space:]]+namespace[[:space:]]+std" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "using[[:space:]]+namespace[[:space:]]+std")
 if [ "$count" -gt 0 ]; then
   print_finding "warning" "$count" "using namespace std found" "Avoid polluting global namespace"
   show_detailed_finding "using[[:space:]]+namespace[[:space:]]+std" 5
 fi
 
 print_subheader "Removed/legacy types: std::auto_ptr"
-count=$("${GREP_RN[@]}" -e "std::auto_ptr<" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "std::auto_ptr<")
 if [ "$count" -gt 0 ]; then print_finding "critical" "$count" "std::auto_ptr used (removed)"; fi
 
 print_subheader "std::bind (prefer lambdas)"
-count=$("${GREP_RN[@]}" -e "std::bind[[:space:]]*\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "std::bind[[:space:]]*\\(")
 if [ "$count" -gt 0 ]; then print_finding "info" "$count" "std::bind present - lambdas are clearer"; fi
 
 print_subheader "Modules/global module fragment presence"
-count=$("${GREP_RN[@]}" -e "^[[:space:]]*module;|^[[:space:]]*export[[:space:]]+module" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "^[[:space:]]*module;|^[[:space:]]*export[[:space:]]+module")
 if [ "$count" -gt 0 ]; then print_finding "info" "$count" "C++20 Modules in use - verify partition & BMI strategy"; fi
 fi
 
@@ -997,16 +1097,15 @@ print_category "Detects: string_view from temporary, return local ref, move-of-c
   "Lifetime bugs compile fine and explode at runtime"
 
 print_subheader "std::string_view from temporary"
-count=$("${GREP_RN[@]}" -e "std::string_view[[:space:]]*\(" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -v "&" || true) | count_lines)
+count=$(run_search_raw "std::string_view[[:space:]]*\\(" | (grep -v "&" || true) | count_lines)
 if [ "$count" -gt 0 ]; then print_finding "warning" "$count" "Potential dangling string_view (heuristic)"; fi
 
 print_subheader "Returning reference/value risks (heuristic)"
-count=$("${GREP_RN[@]}" -e "return[[:space:]]*&[[:space:]]*[A-Za-z_]" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "return[[:space:]]*&[[:space:]]*[A-Za-z_]")
 if [ "$count" -gt 0 ]; then print_finding "warning" "$count" "Return by reference - verify lifetime"; fi
 
 print_subheader "std::move on const"
-count=$("${GREP_RN[@]}" -e "std::move[[:space:]]*\([^)]*\bconst\b" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "std::move[[:space:]]*\\([^)]*\\bconst\\b")
 if [ "$count" -gt 0 ]; then print_finding "warning" "$count" "std::move(const T) is a copy, not a move"; fi
 fi
 
@@ -1019,19 +1118,18 @@ print_category "Detects: division by variable, integer overflow-prone code, fp e
   "Silent overflows/fp comparisons trigger logic bugs and UB"
 
 print_subheader "Division by variable (check non-zero)"
-count=$("${GREP_RN[@]}" -e "/[[:space:]]*[A-Za-z_][A-Za-z0-9_]*" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -Ev "/[[:space:]]*(2|10|100|1000)\b|//|/\*" || true) | count_lines)
+count=$(run_search_raw "/[[:space:]]*[A-Za-z_][A-Za-z0-9_]*" | (grep -Ev "/[[:space:]]*(2|10|100|1000)\\b|//|/\\*" || true) | count_lines)
 if [ "$count" -gt 15 ]; then
   print_finding "warning" "$count" "Division by variable - add guards"
   show_detailed_finding "/[[:space:]]*[A-Za-z_][A-Za-z0-9_]*" 5
 fi
 
 print_subheader "Floating-point equality checks"
-count=$("${GREP_RN[@]}" -e "==[[:space:]]*[0-9]+\.[0-9]+" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "==[[:space:]]*[0-9]+\\.[0-9]+")
 if [ "$count" -gt 3 ]; then print_finding "info" "$count" "Floating-point equality - prefer epsilon comparison"; fi
 
 print_subheader "Modulo by variable"
-count=$("${GREP_RN[@]}" -e "%[[:space:]]*[A-Za-z_][A-Za-z0-9_]*" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "%[[:space:]]*[A-Za-z_][A-Za-z0-9_]*")
 if [ "$count" -gt 10 ]; then print_finding "info" "$count" "Modulo by variable - ensure non-zero"; fi
 fi
 
@@ -1044,20 +1142,20 @@ print_category "Detects: dangerous casts, unsafe C APIs, dangling, delete mismat
   "UB can pass tests and still crash in production"
 
 print_subheader "Dangerous functions (strcpy/gets/scanf/sprintf)"
-count=$("${GREP_RN[@]}" -e "\\b(gets|strcpy|strcat|sprintf|scanf)\\s*\\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "\\b(gets|strcpy|strcat|sprintf|scanf)\\s*\\(")
 if [ "$count" -gt 0 ]; then
   print_finding "critical" "$count" "Unsafe C APIs present" "Use safer std/fmt equivalents"
-  show_detailed_finding "\b(gets|strcpy|strcat|sprintf|scanf)\s*\(" 5
+  show_detailed_finding "\\b(gets|strcpy|strcat|sprintf|scanf)\\s*\\(" 5
 else
   print_finding "good" "No unsafe C APIs found"
 fi
 
 print_subheader "reinterpret_cast/const_cast occurrences"
-count=$("${GREP_RN[@]}" -e "reinterpret_cast<|const_cast<" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "reinterpret_cast<|const_cast<")
 if [ "$count" -gt 5 ]; then print_finding "warning" "$count" "Many low-level casts - scrutinize for UB"; fi
 
 print_subheader "delete vs delete[] mismatch (heuristic)"
-count=$("${GREP_RN[@]}" -e "delete\s*\[?\]?\s*[A-Za-z_][A-Za-z0-9_]*" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "(^|[^A-Za-z0-9_])delete[[:space:]]*(\\[\\])?[[:space:]]*[A-Za-z_][A-Za-z0-9_]*")
 if [ "$count" -gt 2 ]; then print_finding "info" "$count" "Verify delete/delete[] matches allocation form"; fi
 fi
 
@@ -1071,11 +1169,11 @@ print_category "Detects: using-namespace in headers, C headers, excessive includ
 
 print_subheader "Header guards or #pragma once missing (heuristic)"
 {
-  mapfile -t _hdrs < <( set +o pipefail; find "$PROJECT_DIR" "${EX_PRUNE[@]}" -o \( -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.hh" -o -name "*.hxx" \) -print \) 2>/dev/null || true )
+  mapfile -t _hdrs < <( set +o pipefail; find "${SCAN_PATHS[@]}" "${EX_PRUNE[@]}" -o \( -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.hh" -o -name "*.hxx" \) -print \) 2>/dev/null || true )
   if ((${#_hdrs[@]}==0)); then count=0; else
     count=$(
       for f in "${_hdrs[@]}"; do
-        head -n 5 "$f" | grep -Eq "#pragma once|#ifndef|#if[[:space:]]+!defined" || echo "$f"
+        head -n 50 "$f" | grep -Eq "#pragma once|#ifndef|#if[[:space:]]+!defined" || echo "$f"
       done | count_lines
     )
   fi
@@ -1085,12 +1183,12 @@ if [ "$count" -gt 0 ]; then
 fi
 
 print_subheader "C headers included in C++"
-count=$("${GREP_RN[@]}" -e "#include[[:space:]]*<stdio.h>|<stdlib.h>|<string.h>|<math.h>" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "#include[[:space:]]*<(stdio|stdlib|string|math)\\.h>")
 if [ "$count" -gt 0 ]; then print_finding "info" "$count" "Prefer <cstdio>/<cstdlib>/<cstring>/<cmath>"; fi
 
 print_subheader "using namespace std in headers"
 {
-  mapfile -t _hdrs2 < <( set +o pipefail; find "$PROJECT_DIR" "${EX_PRUNE[@]}" -o \( -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.hh" -o -name "*.hxx" \) -print \) 2>/dev/null || true )
+  mapfile -t _hdrs2 < <( set +o pipefail; find "${SCAN_PATHS[@]}" "${EX_PRUNE[@]}" -o \( -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.hh" -o -name "*.hxx" \) -print \) 2>/dev/null || true )
   if ((${#_hdrs2[@]}==0)); then count=0; else
     count=$(
       "${GREP_RN[@]}" -e "using[[:space:]]+namespace[[:space:]]+std" "${_hdrs2[@]}" 2>/dev/null | count_lines
@@ -1109,11 +1207,11 @@ print_category "Detects: erase invalidation, std::move misuse, std::bind, raw lo
   "Make idiomatic use of algorithms to reduce bugs"
 
 print_subheader "erase while iterating (invalidates iterators)"
-count=$("${GREP_RN[@]}" -e "\.erase\([[:space:]]*[A-Za-z_]|\.erase\([[:space:]]*begin|\.erase\([[:space:]]*end" "$PROJECT_DIR" 2>/dev/null | count_lines)
+count=$(search_count "\\.erase\\([[:space:]]*[A-Za-z_]|\\.erase\\([[:space:]]*begin|\\.erase\\([[:space:]]*end")
 if [ "$count" -gt 0 ]; then print_finding "info" "$count" "Verify loop structure when erasing from containers"; fi
 
 print_subheader "Manual loops where algorithm fits (heuristic)"
-count=$("${GREP_RN[@]}" -e "for[[:space:]]*\([^)]+;[^^:]*;[^\)]+\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$(search_count "for[[:space:]]*\\([^)]+;[^)^:]*;[^\\)]+\\)")
 if [ "$count" -gt 20 ]; then print_finding "info" "$count" "Consider ranges/algorithms instead of index loops"; fi
 fi
 
@@ -1126,11 +1224,15 @@ print_category "Detects: printf-family, dangerous scanf formats, fmt migration" 
   "Type-safety and format correctness prevent latent crashes"
 
 print_subheader "printf/scanf/sprintf family usage"
-count=$("${GREP_RN[@]}" -e "\b(printf|fprintf|sprintf|snprintf|scanf|sscanf)\s*\(" "$PROJECT_DIR" 2>/dev/null | count_lines)
+count=$(search_count "\\b(printf|fprintf|sprintf|snprintf|scanf|sscanf)\\s*\\(")
 if [ "$count" -gt 0 ]; then
   print_finding "info" "$count" "C-format APIs in C++" "Prefer std::format/fmt for type-safe formatting"
-  show_detailed_finding "\b(printf|fprintf|sprintf|snprintf|scanf|sscanf)\s*\(" 5
+  show_detailed_finding "\\b(printf|fprintf|sprintf|snprintf|scanf|sscanf)\\s*\\(" 5
 fi
+
+print_subheader "std::endl usage"
+endl_ast=$(ast_count "cpp.std-endl")
+if [ "$endl_ast" -gt 0 ]; then print_finding "info" "$endl_ast" "std::endl flushes the stream; prefer '\\n' unless flushing"; fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1142,11 +1244,11 @@ print_category "Detects: min/max macros, debug leftovers, macro side effects" \
   "Macros can silently rewrite code and cause ODR/symbol issues"
 
 print_subheader "min/max macro definitions"
-count=$("${GREP_RN[@]}" -e "#[[:space:]]*define[[:space:]]+min\(|#[[:space:]]*define[[:space:]]]+max\(" "$PROJECT_DIR" 2>/dev/null | count_lines)
+count=$(search_count "#[[:space:]]*define[[:space:]]+min\\(|#[[:space:]]*define[[:space:]]+max\\(")
 if [ "$count" -gt 0 ]; then print_finding "warning" "$count" "min/max macros detected - conflict with std::min/std::max"; fi
 
 print_subheader "DEBUG/TRACE macros enabled (heuristic)"
-count=$("${GREP_RN[@]}" -e "#[[:space:]]*define[[:space:]]+(DEBUG|TRACE|VERBOSE)" "$PROJECT_DIR" 2>/dev/null | count_lines)
+count=$(search_count "#[[:space:]]*define[[:space:]]+(DEBUG|TRACE|VERBOSE)")
 if [ "$count" -gt 0 ]; then print_finding "info" "$count" "Debug macros enabled"; fi
 fi
 
@@ -1159,7 +1261,7 @@ print_category "Detects: non-C++20 standard settings, missing warnings, no sanit
   "Build settings are part of correctness and performance"
 
 print_subheader "CMAKE_CXX_STANDARD and target_compile_features"
-cxxstd=$(rg --no-config --no-messages -n -e "CMAKE_CXX_STANDARD|target_compile_features" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+cxxstd=$(search_count "CMAKE_CXX_STANDARD|target_compile_features")
 if [ "$cxxstd" -eq 0 ]; then
   print_finding "warning" 1 "CMake lacks explicit C++ standard settings" "Set CMAKE_CXX_STANDARD 20 and/or target_compile_features(... cxx_std_20)"
 else
@@ -1167,20 +1269,20 @@ else
 fi
 
 print_subheader "Warnings enabled (-Wall -Wextra -Wpedantic)"
-warns=$("${GREP_RN[@]}" -e "(-Wall|-Wextra|-Wpedantic)" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+warns=$(search_count "(-Wall|-Wextra|-Wpedantic)")
 if [ "$warns" -eq 0 ]; then print_finding "info" 1 "No common warnings in CMake found"; else print_finding "good" "Common warnings appear enabled"; fi
 
 print_subheader "Sanitizers configured (ASan/UBSan)"
-san=$("${GREP_RN[@]}" -e "fsanitize=address|fsanitize=undefined" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+san=$(search_count "fsanitize=(address|undefined)")
 if [ "$san" -eq 0 ]; then print_finding "info" 1 "No sanitizers detected in CMake"; else print_finding "good" "Sanitizers appear configured"; fi
 
 print_subheader "Exceptions/RTTI disabled?"
-flags=$("${GREP_RN[@]}" -e "fno-exceptions|fno-rtti" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+flags=$(search_count "fno-exceptions|fno-rtti")
 if [ "$flags" -gt 0 ]; then print_finding "info" "$flags" "fno-exceptions/RTTI used - verify library requirements"; fi
 
 print_subheader "Position Independent Code and LTO (optional)"
-pic=$("${GREP_RN[@]}" -e "POSITION_INDEPENDENT_CODE|-fPIC" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
-lto=$("${GREP_RN[@]}" -e "INTERPROCEDURAL_OPTIMIZATION|flto" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+pic=$(search_count "POSITION_INDEPENDENT_CODE|-fPIC")
+lto=$(search_count "INTERPROCEDURAL_OPTIMIZATION|flto")
 if [ "$pic" -eq 0 ]; then print_finding "info" 1 "PIC not detected (fine for static, check for shared libs)"; fi
 if [ "$lto" -eq 0 ]; then print_finding "info" 1 "LTO not detected (optional)"; fi
 fi
@@ -1198,6 +1300,11 @@ fixme_count=$("${GREP_RNI[@]}" "FIXME" "$PROJECT_DIR" 2>/dev/null | count_lines 
 hack_count=$("${GREP_RNI[@]}" "HACK" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
 xxx_count=$("${GREP_RNI[@]}" "XXX" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
 note_count=$("${GREP_RNI[@]}" "NOTE" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+todo_count=$(printf '%s\n' "$todo_count" | awk 'END{print $0+0}')
+fixme_count=$(printf '%s\n' "$fixme_count" | awk 'END{print $0+0}')
+hack_count=$(printf '%s\n' "$hack_count" | awk 'END{print $0+0}')
+xxx_count=$(printf '%s\n' "$xxx_count" | awk 'END{print $0+0}')
+note_count=$(printf '%s\n' "$note_count" | awk 'END{print $0+0}')
 
 total_markers=$((todo_count + fixme_count + hack_count + xxx_count))
 if [ "$total_markers" -gt 20 ]; then
@@ -1228,13 +1335,14 @@ print_category "Detects: tight-loop string concatenation, many small allocations
   "Performance bugs degrade latency and throughput"
 
 print_subheader "String concatenation in tight loops (+=)"
-count=$("${GREP_RN[@]}" -e "for|while" "$PROJECT_DIR" 2>/dev/null | (grep -A3 "\+=" || true) | (grep -cw "\+=" || true))
+count=$("${GREP_RN[@]}" -e "for|while" "${TARGETS[@]}" 2>/dev/null | (grep -A3 "\\+=" || true) | (grep -cw "\\+=" || true))
 count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
 if [ "$count" -gt 8 ]; then print_finding "info" "$count" "String += in loops - consider reserve/ostringstream/fmt::memory_buffer"; fi
 
 print_subheader "I/O in loops (heuristic)"
-count=$("${GREP_RN[@]}" -e "for|while" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -A5 "std::cout|std::cerr|printf|fprintf|std::printf" || true) | (grep -c -E "cout|cerr|printf" || true))
+count=$("${GREP_RN[@]}" -e "for|while" "${TARGETS[@]}" 2>/dev/null \
+  | (grep -A5 -E "std::cout|std::cerr|printf|fprintf|std::printf" || true) \
+  | (grep -c -E "cout|cerr|printf" || true))
 count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
 if [ "$count" -gt 5 ]; then print_finding "info" "$count" "I/O inside loops - buffer or batch"; fi
 fi
@@ -1248,11 +1356,11 @@ print_category "Detects: assert/abort left enabled, debug prints" \
   "Debug artifacts can affect performance and user experience"
 
 print_subheader "assert/abort present"
-count=$("${GREP_RN[@]}" -e "\bassert\s*\(|\babort\s*\(" "$PROJECT_DIR" 2>/dev/null | count_lines)
+count=$("${GREP_RN[@]}" -e "\\bassert\\s*\\(|\\babort\\s*\\(" "${TARGETS[@]}" 2>/dev/null | count_lines)
 if [ "$count" -gt 50 ]; then print_finding "warning" "$count" "Many asserts/abort calls - ensure controlled by NDEBUG"; fi
 
 print_subheader "Debug prints (std::cout/cerr)"
-cout_count=$("${GREP_RN[@]}" -e "std::cout|std::cerr" "$PROJECT_DIR" 2>/dev/null | count_lines)
+cout_count=$("${GREP_RN[@]}" -e "std::cout|std::cerr" "${TARGETS[@]}" 2>/dev/null | count_lines)
 if [ "$cout_count" -gt 50 ]; then print_finding "info" "$cout_count" "Many std::cout/cerr statements - consider a logging library"; fi
 fi
 
@@ -1272,17 +1380,20 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if [[ "$HAS_AST_GREP" -eq 1 && -n "$AST_RULE_DIR" ]]; then
   print_header "AST-GREP RULE PACK FINDINGS"
+  # Run once to JSON for category lookups and summaries
+  run_ast_once || true
   if [[ "$FORMAT" == "json" || "$FORMAT" == "sarif" ]]; then
-    if run_ast_rules; then :; else
+    if [[ "$FORMAT" == "json" && -n "$AST_JSON_FILE" && -f "$AST_JSON_FILE" ]]; then
+      cat "$AST_JSON_FILE"
+    elif run_ast_rules; then :; else
       say "${YELLOW}${WARN} ast-grep scan subcommand unavailable; rule-pack mode skipped.${RESET}"
     fi
     say "${DIM}${INFO} Above lines are ast-grep matches (id, message, severity, file/pos).${RESET}"
   else
     # Show short textual summary by running JSON and summarizing counts by id.
-    tmp_json="$(mktemp)"
-    if run_ast_rules >"$tmp_json"; then
+    if [[ -n "$AST_JSON_FILE" && -f "$AST_JSON_FILE" ]]; then
       say "${DIM}${INFO} ast-grep produced structured matches. Showing brief tally by rule id:${RESET}"
-      ids=$(grep -o '"id"[:][ ]*"[^"]*"' "$tmp_json" | sed -E 's/.*"id"[ ]*:[ ]*"([^"]*)".*/\1/' || true)
+      ids=$(grep -o '"id"[:][ ]*"[^"]*"' "$AST_JSON_FILE" | sed -E 's/.*"id"[ ]*:[ ]*"([^"]*)".*/\1/' || true)
       if [[ -n "$ids" ]]; then
         printf "%s\n" "$ids" | sort | uniq -c | awk '{printf "  • %-40s %5d\n",$2,$1}'
       else
@@ -1291,7 +1402,6 @@ if [[ "$HAS_AST_GREP" -eq 1 && -n "$AST_RULE_DIR" ]]; then
     else
       say "${YELLOW}${WARN} ast-grep scan subcommand unavailable; rule-pack mode skipped.${RESET}"
     fi
-    rm -f "$tmp_json" || true
   fi
 fi
 
