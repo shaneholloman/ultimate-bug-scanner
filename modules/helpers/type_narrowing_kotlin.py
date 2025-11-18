@@ -7,8 +7,9 @@ import sys
 from pathlib import Path
 
 SKIP_DIRS = {".git", "build", "out", "dist", "target", ".gradle", ".idea", "node_modules"}
-NEGATIVE_GUARD_PATTERN = re.compile(r"if\s*\(\s*([A-Za-z_][\w]*)\s*(?:==|===)\s*null\s*\)", re.MULTILINE)
-POSITIVE_GUARD_PATTERN = re.compile(r"if\s*\(\s*([A-Za-z_][\w]*)\s*!=\s*null\s*\)", re.MULTILINE)
+NEGATIVE_GUARD_PATTERN = re.compile(r"if\s*\(\s*([A-Za-z_][\w]*)\s*(?:==|===)\s*null[^)]*\)", re.MULTILINE)
+POSITIVE_GUARD_PATTERN = re.compile(r"if\s*\(\s*([A-Za-z_][\w]*)\s*!=\s*null[^)]*\)", re.MULTILINE)
+SAFE_CALL_GUARD_PATTERN = re.compile(r"if\s*\(\s*([A-Za-z_][\w]*)\s*\?\.[^)]*\)", re.MULTILINE)
 DOUBLE_BANG_PATTERN = "{name}\\s*!!"
 ASSIGN_PATTERN = re.compile(r"{name}\s*=")
 EXIT_PATTERN = re.compile(r"\b(return|throw|continue|break)\b")
@@ -134,6 +135,7 @@ def analyze_file(path: Path):
     issues = []
     issues.extend(collect_guard_issues(text, NEGATIVE_GUARD_PATTERN, "{name}!! after non-exiting null guard"))
     issues.extend(collect_guard_issues(text, POSITIVE_GUARD_PATTERN, "{name}!! used after '!= null' guard without exit"))
+    issues.extend(collect_guard_issues(text, SAFE_CALL_GUARD_PATTERN, "{name}!! used after ?. guard without exit"))
     issues.extend(collect_smart_cast_issues(text))
     issues.extend(collect_elvis_issues(text))
     deduped = []

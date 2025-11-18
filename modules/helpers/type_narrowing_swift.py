@@ -8,6 +8,11 @@ from pathlib import Path
 
 SKIP_DIRS = {".git", ".hg", ".svn", "build", "DerivedData", ".swiftpm", ".idea", "node_modules"}
 GUARD_PATTERN = re.compile(r"guard\s+let\s+([A-Za-z_][\w]*)\s*=\s*[^\\n]+\s+else\s*\{", re.MULTILINE)
+NEGATIVE_NIL_GUARD = re.compile(r"if\s*\(\s*([A-Za-z_][\w]*)\s*==\s*nil[^)]*\)", re.MULTILINE)
+POSITIVE_NIL_GUARD = re.compile(r"if\s*\(\s*([A-Za-z_][\w]*)\s*!=\s*nil[^)]*\)", re.MULTILINE)
+OPTIONAL_CHAIN_GUARD = re.compile(r"if\s*\(\s*([A-Za-z_][\w]*)\s*\?\.[^)]*\)", re.MULTILINE)
+FORCE_TEMPLATE = r"{name}\s*!"
+ASSIGN_TEMPLATE = r"{name}\s*="
 EXIT_KEYWORDS = ("return", "throw", "break", "continue", "fatalError", "preconditionFailure")
 
 
@@ -54,9 +59,52 @@ def line_col(text: str, pos: int) -> tuple[int, int]:
     return line, col
 
 
+def skip_ws(text: str, idx: int) -> int:
+    while idx < len(text) and text[idx].isspace():
+        idx += 1
+    return idx
+
+
+def extract_guard_region(text: str, match_end: int) -> tuple[str, int]:
+    idx = skip_ws(text, match_end)
+    if idx < len(text) and text[idx] == "{":
+        block_end = find_block_end(text, idx)
+        return text[idx : block_end + 1], block_end + 1
+    newline = text.find("\n", idx)
+    if newline == -1:
+        newline = len(text)
+    return text[idx:newline], newline
+
+
+def collect_guard_issues(text: str, pattern: re.Pattern[str], message: str):
+    issues = []
+    for match in pattern.finditer(text):
+        name = match.group(1)
+        block_text, guard_end = extract_guard_region(text, match.end())
+        if block_has_exit(block_text):
+            continue
+        assign_regex = re.compile(ASSIGN_TEMPLATE.format(name=re.escape(name)))
+        force_regex = re.compile(FORCE_TEMPLATE.format(name=re.escape(name)))
+        search_from = guard_end
+        while True:
+            force_match = force_regex.search(text, search_from)
+            if not force_match:
+                break
+            assign_match = assign_regex.search(text, search_from, force_match.start())
+            if assign_match:
+                break
+            line, col = line_col(text, force_match.start())
+            issues.append((line, col, message.format(name=name)))
+            break
+    return issues
+
+
 def analyze_file(path: Path):
     text = path.read_text(encoding="utf-8", errors="ignore")
     issues = []
+    issues.extend(collect_guard_issues(text, NEGATIVE_NIL_GUARD, "{name}! used after == nil guard without exit"))
+    issues.extend(collect_guard_issues(text, POSITIVE_NIL_GUARD, "{name}! used after '!= nil' guard without exit"))
+    issues.extend(collect_guard_issues(text, OPTIONAL_CHAIN_GUARD, "{name}! forced after ?. guard without exit"))
     for match in GUARD_PATTERN.finditer(text):
         name = match.group(1)
         block_start = match.end()
