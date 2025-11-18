@@ -19,7 +19,7 @@ if ((BASH_VERSINFO[0] < 4)); then
 fi
 SCRIPT_NAME="ubs"
 INSTALL_NAME="ubs"
-REPO_URL="https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/main"
+REPO_URL="https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/master"
 
 # TTY-aware color initialization
 COLOR_ENABLED=1
@@ -49,6 +49,7 @@ SKIP_AST_GREP=0
 SKIP_RIPGREP=0
 SKIP_JQ=0
 SKIP_TYPOS=0
+SKIP_BUN=0
 SKIP_TYPE_NARROWING=0
 TYPE_NARROWING_READY=0
 SKIP_HOOKS=0
@@ -172,6 +173,7 @@ HELP
   print_help_option "--skip-ripgrep" "Skip ripgrep installation"
   print_help_option "--skip-jq" "Skip jq installation"
   print_help_option "--skip-typos" "Skip typos installation"
+  print_help_option "--skip-bun" "Skip bun installation (used for TypeScript)"
   print_help_option "--skip-type-narrowing" "Skip Node/TypeScript readiness probe"
   print_help_option "--skip-doctor" "Skip running 'ubs doctor' after install"
   echo ""
@@ -343,19 +345,19 @@ print_header() {
   cat << 'HEADER'
     ╔══════════════════════════════════════════════════════════════════╗
     ║                                                                  ║
-    ║     ██╗   ██╗██████╗ ███████╗    ██╗███╗   ██╗███████╗████████╗ ║
-    ║     ██║   ██║██╔══██╗██╔════╝    ██║████╗  ██║██╔════╝╚══██╔══╝ ║
-    ║     ██║   ██║██████╔╝███████╗    ██║██╔██╗ ██║███████╗   ██║    ║
-    ║     ██║   ██║██╔══██╗╚════██║    ██║██║╚██╗██║╚════██║   ██║    ║
-    ║     ╚██████╔╝██████╔╝███████║    ██║██║ ╚████║███████║   ██║    ║
-    ║      ╚═════╝ ╚═════╝ ╚══════╝    ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝    ║
+    ║     ██╗   ██╗██████╗ ███████╗    ██╗███╗   ██╗███████╗████████╗  ║
+    ║     ██║   ██║██╔══██╗██╔════╝    ██║████╗  ██║██╔════╝╚══██╔══╝  ║
+    ║     ██║   ██║██████╔╝███████╗    ██║██╔██╗ ██║███████╗   ██║     ║
+    ║     ██║   ██║██╔══██╗╚════██║    ██║██║╚██╗██║╚════██║   ██║     ║
+    ║     ╚██████╔╝██████╔╝███████║    ██║██║ ╚████║███████║   ██║     ║
+    ║      ╚═════╝ ╚═════╝ ╚══════╝    ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝     ║
     ║                                                                  ║
 HEADER
-  echo -e "    ║         ${GREEN}🔬 ULTIMATE BUG SCANNER INSTALLER v${VERSION} 🔬${BLUE}         ║"
+  echo -e "   ║         ${GREEN}🔬 ULTIMATE BUG SCANNER INSTALLER v${VERSION} 🔬${BLUE}             ║"
   cat << 'HEADER'
     ║                                                                  ║
-    ║   Industrial-Grade Static Analysis for Polyglot AI Codebases    ║
-    ║              Catch 1000+ Bug Patterns Before Production         ║
+    ║   Industrial-Grade Static Analysis for Polyglot AI Codebases     ║
+    ║              Catch 1000+ Bug Patterns Before Production          ║
     ║                                                                  ║
     ╚══════════════════════════════════════════════════════════════════╝
 HEADER
@@ -1893,31 +1895,109 @@ check_node() {
 }
 
 check_typescript_pkg() {
-  if ! check_node; then
-    return 1
+  ensure_bun_path
+  if command -v tsserver >/dev/null 2>&1 || command -v tsc >/dev/null 2>&1; then
+    return 0
   fi
-  node -e "require('typescript')" >/dev/null 2>&1
+  if check_node && node -e "require('typescript')" >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
 }
 
 install_typescript() {
   if dry_run_enabled; then
-    log_dry_run "Would install TypeScript globally via npm."
+    log_dry_run "Would install TypeScript globally via bun (preferred) or npm."
     return 0
+  fi
+  ensure_bun_path
+  if check_bun; then
+    log "Installing TypeScript (bun install --global typescript)..."
+    if bun install --global typescript 2>&1 | tee "$(mktemp_in_workdir "ts-install.log.XXXXXX")"; then
+      ensure_bun_path
+      success "TypeScript installed globally via bun"
+      return 0
+    fi
+    warn "TypeScript installation via bun failed"
   fi
   if ! check_node; then
     error "Node.js not detected; install Node.js first."
     return 1
   fi
   if ! command -v npm >/dev/null 2>&1; then
-    error "npm not found; install Node.js/npm to add TypeScript."
+    error "npm not found; install Node.js/npm (or bun) to add TypeScript."
     return 1
   fi
-  log "Installing TypeScript (npm install -g typescript)..."
-  if npm install -g typescript 2>&1 | tee "$(mktemp_in_workdir "ts-install.log.XXXXXX")"; then
-    success "TypeScript installed globally"
+  local npm_prefix="${NPM_INSTALL_PREFIX:-$HOME/.local}"
+  mkdir -p "$npm_prefix/bin" "$npm_prefix/lib" 2>/dev/null || true
+  log "Installing TypeScript (npm install -g typescript --prefix $npm_prefix)..."
+  if NPM_CONFIG_PREFIX="$npm_prefix" npm install -g typescript 2>&1 | tee "$(mktemp_in_workdir "ts-install.log.XXXXXX")"; then
+    ensure_local_bin_path
+    success "TypeScript installed via npm into $npm_prefix"
+    if [[ ":$PATH:" != *":$npm_prefix/bin:"* ]]; then
+      warn "Add $npm_prefix/bin to PATH so tsserver is available in new shells."
+    fi
     return 0
   fi
   error "TypeScript installation via npm failed"
+  return 1
+}
+
+ensure_bun_path() {
+  local bun_dir="${BUN_INSTALL:-$HOME/.bun}/bin"
+  if [ -d "$bun_dir" ] && [[ ":$PATH:" != *":$bun_dir:"* ]]; then
+    PATH="$bun_dir:$PATH"
+    export PATH
+  fi
+}
+
+ensure_local_bin_path() {
+  local local_bin="${LOCAL_BIN_DIR:-$HOME/.local/bin}"
+  if [ -d "$local_bin" ] && [[ ":$PATH:" != *":$local_bin:"* ]]; then
+    PATH="$local_bin:$PATH"
+    export PATH
+  fi
+}
+
+check_bun() {
+  ensure_bun_path
+  command -v bun >/dev/null 2>&1
+}
+
+install_bun() {
+  log "Installing bun (JavaScript runtime + package manager)..."
+  if dry_run_enabled; then
+    log_dry_run "Would install bun via official installer."
+    return 0
+  fi
+  local installer_script log_file fetch_ok=0
+  installer_script="$(mktemp_in_workdir "bun-installer.sh.XXXXXX")"
+  log_file="$(mktemp_in_workdir "bun-install.log.XXXXXX")"
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsSL https://bun.sh/install -o "$installer_script"; then
+      fetch_ok=1
+    fi
+  elif command -v wget >/dev/null 2>&1; then
+    if wget -qO "$installer_script" https://bun.sh/install; then
+      fetch_ok=1
+    fi
+  fi
+  if [ "$fetch_ok" -ne 1 ]; then
+    error "Failed to download bun installer (requires curl or wget)."
+    return 1
+  fi
+  chmod +x "$installer_script"
+  if BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}" bash "$installer_script" 2>&1 | tee "$log_file"; then
+    ensure_bun_path
+    if check_bun; then
+      success "bun installed"
+      if [ -d "${BUN_INSTALL:-$HOME/.bun}/bin" ]; then
+        log "Add ${BUN_INSTALL:-$HOME/.bun}/bin to PATH to use bun in future shells."
+      fi
+      return 0
+    fi
+  fi
+  error "bun installation failed"
   return 1
 }
 
@@ -2719,6 +2799,10 @@ shift
 SKIP_JQ=1
 shift
 ;;
+--skip-bun)
+SKIP_BUN=1
+shift
+;;
 --skip-type-narrowing)
 SKIP_TYPE_NARROWING=1
 shift
@@ -2862,6 +2946,20 @@ fi
 record_tool_status "typos" "$SKIP_TYPOS" check_typos "--skip-typos"
 echo ""
 
+# Check for bun (TypeScript installer)
+if [ "$SKIP_BUN" -eq 1 ]; then
+  log "[skip] bun installation disabled via --skip-bun"
+elif ! check_bun; then
+  warn "bun not found (used to install TypeScript without sudo)"
+  if ask "Install bun now?"; then
+    install_bun || warn "Continuing without bun; TypeScript installs will use npm"
+  fi
+else
+  success "bun is installed"
+fi
+record_tool_status "bun" "$SKIP_BUN" check_bun "--skip-bun"
+echo ""
+
 # Type narrowing readiness (Node + TypeScript)
 type_narrowing_fact=""
 if [ "$SKIP_TYPE_NARROWING" -eq 1 ]; then
@@ -2876,13 +2974,15 @@ else
       success "TypeScript package detected (type narrowing ready)"
       type_narrowing_fact="ready (TypeScript present)"
     else
-      warn "TypeScript package not found – run 'npm install -g typescript' or add it to devDependencies."
-      type_narrowing_fact="TypeScript missing (install via npm for rich mode)"
-      if command -v npm >/dev/null 2>&1 && ask "Install TypeScript globally via npm now?"; then
-        if install_typescript; then
-          type_narrowing_fact="installed TypeScript via installer"
-        else
-          warn "Continuing without TypeScript (type narrowing fallback mode only)"
+      warn "TypeScript package not found – run 'bun install --global typescript' (preferred) or 'npm install -g typescript'."
+      type_narrowing_fact="TypeScript missing (install via bun/npm for rich mode)"
+      if (check_bun || command -v npm >/dev/null 2>&1); then
+        if ask "Install TypeScript now?"; then
+          if install_typescript && check_typescript_pkg; then
+            type_narrowing_fact="installed TypeScript via installer"
+          else
+            warn "Continuing without TypeScript (type narrowing fallback mode only)"
+          fi
         fi
       fi
     fi
@@ -2892,7 +2992,7 @@ if [ -z "$type_narrowing_fact" ]; then
   if check_node && check_typescript_pkg; then
     type_narrowing_fact="ready (TypeScript present)"
   elif check_node; then
-    type_narrowing_fact="TypeScript missing (install via npm for rich mode)"
+    type_narrowing_fact="TypeScript missing (install via bun/npm for rich mode)"
   else
     type_narrowing_fact="Node.js missing (heuristic mode)"
   fi
