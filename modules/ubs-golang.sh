@@ -1082,12 +1082,6 @@ run_ast_rules() {
 # ────────────────────────────────────────────────────────────────────────────
 should_skip() {
   local cat="$1"
-  if [[ -n "$CATEGORY_WHITELIST" ]]; then
-    local keep=1
-    IFS=',' read -r -a allow <<<"$CATEGORY_WHITELIST"
-    for s in "${allow[@]}"; do [[ "$s" == "$cat" ]] && keep=0; done
-    [[ $keep -eq 1 ]] && return 1
-  fi
   if [[ -z "$SKIP_CATEGORIES" ]]; then return 0; fi
   IFS=',' read -r -a arr <<<"$SKIP_CATEGORIES"
   for s in "${arr[@]}"; do [[ "$s" == "$cat" ]] && return 1; done
