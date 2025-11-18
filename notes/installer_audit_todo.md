@@ -87,8 +87,8 @@ _Updated: 2025-11-18 01:30 UTC_
 
 ### 7. Fresh-Eyes Review & Follow-ups
 - [x] Re-read modified installer + module code for obvious bugs/regressions.
-- [ ] File new beads for any follow-up work discovered mid-review.
-- [ ] Summarize findings + scanner results in final handoff.
+- [x] File new beads for any follow-up work discovered mid-review *(none identified during this pass).* 
+- [x] Summarize findings + scanner results in final handoff (documented in 2025-11-18 status reply).
 
 ### 8. Instant Confidence Onboarding (ir4)
 - [x] Capture readiness facts (ripgrep/jq/typos/type narrowing) during installer run and feed into session summary bullet list.
@@ -121,3 +121,17 @@ _Updated: 2025-11-18 01:30 UTC_
 - [x] Document the AST coverage story in README (JS/TS, Python, Go, C++, Rust, Java, Ruby, Swift, Kotlin) so the epic has a single source of truth.
 - [x] Verify every language module now has AST-powered detectors for its flagship categories (type narrowing, resource lifecycle, taint/async errors) with regex only as a fallback.
 - [x] Re-run `test-suite/run_all.sh` + `./ubs --ci .` to prove the AST stack is stable across languages.
+
+### 13. Docs & Polish Follow-ups (new)
+- [x] Expand README + test-suite docs with concrete Go/Python resource lifecycle examples (buggy vs clean snippets + helper output narrations).
+- [x] Ensure CLI and README help text highlight the AST-backed lifecycle coverage + `ubs sessions` workflow where appropriate.
+- [x] Investigate `go-resource-lifecycle` manifest expectations to assert on deterministic helper output (add/restore specific substrings if missing).
+- [x] Housekeeping: verify helpers/installers leave no `__pycache__` or stray temp directories; document guardrails if needed (checked 2025-11-18 via find/installer harness cleanup).
+- [x] After changes, run a fresh-eyes pass on installer + Go/Python modules before scans/tests.
+
+### 14. JDBC Lifecycle Follow-ups (java-resource expansion)
+- [ ] Extend ast-grep coverage to Statements/PreparedStatements (new `java.resource.statement-no-close` rule) + metadata entries.
+- [ ] Update Java fixtures (buggy + clean) to exercise Statement, PreparedStatement, and ResultSet leaks vs. guarded patterns.
+- [ ] Expand manifest `java-resource-lifecycle` expectations to assert on new summary strings.
+- [ ] Refresh README resource-lifecycle bullet to mention Statement/PreparedStatement coverage.
+- [ ] Re-run Java manifest + full `test-suite/run_all.sh` + `./ubs --ci .`; document outcomes.
