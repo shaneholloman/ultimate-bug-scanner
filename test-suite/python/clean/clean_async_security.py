@@ -44,13 +44,6 @@ async def process_users(db, ids):
     return await asyncio.gather(*coros)
 
 
-def run_checked_command(argv: list[str]) -> None:
-    if not all(argv):
-        raise ValueError("empty arguments not allowed")
-    subprocess = __import__("subprocess")
-    subprocess.run(argv, check=True)
-
-
 @contextlib.contextmanager
 def resource_guard(finalizer):
     try:

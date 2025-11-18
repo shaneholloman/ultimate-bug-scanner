@@ -106,6 +106,16 @@ All subsequent examples below assume that `.venv/bin` is on your `PATH` so `pyth
 
 > Tip: `test-suite/run_all.sh` automatically prefers `uv run python …` and falls back to `python3` only if `uv` is unavailable, so CI and local runs stay on CPython 3.13 without extra flags.
 
+### Shareable-report regression
+The manifest focuses on scanner findings, so we added `test-suite/shareable/test_shareable_reports.py` to sanity-check the new `--report-json/--html-report/--comparison` workflow. `test-suite/run_all.sh` already invokes it, but you can run it manually:
+
+```bash
+cd test-suite
+uv run python shareable/test_shareable_reports.py
+```
+
+The script runs UBS twice against the Python buggy fixtures, verifies that the report JSON embeds git metadata and comparison deltas, and ensures the HTML preview renders correctly.
+
 ### Scan Individual Buggy Files
 
 ```bash

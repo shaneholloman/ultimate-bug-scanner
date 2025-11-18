@@ -179,6 +179,8 @@ def main() -> None:
         env = os.environ.copy()
         env.update(default_env)
         env.update({k: str(v) for k, v in (case.get("env", {}) or {}).items()})
+        if (case.get("language") or "").lower() == "python":
+            env.setdefault("ENABLE_UV_TOOLS", "0")
 
         artifacts_dir = artifacts_root / case_id
         ensure_dir(artifacts_dir)
