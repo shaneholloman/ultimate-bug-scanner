@@ -148,7 +148,7 @@ def collect_issues(root: Path) -> list[tuple[str, str, int]]:
         if not text.strip():
             continue
         code_text = strip_comments(text)
-        lines = text.splitlines()
+        # lines = text.splitlines()
         def handle_matches(regex: re.Pattern[str], kind: str) -> None:
             for match in regex.finditer(code_text):
                 name = match.group(1)
@@ -156,9 +156,9 @@ def collect_issues(root: Path) -> list[tuple[str, str, int]]:
                     continue
                 start = match.start()
                 line_no = text.count("\n", 0, start) + 1
-                line_idx = line_no - 1
-                line_text = lines[line_idx] if 0 <= line_idx < len(lines) else ""
-                prefix = line_text.split(name, 1)[0]
+                # line_idx = line_no - 1
+                # line_text = lines[line_idx] if 0 <= line_idx < len(lines) else ""
+                # prefix = line_text.split(name, 1)[0]
                 if inside_try_with(code_text, start):
                     continue
                 if has_close(name, code_text):

@@ -7,7 +7,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Iterable, List
 
 SKIP_DIRS = {"target", ".git", ".hg", ".svn", "node_modules"}
 UNWRAP_PATTERN = "{name}\\s*\\.(?:unwrap|expect)\\s*\\("

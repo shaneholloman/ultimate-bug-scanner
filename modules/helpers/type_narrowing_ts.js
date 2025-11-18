@@ -48,7 +48,7 @@ async function collectFiles(target) {
       return [fullPath];
     }
     return [];
-  }));
+  })).catch(() => []);
   return batches.flat();
 }
 
