@@ -113,6 +113,9 @@ func (a *analyzer) handleAssign(assign *ast.AssignStmt) {
 			a.add("", kind, pos)
 		}
 	default:
+		if len(names) > 1 {
+			names = names[:1]
+		}
 		for _, name := range names {
 			if name == "" || name == "_" {
 				continue
