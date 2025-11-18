@@ -20,6 +20,14 @@ func objcBridgeSafe(nsString: NSString?) {
     NSLog("length = \(ensured.length)")
 }
 
+func objcBridgeCastSafe(value: AnyObject?) {
+    guard let token = value as? NSString else {
+        NSLog("value failed to bridge to NSString")
+        return
+    }
+    NSLog("token length \(token.length)")
+}
+
 func sendEmail(profile: Profile?) {
     guard let email = profile?.email else {
         print("missing email")
@@ -34,4 +42,12 @@ func displayName(raw: String?) {
         return
     }
     print("Hello \(name)")
+}
+
+func optionalChainBridgeSafe(profile: Profile?) {
+    guard let email = profile?.email else {
+        return
+    }
+    let objcString = NSString(string: email)
+    NSLog("bridged length \(objcString.length)")
 }
