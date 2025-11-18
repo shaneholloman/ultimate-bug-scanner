@@ -2,6 +2,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -27,6 +28,9 @@ public class ResourceLifecycle {
         ps.setInt(1, 42);
         ResultSet rs = stmt.executeQuery("SELECT NOW()");
         System.out.println(rs);
-        // missing stmt.close(), ps.close(), rs.close()
+        CallableStatement call = conn.prepareCall("{ call bump_score(?) }");
+        call.setInt(1, 1);
+        call.execute();
+        // missing stmt.close(), ps.close(), call.close(), rs.close()
     }
 }
