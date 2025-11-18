@@ -1207,14 +1207,14 @@
       "id": "swift-type-narrowing-buggy",
       "description": "Swift guard let clauses that log but continue execution, leading to unsafe optional usage.",
       "path": "test-suite/swift/type_narrowing/buggy",
-      "language": "java",
+      "language": "swift",
       "tags": [
         "swift",
         "type-narrowing",
         "buggy"
       ],
       "args": [
-        "--only=java",
+        "--only=swift",
         "--fail-on-warning"
       ],
       "expect": {
@@ -1235,14 +1235,14 @@
       "id": "swift-type-narrowing-clean",
       "description": "Swift guard lets with explicit returns/throws so the analyzer stays quiet on safe code.",
       "path": "test-suite/swift/type_narrowing/clean",
-      "language": "java",
+      "language": "swift",
       "tags": [
         "swift",
         "type-narrowing",
         "clean"
       ],
       "args": [
-        "--only=java"
+        "--only=swift"
       ],
       "expect": {
         "exit_code": "zero",

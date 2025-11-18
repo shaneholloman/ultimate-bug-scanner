@@ -60,6 +60,7 @@ test-suite/
 ├── rust/                       # Rust fixtures + manifest cases (includes type narrowing demo)
 ├── java/                       # Java fixtures + manifest cases
 ├── ruby/                       # Ruby fixtures + manifest cases
+├── swift/                      # Swift type narrowing fixtures + manifest cases
 └── README.md                   # This file
 ```
 
