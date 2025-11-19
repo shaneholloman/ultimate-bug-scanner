@@ -127,6 +127,17 @@ ubs --ci --only=python --category=resource-lifecycle \
 
 `latest.json` now contains the git metadata (repo URL, commit, blob_base) plus a `comparison.delta` block, and `latest.html` renders a lightweight dashboard summarising the deltas. SARIF uploads also pick up the comparison id so repeating runs in CI stay grouped by automation id.
 
+### 🔄 **Auto-Update**
+
+The `ubs` meta-runner automatically checks for updates once every 24 hours. If a new version is available, it self-updates securely before running your scan.
+
+To disable this behavior (e.g., in strict environments):
+```bash
+export UBS_NO_AUTO_UPDATE=1
+# or
+ubs --no-auto-update .
+```
+
 Ultimate Bug Scanner is like having a senior developer review every line of code **in under 5 seconds**; it's the perfect automated companion to your favorite coding agent:
 
 ```bash
@@ -1536,6 +1547,7 @@ Rule Control:
   --skip-type-narrowing    Disable tsserver-based guard analysis (falls back to text heuristics)
   --rules=DIR              Additional ast-grep rules directory
                            Rules are merged with built-in rules
+  --no-auto-update         Disable automatic self-update
 
 Environment Variables:
   JOBS                     Same as --jobs=N
