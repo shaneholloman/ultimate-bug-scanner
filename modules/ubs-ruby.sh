@@ -908,10 +908,10 @@ if [[ "$HAS_AST_GREP" -eq 1 ]]; then
   deep_chain_json=$(analyze_rb_chain_guards "$DETAIL_LIMIT")
   if [[ -n "$deep_chain_json" ]]; then
     parsed_counts=""
-    parsed_counts=$(python3 - <<'PY' <<<"$deep_chain_json"
+    parsed_counts=$(python3 - "$deep_chain_json" <<'PY'
 import json, sys
 try:
-    data = json.load(sys.stdin)
+    data = json.loads(sys.argv[1])
     print(f"{data.get('unguarded', 0)} {data.get('guarded', 0)}")
 except Exception:
     pass

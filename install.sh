@@ -1250,9 +1250,9 @@ write_session_summary() {
       done
     fi
     if [ -n "$log_path" ] && [ -f "$log_path" ]; then
-      printf "\nDoctor output (tail):\n```\n"
+      printf "\nDoctor output (tail):\n\`\`\`\n"
       tail -n 40 "$log_path"
-      printf "```\n"
+      printf "\`\`\`\n"
     fi
     printf "\n---\n\n"
   } >> "$summary" 2>/dev/null || true
