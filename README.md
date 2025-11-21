@@ -18,41 +18,6 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scan
 
 ---
 
-## 🚀 **New in v5.0: Agent-Native Power Tools**
-
-We listened to feedback from AI agents coding in the wild. UBS v5.0 introduces:
-
-### ⚡ **Git-Aware Scanning (The "Quick Mode")**
-Don't scan the whole repo. Scan only what you changed.
-```bash
-ubs --staged    # Scan files staged for commit (Pre-commit hook style)
-ubs --diff      # Scan modified files (Working tree vs HEAD)
-```
-
-### 🔇 **Smart Silence**
-- **Default Ignores:** UBS now automatically ignores `node_modules`, `venv`, `.venv`, `dist`, `build`, `target`, `vendor`, and other artifacts. You no longer need to manually exclude them.
-- **Inline Suppression:** False positive? Shut it up directly in the code.
-  ```python
-  eval("print('safe')") # ubs:ignore
-  ```
-
-### ⚙️ **Strictness Profiles**
-```bash
-ubs --profile=strict   # Fail on warnings, enforce high standards (Library mode)
-ubs --profile=loose    # Skip TODOs, Debug logs, and Code Quality nits (Prototyping mode)
-```
-
-### 🤖 **Machine-Readable Purity**
-When using `--format=json`, UBS now sends all logs/banners to `stderr`. The `stdout` stream is guaranteed to be pure, parseable JSON.
-```bash
-ubs . --format=json | jq .  # Just works.
-```
-
----
-
-## 💥 **The Problem: AI Moves Fast, Bugs Move Faster**
-
-
 Just want it to do everything without confirmations? Live life on the edge with easy-mode to auto-install every dependency, accept all prompts, detect local coding agents, and wire their quality guardrails with zero extra questions:
 
 <div align="center">
@@ -63,8 +28,6 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scan
 ```
 
 </div>
-
----
 
 ## 💥 **The Problem: AI Moves Fast, Bugs Move Faster**
 
@@ -174,7 +137,37 @@ ubs . --skip=11,14
 # Custom file extensions
 ubs . --include-ext=js,ts,vue,svelte
 ```
+---
 
+## 🚀 **New in v5.0: Agent-Native Power Tools**
+
+We listened to feedback from AI agents coding in the wild. UBS v5.0 introduces:
+
+### ⚡ **Git-Aware Scanning (The "Quick Mode")**
+Don't scan the whole repo. Scan only what you changed.
+```bash
+ubs --staged    # Scan files staged for commit (Pre-commit hook style)
+ubs --diff      # Scan modified files (Working tree vs HEAD)
+```
+
+### 🔇 **Smart Silence**
+- **Default Ignores:** UBS now automatically ignores `node_modules`, `venv`, `.venv`, `dist`, `build`, `target`, `vendor`, and other artifacts. You no longer need to manually exclude them.
+- **Inline Suppression:** False positive? Shut it up directly in the code.
+  ```python
+  eval("print('safe')") # ubs:ignore
+  ```
+
+### ⚙️ **Strictness Profiles**
+```bash
+ubs --profile=strict   # Fail on warnings, enforce high standards (Library mode)
+ubs --profile=loose    # Skip TODOs, Debug logs, and Code Quality nits (Prototyping mode)
+```
+
+### 🤖 **Machine-Readable Purity**
+When using `--format=json`, UBS now sends all logs/banners to `stderr`. The `stdout` stream is guaranteed to be pure, parseable JSON.
+```bash
+ubs . --format=json | jq .  # Just works.
+```
 ---
 
 ## 🚀 **Quick Install (30 Seconds)**
