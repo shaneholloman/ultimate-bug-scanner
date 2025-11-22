@@ -718,7 +718,7 @@ YAML
     # Fallback heuristic: look for empty dependency arrays across lines
     local empty_hooks
     if command -v rg >/dev/null 2>&1; then
-      empty_hooks=$(rg -P "use(Effect|Callback)\\s*\\([^)]*\\[\\s*\\]\\)" "$PROJECT_DIR" 2>/dev/null | wc -l | awk '{print $1+0}')
+      empty_hooks=$(rg -P -U "use(Effect|Callback)[\\s\\S]*?\\[\\s*\\]\\)" "$PROJECT_DIR" 2>/dev/null | wc -l | awk '{print $1+0}')
     else
       empty_hooks=$("${GREP_RN[@]}" -e "use(Effect|Callback)[[:space:]]*\\([^)]*\\[\\s*\\]\\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
     fi
