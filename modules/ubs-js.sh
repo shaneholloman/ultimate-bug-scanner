@@ -611,7 +611,6 @@ run_async_error_checks() {
   local warn_before=$WARNING_COUNT
   if ! emit_ast_rule_group ASYNC_ERROR_RULE_IDS ASYNC_ERROR_SEVERITY ASYNC_ERROR_SUMMARY ASYNC_ERROR_REMEDIATION \
     "All async operations appear protected" "Async rule checks"; then
-    # When ast-grep is unavailable and --fail-on-warning is set, use grep-based fallback
     if [[ "$FAIL_ON_WARNING" -eq 0 ]]; then
       print_finding "info" 0 "Async fallback disabled" "Run with --fail-on-warning to surface missing .catch()/try blocks when ast-grep is unavailable"
       return
@@ -630,7 +629,7 @@ run_async_error_checks() {
     fi
   else
     # ast-grep can occasionally under-report in constrained CI runners; double-check with a lightweight grep heuristic
-    if [[ "$FAIL_ON_WARNING" -eq 1 && "$WARNING_COUNT" -eq "$warn_before" && "$PROJECT_DIR" == *"buggy"* ]]; then
+    if [[ "$FAIL_ON_WARNING" -eq 1 && "$WARNING_COUNT" -eq "$warn_before" ]]; then
       local then_count promise_all_count
       then_count=$("${GREP_RN[@]}" -e "\.then\s*\(" "$PROJECT_DIR" 2>/dev/null | \
         (grep -v "\.catch" || true) | (grep -v "\.finally" || true) | count_lines)
@@ -648,7 +647,7 @@ run_async_error_checks() {
 run_hooks_dependency_checks() {
   print_subheader "React hooks dependency analysis"
   if [[ "$HAS_AST_GREP" -ne 1 ]]; then
-    print_finding "info" 0 "React hook dependencies unchecked" "ast-grep unavailable; review useEffect/useCallback dependencies manually"
+    print_finding "info" 0 "ast-grep not available" "Install ast-grep to analyze React hook dependencies"
     return
   fi
   local rule_dir tmp_json
@@ -716,22 +715,7 @@ YAML
   rm -rf "$rule_dir"
   if ! [[ -s "$tmp_json" ]]; then
     rm -f "$tmp_json"
-    if [[ "$PROJECT_DIR" != *"buggy"* ]]; then
-      print_finding "good" "Hooks dependency arrays look accurate"
-      return
-    fi
-    # Fallback heuristic: look for empty dependency arrays across lines
-    local empty_hooks
-    if command -v rg >/dev/null 2>&1; then
-      empty_hooks=$(rg -P -U "use(Effect|Callback)[\\s\\S]*?\\[\\s*\\]\\)" "$PROJECT_DIR" 2>/dev/null | wc -l | awk '{print $1+0}')
-    else
-      empty_hooks=$("${GREP_RN[@]}" -e "use(Effect|Callback)[[:space:]]*\\([^)]*\\[\\s*\\]\\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
-    fi
-    if [ "${empty_hooks:-0}" -gt 0 ]; then
-      print_finding "warning" "$empty_hooks" "React hooks dependency array appears empty" "Add required props/state/refs to dependency arrays"
-    else
-      print_finding "good" "Hooks dependency arrays look accurate"
-    fi
+    print_finding "good" "Hooks dependency arrays look accurate"
     return
   fi
   local printed=0
@@ -1427,14 +1411,8 @@ end_scan_section(){
 
 check_ast_grep() {
   if command -v ast-grep >/dev/null 2>&1; then AST_GREP_CMD=(ast-grep); HAS_AST_GREP=1; return 0; fi
-  # Verify 'sg' is actually ast-grep, not the Unix newgrp command
-  if command -v sg >/dev/null 2>&1 && sg --version 2>&1 | grep -qi "ast-grep"; then
-    AST_GREP_CMD=(sg); HAS_AST_GREP=1; return 0
-  fi
-  # Verify npx can actually run ast-grep before trusting it
-  if command -v npx >/dev/null 2>&1 && npx -y @ast-grep/cli --version >/dev/null 2>&1; then
-    AST_GREP_CMD=(npx -y @ast-grep/cli); HAS_AST_GREP=1; return 0
-  fi
+  if command -v sg       >/dev/null 2>&1; then AST_GREP_CMD=(sg);       HAS_AST_GREP=1; return 0; fi
+  if command -v npx      >/dev/null 2>&1; then AST_GREP_CMD=(npx -y @ast-grep/cli); HAS_AST_GREP=1; return 0; fi
   say "${YELLOW}${WARN} ast-grep not found. Advanced AST checks will be skipped.${RESET}"
   say "${DIM}Tip: npm i -g @ast-grep/cli  or  cargo install ast-grep${RESET}"
   HAS_AST_GREP=0; return 1
@@ -1630,36 +1608,34 @@ rule:
 severity: warning
 message: "Assigning innerHTML; ensure input is sanitized or use textContent"
 YAML
-  local PROMISE_SEV
-  if [[ "$FAIL_ON_WARNING" -eq 1 ]]; then PROMISE_SEV="warning"; else PROMISE_SEV="info"; fi
-  cat >"$AST_RULE_DIR/then-without-catch.yml" <<YAML
+  cat >"$AST_RULE_DIR/then-without-catch.yml" <<'YAML'
 id: js.then-without-catch
 language: javascript
 rule:
-  pattern: \$P.then(\$ARGS)
+  pattern: $P.then($ARGS)
   not:
     has:
-      pattern: .catch(\$CATCH)
-severity: ${PROMISE_SEV}
+      pattern: .catch($CATCH)
+severity: warning
 message: "Promise.then without catch/finally; handle rejections"
 YAML
   # Alias for async group compatibility
-  cat >"$AST_RULE_DIR/async-then-no-catch.yml" <<YAML
+  cat >"$AST_RULE_DIR/async-then-no-catch.yml" <<'YAML'
 id: js.async.then-no-catch
 language: javascript
 rule:
-  pattern: \$P.then(\$ARGS)
+  pattern: $P.then($ARGS)
   not:
     has:
-      pattern: .catch(\$CATCH)
-severity: ${PROMISE_SEV}
+      pattern: .catch($CATCH)
+severity: warning
 message: "Promise.then without .catch/.finally; add rejection handling"
 YAML
-  cat >"$AST_RULE_DIR/async-promiseall-no-try.yml" <<YAML
+  cat >"$AST_RULE_DIR/async-promiseall-no-try.yml" <<'YAML'
 id: js.async.promiseall-no-try
 language: javascript
-rule: { pattern: await Promise.all(\$ARGS), not: { inside: { kind: try_statement } } }
-severity: ${PROMISE_SEV}
+rule: { pattern: await Promise.all($ARGS), not: { inside: { kind: try_statement } } }
+severity: warning
 message: "await Promise.all() without try/catch; wrap to handle aggregate failures"
 YAML
   cat >"$AST_RULE_DIR/eval-call.yml" <<'YAML'
@@ -1798,48 +1774,48 @@ severity: warning
 message: "Throwing string literals loses stack traces; use throw new Error('message')"
 YAML
   # JSON.parse without try/catch
-  cat >"$AST_RULE_DIR/json-parse-without-try.yml" <<YAML
+  cat >"$AST_RULE_DIR/json-parse-without-try.yml" <<'YAML'
 id: js.json-parse-without-try
 language: javascript
 rule:
-  pattern: JSON.parse(\$X)
+  pattern: JSON.parse($X)
   not:
     inside:
       kind: try_statement
-severity: ${PROMISE_SEV}
+severity: warning
 message: "JSON.parse without try/catch; malformed input will throw"
 YAML
   # New: Dangling promises (heuristic)
-  cat >"$AST_RULE_DIR/async-dangling-promise.yml" <<YAML
+  cat >"$AST_RULE_DIR/async-dangling-promise.yml" <<'YAML'
 id: js.async.dangling-promise
 language: javascript
 rule:
   all:
     - any:
-        - pattern: \$CALLEE(\$ARGS)
-        - pattern: new \$CALLEE(\$ARGS)
+        - pattern: $CALLEE($ARGS)
+        - pattern: new $CALLEE($ARGS)
     - not:
         inside:
           any:
-            - pattern: await \$EXPR
-            - pattern: \$EXPR.then(\$ARGS)
-            - pattern: Promise.all(\$ARGS)
-            - pattern: Promise.race(\$ARGS)
-severity: ${PROMISE_SEV}
+            - pattern: await $EXPR
+            - pattern: $EXPR.then($ARGS)
+            - pattern: Promise.all($ARGS)
+            - pattern: Promise.race($ARGS)
+severity: warning
 message: "Possible unhandled/dangling promise; use await/then/catch"
 YAML
   # New: fetch without rejection handling
-  cat >"$AST_RULE_DIR/fetch-no-catch.yml" <<YAML
+  cat >"$AST_RULE_DIR/fetch-no-catch.yml" <<'YAML'
 id: js.fetch.no-catch
 language: javascript
 rule:
-  pattern: fetch(\$ARGS)
+  pattern: fetch($ARGS)
   not:
     inside:
       any:
-        - pattern: try { \$TRY_BODY } catch (\$E) { \$CATCH_BODY }
-        - pattern: .catch(\$CATCH)
-severity: ${PROMISE_SEV}
+        - pattern: try { $TRY_BODY } catch ($E) { $CATCH_BODY }
+        - pattern: .catch($CATCH)
+severity: warning
 message: "fetch() without catch/try; network failures will be unhandled"
 YAML
   # New: insecure cookie usage
