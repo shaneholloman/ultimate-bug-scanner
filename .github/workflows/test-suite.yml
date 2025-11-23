@@ -41,6 +41,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends jq ripgrep
+      - name: Install ast-grep (npm)
+        run: npm install -g @ast-grep/cli >/dev/null
 
       - name: Sync Python dependencies
         run: uv sync --locked --python 3.13
