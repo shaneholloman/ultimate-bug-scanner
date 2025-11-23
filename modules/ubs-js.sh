@@ -615,28 +615,37 @@ run_async_error_checks() {
       print_finding "info" 0 "Async fallback disabled" "Run with --fail-on-warning to surface missing .catch()/try blocks when ast-grep is unavailable"
       return
     fi
-    local then_count promise_all_count
+    local then_count promise_all_count try_await_count
     then_count=$("${GREP_RN[@]}" -e "\.then\s*\(" "$PROJECT_DIR" 2>/dev/null | \
       (grep -v "\.catch" || true) | (grep -v "\.finally" || true) | count_lines)
+    promise_all_count=$("${GREP_RN[@]}" -e "Promise\.all\s*\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+    try_await_count=$(rg --no-config --no-messages -g '*.js' -g '*.ts' -g '*.tsx' -g '*.mjs' -g '*.cjs' -g '*.jsx' \
+      -e 'try[[:space:]]*\\{[^}]*await' "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+
     if [ "$then_count" -gt 0 ]; then
       print_finding "warning" "$then_count" "Promise.then chain missing .catch()" "Chain .catch() (or .finally()) to surface rejections"
+    elif [ "$try_await_count" -gt 0 ]; then
+      print_finding "good" "$try_await_count" "Async awaits guarded by try/catch detected" "Try/catch provides rejection handling"
     else
       print_finding "good" "Promise chains appear to handle rejections"
     fi
-    promise_all_count=$("${GREP_RN[@]}" -e "Promise\.all\s*\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
     if [ "$promise_all_count" -gt 0 ]; then
       print_finding "warning" "$promise_all_count" "Promise.all without visible try/catch" "Wrap Promise.all in try/catch to handle aggregate failures"
     fi
   else
     # ast-grep can occasionally under-report in constrained CI runners; double-check with a lightweight grep heuristic
     if [[ "$FAIL_ON_WARNING" -eq 1 && "$WARNING_COUNT" -eq "$warn_before" ]]; then
-      local then_count promise_all_count
+      local then_count promise_all_count try_await_count
       then_count=$("${GREP_RN[@]}" -e "\.then\s*\(" "$PROJECT_DIR" 2>/dev/null | \
         (grep -v "\.catch" || true) | (grep -v "\.finally" || true) | count_lines)
+      promise_all_count=$("${GREP_RN[@]}" -e "Promise\.all\s*\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+      try_await_count=$(rg --no-config --no-messages -g '*.js' -g '*.ts' -g '*.tsx' -g '*.mjs' -g '*.cjs' -g '*.jsx' \
+        -e 'try[[:space:]]*\\{[^}]*await' "$PROJECT_DIR" 2>/dev/null | count_lines || true)
       if [ "$then_count" -gt 0 ]; then
         print_finding "warning" "$then_count" "Promise.then chain missing .catch()" "Chain .catch() (or .finally()) to surface rejections"
+      elif [ "$try_await_count" -gt 0 ]; then
+        print_finding "good" "$try_await_count" "Async awaits guarded by try/catch detected" "Try/catch provides rejection handling"
       fi
-      promise_all_count=$("${GREP_RN[@]}" -e "Promise\.all\s*\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
       if [ "$promise_all_count" -gt 0 ]; then
         print_finding "warning" "$promise_all_count" "Promise.all without visible try/catch" "Wrap Promise.all in try/catch to handle aggregate failures"
       fi
@@ -2630,9 +2639,8 @@ fi
 
 print_subheader "Switch without default case"
 default_count=$("${GREP_RN[@]}" -e "default:" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
-if [ "$switch_count" -gt "$default_count" ]; then
-  diff=$((switch_count - default_count))
-  print_finding "warning" "$diff" "Switch statements without default case" "Handle unexpected values"
+if [ "$switch_count" -gt 0 ] && [ "$default_count" -eq 0 ]; then
+  print_finding "warning" "$switch_count" "Switch statements without default case" "Handle unexpected values"
 fi
 
 print_subheader "Nested ternaries (readability nightmare)"
