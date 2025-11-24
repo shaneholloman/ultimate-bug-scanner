@@ -26,6 +26,8 @@ MINISIGN_PUBKEY="${UBS_MINISIGN_PUBKEY:-}"  # Set to minisign public key line (u
 
 # Global copy of original args (needed in update re-exec; must not be local)
 ORIGINAL_ARGS=()
+# Flag to signal installer re-run after checksum auto-fix
+RERUN_AFTER_FIX=0
 
 # Validate bash version (requires 4.0+)
 if ((BASH_VERSINFO[0] < 4)); then
@@ -1398,6 +1400,7 @@ run_post_install_doctor() {
         success "'ubs doctor --fix' resolved checksum issues"
         status="PASS"
         note="Checksum issues auto-fixed by installer"
+        RERUN_AFTER_FIX=1
       else
         warn "'ubs doctor --fix' did not resolve issues"
         note="Auto-fix attempted; review log or rerun manually"
@@ -3459,6 +3462,13 @@ local install_dir
 install_dir="$(determine_install_dir)"
 
 run_post_install_doctor "$install_dir/$INSTALL_NAME" "$install_dir"
+
+# If checksum issues were auto-fixed, rerun the installer once to ensure a clean flow
+if [ "$RERUN_AFTER_FIX" -eq 1 ] && [ "${UBS_INSTALL_RERUN_DONE:-0}" -eq 0 ]; then
+  log "Re-running installer after checksum auto-fix to verify clean state..."
+  release_lock
+  UBS_INSTALL_RERUN_DONE=1 exec "$0" "${ORIGINAL_ARGS[@]}"
+fi
 
 if [ -n "${SESSION_SUMMARY_FILE:-}" ]; then
   log "Installer session saved to $SESSION_SUMMARY_FILE (view with 'ubs sessions --entries 1')."
