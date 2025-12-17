@@ -71,20 +71,46 @@ class ResourceRecord:
         self.released = False
 
 
+class Scope:
+    def __init__(self) -> None:
+        self.aliases: dict[str, tuple[Optional[str], Optional[str]]] = {}
+        self.by_name: dict[str, list[ResourceRecord]] = {}
+
+
 class Analyzer(ast.NodeVisitor):
     def __init__(self, tree: ast.AST) -> None:
         self.tree = tree
-        self.aliases: dict[str, tuple[Optional[str], Optional[str]]] = {}
         self.records: list[ResourceRecord] = []
-        self.by_name: dict[str, list[ResourceRecord]] = {}
         self.safe_calls: set[int] = set()
         self.assigned_calls: set[int] = set()
+        self.scope_stack: list[Scope] = [Scope()]
+
+    @property
+    def current_scope(self) -> Scope:
+        return self.scope_stack[-1]
+
+    def _lookup_alias(self, name: str) -> tuple[Optional[str], Optional[str]]:
+        for scope in reversed(self.scope_stack):
+            if name in scope.aliases:
+                return scope.aliases[name]
+        return (None, None)
+
+    # Scopes -------------------------------------------------------------
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.scope_stack.append(Scope())
+        self.generic_visit(node)
+        self.scope_stack.pop()
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.scope_stack.append(Scope())
+        self.generic_visit(node)
+        self.scope_stack.pop()
 
     # Imports -------------------------------------------------------------
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             asname = alias.asname or alias.name
-            self.aliases[asname] = (alias.name, None)
+            self.current_scope.aliases[asname] = (alias.name, None)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         module = node.module or ""
@@ -92,7 +118,30 @@ class Analyzer(ast.NodeVisitor):
             if alias.name == "*":
                 continue
             asname = alias.asname or alias.name
-            self.aliases[asname] = (module, alias.name)
+            self.current_scope.aliases[asname] = (module, alias.name)
+
+    # Return/Yield -------------------------------------------------------
+    def visit_Return(self, node: ast.Return) -> None:
+        if node.value:
+            self._handle_return_yield(node.value)
+        self.generic_visit(node)
+
+    def visit_Yield(self, node: ast.Yield) -> None:
+        if node.value:
+            self._handle_return_yield(node.value)
+        self.generic_visit(node)
+
+    def visit_YieldFrom(self, node: ast.YieldFrom) -> None:
+        if node.value:
+            self._handle_return_yield(node.value)
+        self.generic_visit(node)
+
+    def _handle_return_yield(self, value: ast.AST) -> None:
+        names = self._collect_names(value)
+        for name in names:
+            # When returning/yielding a resource, we consider it "released" (ownership transfer)
+            # We check all scopes because a closure might return a variable from an outer scope
+            self._mark_released(name, None, check_all_scopes=True)
 
     # With/async with -----------------------------------------------------
     def visit_With(self, node: ast.With) -> None:
@@ -145,14 +194,18 @@ class Analyzer(ast.NodeVisitor):
         for name in names:
             self._add_record(name, kind, value.lineno)
 
-    def _collect_names(self, node: ast.expr) -> list[str]:
+    def _collect_names(self, node: ast.AST) -> list[str]:
         if isinstance(node, (ast.Tuple, ast.List)):
             names: list[str] = []
             for elt in node.elts:
                 names.extend(self._collect_names(elt))
             return names
-        dotted = self._dotted_name(node)
-        return [dotted] if dotted else []
+        if isinstance(node, ast.Name):
+            return [node.id]
+        if isinstance(node, ast.Attribute):
+            dotted = self._dotted_name(node)
+            return [dotted] if dotted else []
+        return []
 
     # Calls/releases -----------------------------------------------------
     def visit_Call(self, node: ast.Call) -> None:
@@ -196,22 +249,31 @@ class Analyzer(ast.NodeVisitor):
                     yield from self._iter_task_args([elt])
 
     # Helpers ------------------------------------------------------------
-    def _mark_released(self, name: Optional[str], kind: str) -> None:
+    def _mark_released(self, name: Optional[str], kind: Optional[str], check_all_scopes: bool = False) -> None:
         if not name:
             return
-        entries = self.by_name.get(name)
-        if not entries:
-            return
-        for rec in entries:
-            if not rec.released and rec.kind == kind:
-                rec.released = True
-                return
+        
+        scopes_to_check = reversed(self.scope_stack) if check_all_scopes else [self.current_scope]
+        
+        for scope in scopes_to_check:
+            entries = scope.by_name.get(name)
+            if not entries:
+                continue
+            for rec in entries:
+                if not rec.released and (kind is None or rec.kind == kind):
+                    rec.released = True
+                    # If we released one, we assume we released the most relevant one.
+                    # Should we keep searching other scopes? 
+                    # If I return f, I release the local f. If f captured outer f, it releases that too?
+                    # Python variables are refs. If I return f, the object is passed.
+                    # The lifecycle responsibility transfers. So yes, mark it released.
+                    return
 
     def _add_record(self, name: Optional[str], kind: str, lineno: int) -> None:
         rec = ResourceRecord(name, kind, lineno)
         self.records.append(rec)
         if name:
-            self.by_name.setdefault(name, []).append(rec)
+            self.current_scope.by_name.setdefault(name, []).append(rec)
 
     def _call_signature_from_expr(self, expr: ast.AST) -> Optional[tuple[Optional[str], str]]:
         if isinstance(expr, ast.Call):
@@ -221,7 +283,7 @@ class Analyzer(ast.NodeVisitor):
     def _call_signature(self, call: ast.Call) -> Optional[tuple[Optional[str], str]]:
         func = call.func
         if isinstance(func, ast.Name):
-            module, obj = self.aliases.get(func.id, (None, None))
+            module, obj = self._lookup_alias(func.id)
             if obj:
                 return (module, obj)
             return (module, func.id)
@@ -229,10 +291,23 @@ class Analyzer(ast.NodeVisitor):
             base = func.value
             attr = func.attr
             if isinstance(base, ast.Name):
-                module, obj = self.aliases.get(base.id, (base.id, None))
+                module, obj = self._lookup_alias(base.id)
+                # If base.id is not aliased, it might be a module name or object
                 if obj:
                     module = module or obj
-                return (module, attr)
+                else:
+                    # e.g. os.path.join -> base.id="os"
+                    # _lookup_alias("os") -> (None, None) usually if just imported
+                    # Wait, if "import os", then alias is "os" -> ("os", None)
+                    pass
+                
+                # If we didn't find an alias, check if it matches a known structure
+                if not module and not obj:
+                     # Check if we have an alias that matches base.id
+                     # (handled by _lookup_alias returning (None,None))
+                     pass
+
+                return (module or base.id, attr)
             if isinstance(base, ast.Attribute):
                 dotted = self._dotted_name(base)
                 if dotted:
