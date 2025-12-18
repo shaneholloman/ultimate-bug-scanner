@@ -246,7 +246,7 @@ HELP
   print_help_option "--generate-config" "Create ~/.config/ubs/install.conf"
   echo ""
   echo "Dependency controls:"
-  print_help_option "--skip-ast-grep" "Skip ast-grep installation"
+  print_help_option "--skip-ast-grep" "Skip ast-grep installation (JS/TS accuracy reduced)"
   print_help_option "--skip-ripgrep" "Skip ripgrep installation"
   print_help_option "--skip-jq" "Skip jq installation"
   print_help_option "--skip-typos" "Skip typos installation"
@@ -469,6 +469,20 @@ secure_fetch() {
   fi
 }
 
+# Compute SHA256 digest in a portable way (Linux + macOS).
+compute_sha256() {
+  local file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$file" | awk '{print $NF}'
+  else
+    return 1
+  fi
+}
+
 fetch_checksum_bundle() {
   if [ "$RUN_VERIFICATION" -eq 0 ] || [ "$INSECURE" -eq 1 ]; then
     return 0
@@ -501,8 +515,8 @@ fetch_checksum_bundle() {
     exit 1
   fi
 
-  if ! command -v sha256sum >/dev/null 2>&1; then
-    error "sha256sum not found (install coreutils)."
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1 && ! command -v openssl >/dev/null 2>&1; then
+    error "No SHA256 tool found (need sha256sum, shasum, or openssl)."
     exit 1
   fi
 
@@ -531,10 +545,18 @@ verify_download_checksum() {
     error "Checksum entry for ${expected_name} missing in SHA256SUMS"
     exit 1
   fi
-  (cd "$(dirname "$file_path")" && sha256sum --check --status "$tmp_sum") || {
-    error "Checksum verification failed for ${expected_name}"
+  local expected_sum actual_sum
+  expected_sum="$(awk '{print $1}' "$tmp_sum" | head -n 1)"
+  if ! actual_sum="$(compute_sha256 "$file_path")"; then
+    error "No SHA256 tool found (need sha256sum, shasum, or openssl) to verify ${expected_name}."
     exit 1
-  }
+  fi
+  if [[ "$expected_sum" != "$actual_sum" ]]; then
+    error "Checksum verification failed for ${expected_name}"
+    error "Expected: ${expected_sum}"
+    error "Got:      ${actual_sum}"
+    exit 1
+  fi
   success "Checksum verified for ${expected_name}"
 }
 
@@ -761,11 +783,14 @@ get_rc_file() {
 }
 
 check_ast_grep() {
-  if command -v ast-grep >/dev/null 2>&1 || command -v sg >/dev/null 2>&1; then
+  if command -v ast-grep >/dev/null 2>&1; then
     return 0
-  else
-    return 1
   fi
+  # Verify 'sg' is actually ast-grep, not the Unix newgrp command
+  if command -v sg >/dev/null 2>&1 && sg --version 2>&1 | grep -qi "ast-grep"; then
+    return 0
+  fi
+  return 1
 }
 
 install_ast_grep() {
@@ -785,17 +810,23 @@ install_ast_grep() {
   case "$platform" in
     macos)
       if command -v brew >/dev/null 2>&1; then
+        log "Attempting installation via Homebrew..."
         if brew install ast-grep 2>&1 | tee "$log_file"; then
           success "ast-grep installed via Homebrew"
           return 0
-        else
-          error "Homebrew installation failed. Check $log_file"
-          return 1
         fi
+        warn "Homebrew installation failed (see $log_file). Trying binary download..."
       else
-        error "Homebrew not found. Please install from: https://ast-grep.github.io/guide/quick-start.html"
-        return 1
+        warn "Homebrew not found. Trying binary download..."
       fi
+
+      if download_binary_release "ast-grep" "$platform"; then
+        return 0
+      fi
+
+      error "All installation methods failed on macOS"
+      log "Install manually from: https://ast-grep.github.io/guide/quick-start.html"
+      return 1
       ;;
     wsl|linux)
       if [ "$platform" = "wsl" ]; then
@@ -1040,35 +1071,51 @@ download_binary_release() {
       ;;
 
     ast-grep)
-      local version="0.18.0"
-      local asset
-      case "$platform-$arch" in
-        linux-x86_64|wsl-x86_64) asset="ast-grep-x86_64-unknown-linux-gnu.zip" ;;
-        linux-aarch64|wsl-aarch64)        asset="ast-grep-aarch64-unknown-linux-gnu.zip" ;;
-        macos-x86_64) asset="ast-grep-x86_64-apple-darwin.zip" ;;
-        macos-aarch64) asset="ast-grep-aarch64-apple-darwin.zip" ;;
-        windows-x86_64) asset="ast-grep-x86_64-pc-windows-msvc.zip" ;;
-        windows-aarch64) asset="ast-grep-aarch64-pc-windows-msvc.zip" ;;
-        *) warn "No binary release for $platform-$arch"; return 1 ;;
+      local version="0.40.1"
+      local os target asset
+      case "$platform" in
+        linux|wsl) os="unknown-linux-gnu" ;;
+        macos) os="apple-darwin" ;;
+        windows)
+          os="pc-windows-msvc"
+          if [[ "$arch" == "aarch64" ]]; then
+            warn "No ast-grep binary fallback available for windows-aarch64"
+            return 1
+          fi
+          ;;
+        *) warn "No binary release for $platform"; return 1 ;;
       esac
+      target="${arch}-${os}"
+      asset="app-${target}.zip"
 
       local url="https://github.com/ast-grep/ast-grep/releases/download/${version}/${asset}"
       local zip_path="$temp_dir/${asset}"
+      local extract_dir="$temp_dir/ast-grep"
+      mkdir -p "$extract_dir" 2>/dev/null || true
 
       if with_backoff 3 curl -fsSL "$url" -o "$zip_path" 2>"$err_log"; then
         if command -v unzip >/dev/null 2>&1; then
-          unzip -q "$zip_path" -d "$temp_dir/ast-grep" 2>/dev/null || true
+          unzip -q "$zip_path" -d "$extract_dir" 2>/dev/null || true
+        elif command -v python3 >/dev/null 2>&1; then
+          python3 - "$zip_path" "$extract_dir" <<'PY' 2>/dev/null || true
+import sys, zipfile
+zip_path, out_dir = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(zip_path) as z:
+    z.extractall(out_dir)
+PY
         else
-          tar -xf "$zip_path" -C "$temp_dir/ast-grep" 2>/dev/null || true
+          warn "Need unzip or python3 to extract ast-grep archive"
+          return 1
         fi
+
         local sg_binary
-        sg_binary=$(find "$temp_dir/ast-grep" \( -name "ast-grep" -o -name "ast-grep.exe" -o -name "sg" -o -name "sg.exe" \) -type f 2>/dev/null | head -1)
+        sg_binary=$(find "$extract_dir" \( -name "ast-grep" -o -name "ast-grep.exe" -o -name "sg" -o -name "sg.exe" \) -type f 2>/dev/null | head -1)
         if [ -n "$sg_binary" ] && [ -f "$sg_binary" ]; then
           chmod +x "$sg_binary" 2>/dev/null
-          local target="$install_dir/ast-grep"
-          [[ "$sg_binary" == *.exe ]] && target="$install_dir/ast-grep.exe"
-          mv "$sg_binary" "$target"
-          success "ast-grep binary installed to $target"
+          local target_bin="$install_dir/ast-grep"
+          [[ "$sg_binary" == *.exe ]] && target_bin="$install_dir/ast-grep.exe"
+          mv "$sg_binary" "$target_bin"
+          success "ast-grep binary installed to $target_bin"
           export PATH="$install_dir:$PATH"
           return 0
         else
@@ -1217,8 +1264,10 @@ verify_installation() {
   log "Dependency check:"
   if check_ast_grep; then
     success "   ast-grep: $(command -v ast-grep || command -v sg)"
+  elif [ "$SKIP_AST_GREP" -eq 1 ]; then
+    warn "   ast-grep: skipped via --skip-ast-grep (JS/TS accuracy reduced)"
   else
-    warn "   ast-grep: not available (scanner will use regex mode only)"
+    warn "   ast-grep: not available (JS/TS scanning may be degraded)"
   fi
 
   if check_ripgrep; then
@@ -2469,7 +2518,12 @@ install_scanner() {
           fi
 
           local actual_sum
-          actual_sum=$(sha256sum "$temp_path" | awk '{print $1}')
+          if ! actual_sum="$(compute_sha256 "$temp_path")"; then
+            error "No SHA256 tool found (need sha256sum, shasum, or openssl) to verify downloads."
+            error "Rerun with --insecure to bypass checksum verification (not recommended)."
+            rm -f "$temp_path"
+            return 1
+          fi
 
           if [[ "$expected_sum" == "$actual_sum" ]]; then
             success "Checksum verified"
@@ -3330,14 +3384,29 @@ echo ""
 # Check for ast-grep
 
 if [ "$SKIP_AST_GREP" -eq 1 ]; then
-log "[skip] ast-grep installation disabled via --skip-ast-grep"
-elif ! check_ast_grep; then
-warn "ast-grep not found (recommended for best results)"
-if ask "Install ast-grep now?"; then
-install_ast_grep || warn "Continuing without ast-grep (regex mode only)"
-fi
-else
+log "[skip] ast-grep installation disabled via --skip-ast-grep (JS/TS accuracy reduced)"
+elif check_ast_grep; then
 success "ast-grep is installed"
+else
+warn "ast-grep not found (required for accurate JS/TS scanning)"
+
+if [ "$NON_INTERACTIVE" -eq 1 ] || [ "$EASY_MODE" -eq 1 ]; then
+  log "Installing ast-grep..."
+  if ! install_ast_grep; then
+    error "ast-grep installation failed. Re-run installer interactively to troubleshoot, or pass --skip-ast-grep to proceed without it."
+    exit 1
+  fi
+else
+  if ask "Install ast-grep now? (required)"; then
+    if ! install_ast_grep; then
+      error "ast-grep installation failed. Fix the error above and re-run, or pass --skip-ast-grep to proceed without it."
+      exit 1
+    fi
+  else
+    error "Cannot continue without ast-grep. Re-run with --skip-ast-grep only if you accept reduced JS/TS accuracy."
+    exit 1
+  fi
+fi
 fi
 record_tool_status "ast-grep" "$SKIP_AST_GREP" check_ast_grep "--skip-ast-grep"
 echo ""
