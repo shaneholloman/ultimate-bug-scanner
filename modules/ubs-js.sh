@@ -1118,6 +1118,33 @@ run_type_narrowing_checks() {
     print_finding "info" 0 "Type narrowing checks skipped" "Set UBS_SKIP_TYPE_NARROWING=0 or remove --skip-type-narrowing to re-enable"
     return
   fi
+  local allow_ts=0
+  for e in "${_EXT_ARR[@]}"; do
+    case "$(echo "$e" | xargs)" in
+      ts|tsx) allow_ts=1 ;;
+    esac
+  done
+  if [[ "$allow_ts" -eq 0 ]]; then
+    print_finding "info" 0 "Type narrowing skipped" "TypeScript extensions not included in scan"
+    return
+  fi
+  local has_ts=0
+  if command -v rg >/dev/null 2>&1; then
+    if rg -q --hidden "${RG_EXCLUDES[@]}" -g '*.ts' -g '*.tsx' "$PROJECT_DIR" 2>/dev/null; then
+      has_ts=1
+    fi
+  else
+    local prune=()
+    for d in "${EXCLUDE_DIRS[@]}"; do prune+=( -name "$d" -o ); done
+    prune=( \( -type d \( "${prune[@]}" -false \) -prune \) )
+    if find "$PROJECT_DIR" -xdev "${prune[@]}" -o \( -type f \( -name '*.ts' -o -name '*.tsx' \) -print -quit \) 2>/dev/null | grep -q .; then
+      has_ts=1
+    fi
+  fi
+  if [[ "$has_ts" -eq 0 ]]; then
+    print_finding "info" 0 "Type narrowing skipped" "No .ts/.tsx files detected"
+    return
+  fi
   local script_dir helper
   script_dir="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   helper="$script_dir/helpers/type_narrowing_ts.js"

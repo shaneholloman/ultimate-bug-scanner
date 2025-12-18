@@ -252,6 +252,9 @@ async function analyzeFileFallback(filePath) {
 
 async function main() {
   const files = await collectFiles(projectDir);
+  if (files.length === 0) {
+    return;
+  }
   let total = 0;
   for (const file of files) {
     const issues = ts ? await analyzeFileWithTs(file) : await analyzeFileFallback(file);
