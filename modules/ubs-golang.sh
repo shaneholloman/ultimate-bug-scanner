@@ -495,11 +495,19 @@ run_resource_lifecycle_checks() {
     print_finding "info" 0 "Go toolchain unavailable" "Install Go to run the AST helper"
     return
   fi
-  local output
-  if ! output=$(go run "$helper" -- "$PROJECT_DIR" 2>/dev/null); then
-    print_finding "info" 0 "AST helper failed" "See stderr for details"
+  local output helper_err helper_err_tmp helper_err_preview
+  helper_err="/dev/null"
+  if helper_err_tmp="$(mktemp -t ubs-go-resource-lifecycle.XXXXXX 2>/dev/null || mktemp)"; then
+    helper_err="$helper_err_tmp"
+  fi
+  if ! output=$(go run "$helper" -- "$PROJECT_DIR" 2>"$helper_err"); then
+    helper_err_preview="$(head -n 1 "$helper_err" 2>/dev/null || true)"
+    [[ -z "$helper_err_preview" ]] && helper_err_preview="Run: go run $helper -- $PROJECT_DIR"
+    print_finding "info" 0 "AST helper failed" "$helper_err_preview"
+    [[ "$helper_err" != "/dev/null" ]] && rm -f "$helper_err" 2>/dev/null || true
     return
   fi
+  [[ "$helper_err" != "/dev/null" ]] && rm -f "$helper_err" 2>/dev/null || true
   if [[ -z "$output" ]]; then
     print_finding "good" "All tracked resource acquisitions have matching cleanups"
     return

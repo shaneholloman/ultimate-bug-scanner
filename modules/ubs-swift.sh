@@ -871,6 +871,10 @@ run_urlsession_task_correlation(){
   print_finding "info" 0 "Correlation skipped" "python3 unavailable"
   return 0
  fi
+ if ! "${GREP_RN[@]}" -e "\\.(dataTask|uploadTask|downloadTask)\\s*\\(" "$PROJECT_DIR" 2>/dev/null | head -n 1 | grep -q .; then
+  print_finding "good" "No URLSession tasks to correlate"
+  return 0
+ fi
  ag_build_file_index || {
   print_finding "info" 0 "Correlation skipped" "Could not build ast-grep per-file index"
   return 0
@@ -880,258 +884,418 @@ run_urlsession_task_correlation(){
   return 0
  }
 
- local tmp; tmp="$(mktemp_file ubs_urlsession_corr)"
+ local tmp err_file
+ tmp="$(mktemp_file ubs_urlsession_corr)"
  cleanup_add "$tmp"
+ err_file="$(mktemp_file ubs_urlsession_corr_err)"
+ cleanup_add "$err_file"
 
- python3 - "$AG_FILE_INDEX_FILE" "$PROJECT_DIR" "$DETAIL_LIMIT" >"$tmp" <<'PY'
-import json, sys, os, re, collections
+ if ! python3 - "$AG_FILE_INDEX_FILE" "$PROJECT_DIR" "$DETAIL_LIMIT" >"$tmp" 2>"$err_file" <<'PY'
+import json, os, re, sys
 
-index_path=sys.argv[1]
-project_dir=sys.argv[2]
-limit=int(sys.argv[3])
+index_path = sys.argv[1]
+project_dir = sys.argv[2]
+limit = int(sys.argv[3])
 
-TASK_RID="swift.urlsession.task-no-resume"
-TASK_CALL_RE=re.compile(r"\.(dataTask|uploadTask|downloadTask)\s*\(")
+TASK_RID = "swift.urlsession.task-no-resume"
+TASK_CALL_RE = re.compile(r"\.(dataTask|uploadTask|downloadTask)\s*\(")
 
-def norm_path(p):
- if os.path.isabs(p): return p
- return os.path.normpath(os.path.join(project_dir,p))
 
-def rel(p):
- try:
-  rp=os.path.relpath(p, project_dir)
-  return rp if not rp.startswith("..") else p
- except: return p
+def norm_path(p: str) -> str:
+    if os.path.isabs(p):
+        return p
+    return os.path.normpath(os.path.join(project_dir, p))
 
-def add_finding(out, fid, sev, title, desc, sample):
- b=out.setdefault(fid, {"severity":sev, "title":title, "desc":desc, "count":0, "samples":[]})
- b["count"]+=1
- if sample and len(b["samples"]) < limit:
-  f,ln,code=sample
-  code=(code or "").replace("\t"," ").strip()
-  b["samples"].append((f,ln,code))
+
+def rel(p: str) -> str:
+    try:
+        rp = os.path.relpath(p, project_dir)
+        return rp if not rp.startswith("..") else p
+    except Exception:
+        return p
+
+
+def add_finding(out: dict, fid: str, sev: str, title: str, desc: str, sample) -> None:
+    b = out.setdefault(
+        fid, {"severity": sev, "title": title, "desc": desc, "count": 0, "samples": []}
+    )
+    b["count"] += 1
+    if sample and len(b["samples"]) < limit:
+        f, ln, code = sample
+        code = (code or "").replace("\t", " ").strip()
+        b["samples"].append((f, ln, code))
+
 
 class Lex:
- __slots__=("line_comment","block_comment","in_string","raw_hashes","triple")
- def __init__(self):
-  self.line_comment=False
-  self.block_comment=0
-  self.in_string=False
-  self.raw_hashes=0
-  self.triple=False
+    __slots__ = ("line_comment", "block_comment", "in_string", "raw_hashes", "triple")
 
-def startswith_at(s, i, lit):
- return s.startswith(lit, i)
+    def __init__(self):
+        self.line_comment = False
+        self.block_comment = 0
+        self.in_string = False
+        self.raw_hashes = 0
+        self.triple = False
 
-def is_escaped(s, i):
- j=i-1
- bs=0
- while j>=0 and s[j]=='\\':
-  bs+=1; j-=1
- return (bs%2)==1
 
-def enter_string(s, i, lex):
- if s[i] == '"':
-  if startswith_at(s,i,'"""'):
-   lex.in_string=True; lex.raw_hashes=0; lex.triple=True
-   return i+3
-  lex.in_string=True; lex.raw_hashes=0; lex.triple=False
-  return i+1
- if s[i] == '#':
-  j=i
-  while j < len(s) and s[j] == '#': j+=1
-  if j < len(s) and s[j] == '"':
-   if startswith_at(s,j,'"""'):
-    lex.in_string=True; lex.raw_hashes=j-i; lex.triple=True
-    return j+3
-   lex.in_string=True; lex.raw_hashes=j-i; lex.triple=False
-   return j+1
- return i+1
+def startswith_at(s: str, i: int, lit: str) -> bool:
+    return s.startswith(lit, i)
 
-def scan_balanced(s, start, open_ch, close_ch):
- i=start
- depth=0
- lex=Lex()
- while i < len(s):
-  ch=s[i]
-  nxt=s[i+1] if i+1 < len(s) else ''
-  if lex.line_comment:
-   if ch == '\n': lex.line_comment=False
-   i+=1; continue
-  if lex.block_comment>0:
-   if ch=='/' and nxt=='*':
-    lex.block_comment+=1; i+=2; continue
-   if ch=='*' and nxt=='/':
-    lex.block_comment-=1; i+=2; continue
-   i+=1; continue
-  if lex.in_string:
-   if lex.triple:
-    end_delim = '"""' + ('#'*lex.raw_hashes)
-    if startswith_at(s,i,end_delim):
-     lex.in_string=False; i+=len(end_delim); continue
-    i+=1; continue
-   else:
-    if lex.raw_hashes>0:
-     end_delim = '"' + ('#'*lex.raw_hashes)
-     if startswith_at(s,i,end_delim):
-      lex.in_string=False; i+=len(end_delim); continue
-     i+=1; continue
-    else:
-     if ch=='"' and not is_escaped(s,i):
-      lex.in_string=False; i+=1; continue
-     i+=1; continue
-  if ch=='/' and nxt=='/':
-   lex.line_comment=True; i+=2; continue
-  if ch=='/' and nxt=='*':
-   lex.block_comment=1; i+=2; continue
-  if ch=='"' or ch=='#':
-   i=enter_string(s,i,lex); continue
-  if ch==open_ch:
-   depth+=1; i+=1; continue
-  if ch==close_ch:
-   depth-=1; i+=1
-   if depth==0: return i
-   continue
-  i+=1
- return None
 
-def skip_ws(s, i):
- n=len(s)
- while i < n and s[i].isspace(): i+=1
- return i
+def is_escaped(s: str, i: int) -> bool:
+    j = i - 1
+    bs = 0
+    while j >= 0 and s[j] == "\\\\":
+        bs += 1
+        j -= 1
+    return (bs % 2) == 1
 
-def parse_call_end(s, call_start):
- open_paren = s.find('(', call_start)
- if open_paren < 0: return None
- end_args = scan_balanced(s, open_paren, '(', ')')
- if end_args is None: return None
- i=end_args
- while True:
-  i=skip_ws(s,i)
-  if i >= len(s): break
-  if s[i] == '{':
-   end_cl = scan_balanced(s, i, '{', '}')
-   if end_cl is None: return i
-    i=end_cl
-   continue
-  m=re.match(r'[A-Za-z_]\w*\s*:\s*', s[i:])
-  if m:
-   j=i+m.end()
-   j=skip_ws(s,j)
-   if j < len(s) and s[j] == '{':
-    end_cl = scan_balanced(s, j, '{', '}')
-    if end_cl is None: return j
-    i=end_cl
-    continue
-  break
- return i
 
-def chained_lifecycle(s, call_end):
- i=skip_ws(s, call_end)
- if i >= len(s): return None
- if s[i] in '?!':
-  j=skip_ws(s, i+1)
-  if j < len(s) and s[j] == '.': i=j
-  else: return None
- if s[i] != '.': return None
- j=skip_ws(s, i+1)
- for name in ("resume","cancel"):
-  if s.startswith(name, j):
-   k=skip_ws(s, j+len(name))
-   if s[k] == '(':
-    return name
- return None
+def enter_string(s: str, i: int, lex: Lex) -> int:
+    if s[i] == '"':
+        if startswith_at(s, i, '"""'):
+            lex.in_string = True
+            lex.raw_hashes = 0
+            lex.triple = True
+            return i + 3
+        lex.in_string = True
+        lex.raw_hashes = 0
+        lex.triple = False
+        return i + 1
+    if s[i] == "#":
+        j = i
+        while j < len(s) and s[j] == "#":
+            j += 1
+        if j < len(s) and s[j] == '"':
+            if startswith_at(s, j, '"""'):
+                lex.in_string = True
+                lex.raw_hashes = j - i
+                lex.triple = True
+                return j + 3
+            lex.in_string = True
+            lex.raw_hashes = j - i
+            lex.triple = False
+            return j + 1
+    return i + 1
 
-def extract_lhs_var(lines, row, call_col):
- def extract_from_lhs(lhs):
-  lhs=lhs.strip()
-  m=re.search(r'\b(?:let|var)\s+([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)', lhs)
-  if m:
-   return re.sub(r'\s*', '', m.group(1))
-  m=re.search(r'([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)\s*(?::[^=]+)?\s*$', lhs)
-  if m:
-   return re.sub(r'\s*', '', m.group(1))
-  return None
 
- if row < 0 or row >= len(lines): return None
- line=lines[row]
- call_col=max(0, min(call_col, len(line)))
- seg=line[call_col:]
- m=TASK_CALL_RE.search(seg)
- if m:
-  call_col=call_col+m.start()
- else:
-  m=TASK_CALL_RE.search(line)
-   if not m: continue
-   call_col=m.start()
-  if (row,call_col) in seen: continue
-  seen.add((row,call_col))
+def scan_balanced(s: str, start: int, open_ch: str, close_ch: str):
+    i = start
+    depth = 0
+    lex = Lex()
+    while i < len(s):
+        ch = s[i]
+        nxt = s[i + 1] if i + 1 < len(s) else ""
+        if lex.line_comment:
+            if ch == "\n":
+                lex.line_comment = False
+            i += 1
+            continue
+        if lex.block_comment > 0:
+            if ch == "/" and nxt == "*":
+                lex.block_comment += 1
+                i += 2
+                continue
+            if ch == "*" and nxt == "/":
+                lex.block_comment -= 1
+                i += 2
+                continue
+            i += 1
+            continue
+        if lex.in_string:
+            if lex.triple:
+                end_delim = '"""' + ("#" * lex.raw_hashes)
+                if startswith_at(s, i, end_delim):
+                    lex.in_string = False
+                    i += len(end_delim)
+                    continue
+                i += 1
+                continue
+            if lex.raw_hashes > 0:
+                end_delim = '"' + ("#" * lex.raw_hashes)
+                if startswith_at(s, i, end_delim):
+                    lex.in_string = False
+                    i += len(end_delim)
+                    continue
+                i += 1
+                continue
+            if ch == '"' and not is_escaped(s, i):
+                lex.in_string = False
+                i += 1
+                continue
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            lex.line_comment = True
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            lex.block_comment = 1
+            i += 2
+            continue
+        if ch == '"' or ch == "#":
+            i = enter_string(s, i, lex)
+            continue
+        if ch == open_ch:
+            depth += 1
+            i += 1
+            continue
+        if ch == close_ch:
+            depth -= 1
+            i += 1
+            if depth == 0:
+                return i
+            continue
+        i += 1
+    return None
 
-  call_start=offs[row]+call_col
-  call_end=parse_call_end(text, call_start)
-  if call_end is None: continue
 
-  chain=chained_lifecycle(text, call_end)
-  if chain == "resume":
-   continue
+def skip_ws(s: str, i: int) -> int:
+    while i < len(s) and s[i].isspace():
+        i += 1
+    return i
 
-  var_expr=extract_lhs_var(lines, row, call_col)
-  code=(line.strip() if line else "").replace("\t"," ")
-  sample=(rel(path), row+1, code)
 
-  if not var_expr:
-   prefix=line[:call_col]
-   if re.search(r'\breturn\b', prefix):
-    continue
-   if chain == "cancel":
-    continue
-   add_finding(out,
-    "ubs.correlation.urlsession.unassigned-no-resume",
-    "warning",
-    "URLSession task created but never resumed (result unused)",
-    "Call .resume() on the returned task (or return/store it for the caller to resume).",
-    sample)
-   continue
+def parse_call_end(s: str, call_start: int):
+    open_paren = s.find("(", call_start)
+    if open_paren < 0:
+        return None
+    end_args = scan_balanced(s, open_paren, "(", ")")
+    if end_args is None:
+        return None
+    i = end_args
+    while True:
+        i = skip_ws(s, i)
+        if i >= len(s):
+            break
+        if s[i] == "{":
+            end_cl = scan_balanced(s, i, "{", "}")
+            if end_cl is None:
+                return i
+            i = end_cl
+            continue
+        m = re.match(r"[A-Za-z_]\w*\s*:\s*", s[i:])
+        if m:
+            j = skip_ws(s, i + m.end())
+            if j < len(s) and s[j] == "{":
+                end_cl = scan_balanced(s, j, "{", "}")
+                if end_cl is None:
+                    return j
+                i = end_cl
+                continue
+        break
+    return i
 
-  var_base=var_expr.split('.')[-1]
-  property_like=('.' in var_expr)
-  assign_re, resume_re, cancel_re, ret_re = compile_resume_patterns(var_base, property_like)
 
-  region=text[call_end:]
-  mnext=assign_re.search(region)
-  region2 = region[:mnext.start()] if mnext else region
+def chained_lifecycle(s: str, call_end: int):
+    i = skip_ws(s, call_end)
+    if i >= len(s):
+        return None
+    if s[i] in "?!":
+        j = skip_ws(s, i + 1)
+        if j < len(s) and s[j] == ".":
+            i = j
+        else:
+            return None
+    if s[i] != ".":
+        return None
+    j = skip_ws(s, i + 1)
+    for name in ("resume", "cancel"):
+        if s.startswith(name, j):
+            k = skip_ws(s, j + len(name))
+            if k < len(s) and s[k] == "(":
+                return name
+    return None
 
-  if ret_re.search(region2):
-   continue
-  if resume_re.search(region2):
-   continue
-  if cancel_re.search(region2):
-   add_finding(out,
-    "ubs.correlation.urlsession.assigned-cancel-no-resume",
-    "info",
-    "URLSession task cancelled without resume()",
-    "If intentional, ignore; otherwise call resume() to start the request (or return it).",
-    sample)
-   continue
 
-  add_finding(out,
-   "ubs.correlation.urlsession.assigned-no-resume",
-   "warning",
-   "URLSession task assigned but no resume() found (in-file)",
-   "Call task.resume() after creation, or return/store the task and resume later (ensure lifecycle management).",
-   sample)
+def collapse_ws(s: str) -> str:
+    return re.sub(r"\s+", "", s or "")
+
+
+def var_expr_regex(expr: str) -> str:
+    parts = [p for p in (expr or "").split(".") if p]
+    return r"\s*\.\s*".join(re.escape(p) for p in parts)
+
+
+def parse_lhs_assignment(lhs: str):
+    lhs = (lhs or "").rstrip()
+    m = re.search(
+        r"\b(?:let|var)\s+([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)\s*(?::[^=]+)?\s*=\s*$",
+        lhs,
+    )
+    if m:
+        return collapse_ws(m.group(1))
+    m = re.search(
+        r"([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)\s*(?::[^=]+)?\s*=\s*$",
+        lhs,
+    )
+    if m:
+        return collapse_ws(m.group(1))
+    return None
+
+
+def extract_assigned_var(lines_no_nl, row: int, call_col: int):
+    if row < 0 or row >= len(lines_no_nl):
+        return None
+    line = lines_no_nl[row]
+    lhs = line[: max(0, min(call_col, len(line)))]
+    v = parse_lhs_assignment(lhs)
+    if v:
+        return v
+    if row > 0:
+        prev = lines_no_nl[row - 1].split("//", 1)[0]
+        if prev.rstrip().endswith("="):
+            v = parse_lhs_assignment(prev.rstrip())
+            if v:
+                return v
+    return None
+
+
+def has_return_before(lines_no_nl, row: int, call_col: int) -> bool:
+    if row < 0 or row >= len(lines_no_nl):
+        return False
+    prefix = lines_no_nl[row][: max(0, min(call_col, len(lines_no_nl[row])))]
+    if re.search(r"\breturn\b", prefix):
+        return True
+    if row > 0 and re.search(r"\breturn\s*$", lines_no_nl[row - 1]):
+        return True
+    return False
+
+
+def code_sample(lines_no_nl, row: int) -> str:
+    if row < 0 or row >= len(lines_no_nl):
+        return ""
+    return (lines_no_nl[row] or "").strip().replace("\t", " ")
+
+
+out = {}
+seen = set()
+
+with open(index_path, "r", encoding="utf-8", errors="ignore") as fh:
+    idx = json.load(fh) or {}
+
+for file_key, entries in (idx or {}).items():
+    abs_path = norm_path(file_key)
+    try:
+        with open(abs_path, "r", encoding="utf-8", errors="ignore") as fh:
+            text = fh.read()
+    except Exception:
+        continue
+
+    lines = text.splitlines(True)
+    lines_no_nl = [ln.rstrip("\n") for ln in lines]
+    offs = [0]
+    for ln in lines:
+        offs.append(offs[-1] + len(ln))
+
+    for ent in entries or []:
+        if (ent.get("rid") or "") != TASK_RID:
+            continue
+        try:
+            row = int(ent.get("row", 0))
+            col = int(ent.get("col", 0))
+        except Exception:
+            row, col = 0, 0
+        if row < 0 or row >= len(lines):
+            continue
+
+        line = lines[row]
+        call_col = max(0, min(col, len(line)))
+        seg = line[call_col:]
+        m = TASK_CALL_RE.search(seg)
+        if m:
+            call_col += m.start()
+        else:
+            m = TASK_CALL_RE.search(line)
+            if not m:
+                continue
+            call_col = m.start()
+
+        key = (abs_path, row, call_col)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        call_start = offs[row] + call_col
+        call_end = parse_call_end(text, call_start)
+        if call_end is None:
+            continue
+
+        chain = chained_lifecycle(text, call_end)
+        if chain in ("resume", "cancel"):
+            continue
+
+        sample = (rel(abs_path), row + 1, code_sample(lines_no_nl, row))
+        var_expr = extract_assigned_var(lines_no_nl, row, call_col)
+        if not var_expr:
+            if has_return_before(lines_no_nl, row, call_col):
+                continue
+            add_finding(
+                out,
+                "ubs.correlation.urlsession.unassigned-no-resume",
+                "warning",
+                "URLSession task created but never resumed (result unused)",
+                "Call .resume() on the returned task (or return/store it for the caller to resume).",
+                sample,
+            )
+            continue
+
+        vregex = var_expr_regex(var_expr)
+        var_base = (var_expr.split(".")[-1] if var_expr else "").strip()
+        if "." in var_expr:
+            assign_re = re.compile(rf"{vregex}\s*=")
+        else:
+            base = re.escape(var_base)
+            assign_re = re.compile(rf"(?:\b(?:let|var)\s+{base}\b|\b{base}\b\s*=)")
+        resume_re = re.compile(rf"\b{vregex}\s*(?:[!?]\s*)?\.\s*resume\s*\(")
+        cancel_re = re.compile(rf"\b{vregex}\s*(?:[!?]\s*)?\.\s*cancel\s*\(")
+        ret_re = re.compile(rf"\breturn\b[^\n]*{vregex}")
+
+        region = text[call_end:]
+        mnext = assign_re.search(region)
+        region2 = region[: mnext.start()] if mnext else region
+
+        if ret_re.search(region2):
+            continue
+        if resume_re.search(region2):
+            continue
+        if cancel_re.search(region2):
+            add_finding(
+                out,
+                "ubs.correlation.urlsession.assigned-cancel-no-resume",
+                "info",
+                "URLSession task cancelled without resume()",
+                "If intentional, ignore; otherwise call resume() to start the request (or return it).",
+                sample,
+            )
+            continue
+
+        add_finding(
+            out,
+            "ubs.correlation.urlsession.assigned-no-resume",
+            "warning",
+            "URLSession task assigned but no resume() found (in-file)",
+            "Call task.resume() after creation, or return/store the task and resume later (ensure lifecycle management).",
+            sample,
+        )
 
 for fid, data in out.items():
- title = data["title"].replace("\t"," ").strip()
- desc = data["desc"].replace("\t"," ").strip()
- sev = data["severity"].replace("\t"," ").strip()
- print(f"__FINDING__\t{sev}\t{data['count']}\t{fid}\t{title}\t{desc}")
- for f,ln,code in data["samples"]:
-  print(f"__SAMPLE__\t{f}\t{ln}\t{code}")
+    title = data["title"].replace("\t", " ").strip()
+    desc = data["desc"].replace("\t", " ").strip()
+    sev = data["severity"].replace("\t", " ").strip()
+    print(f"__FINDING__\t{sev}\t{data['count']}\t{fid}\t{title}\t{desc}")
+    for f, ln, code in data["samples"]:
+        print(f"__SAMPLE__\t{f}\t{ln}\t{code}")
 PY
+ then
+  local err_preview
+  err_preview="$(head -n 1 "$err_file" 2>/dev/null || true)"
+  [[ -z "$err_preview" ]] && err_preview="Run: python3 - \"$AG_FILE_INDEX_FILE\" \"$PROJECT_DIR\" \"$DETAIL_LIMIT\""
+  print_finding "info" 0 "Correlation skipped" "$err_preview"
+  return 0
+ fi
 
  local any=0
- while IFS=$'\t' read -r tag a b c d; do
+ while IFS=$'\t' read -r tag a b c d e; do
   case "$tag" in
    __FINDING__)
     any=1
@@ -1148,7 +1312,7 @@ PY
   esac
  done <"$tmp"
 
- [[ "$any" -eq 0 ]] && print_finding "good" "All URLSession tasks appear to be missing resume()/cancel() in-file"
+ [[ "$any" -eq 0 ]] && print_finding "good" "All URLSession tasks appear to be resumed/cancelled or returned"
  return 0
 }
 
@@ -1156,8 +1320,13 @@ run_resource_lifecycle_checks(){
   print_subheader "Resource lifecycle correlation (Swift)"
   local helper="$SCRIPT_DIR/helpers/resource_lifecycle_swift.py"
   if [[ -f "$helper" ]] && command -v python3 >/dev/null 2>&1; then
-    local output
-    if output=$(python3 "$helper" "$PROJECT_DIR" 2>/dev/null); then
+    local output helper_err helper_err_tmp helper_err_preview
+    helper_err="/dev/null"
+    if helper_err_tmp="$(mktemp_file ubs_rlc_swift_err 2>/dev/null)"; then
+      helper_err="$helper_err_tmp"
+      cleanup_add "$helper_err"
+    fi
+    if output=$(python3 "$helper" "$PROJECT_DIR" 2>"$helper_err"); then
       if [[ -z "$output" ]]; then
         print_finding "good" "All tracked resource acquisitions show matching cleanup or usage"
       else
@@ -1173,39 +1342,51 @@ run_resource_lifecycle_checks(){
       fi
       return 0
     else
-      print_finding "info" 0 "AST helper failed" "See stderr for details"
+      helper_err_preview="$(head -n 1 "$helper_err" 2>/dev/null || true)"
+      [[ -z "$helper_err_preview" ]] && helper_err_preview="Run: python3 $helper $PROJECT_DIR"
+      print_finding "info" 0 "AST helper failed" "$helper_err_preview"
     fi
   fi
 
   if command -v python3 >/dev/null 2>&1; then
-  local tmp_py; tmp_py="$(mktemp_file ubs_rlc_py)"
-  cleanup_add "$tmp_py"
-      cat >"$tmp_py" <<'PY'
+    local tmp_py err_file out err_preview
+    tmp_py="$(mktemp_file ubs_rlc_py)"
+    cleanup_add "$tmp_py"
+    err_file="$(mktemp_file ubs_rlc_py_err)"
+    cleanup_add "$err_file"
+
+    cat >"$tmp_py" <<'PY'
 import os, re, sys
-root=sys.argv[1]
-rules={
- 'timer':(re.compile(r'Timer\.scheduledTimer'),re.compile(r'\.invalidate\s*\(')),
- 'urlsession_task':(re.compile(r'\.(dataTask|uploadTask|downloadTask)\s*\('), re.compile(r'\.(resume|cancel)\s*\(')),
- 'notification_token':(re.compile(r'NotificationCenter\.default\.addObserver\([^)]*(using:\s*\{|forName:)'), re.compile(r'removeObserver\s*\(')),
- 'file_handle':(re.compile(r'FileHandle\s*\(\s*for(Reading|Writing|Updating)(From|To|AtPath)\s*:'), re.compile(r'\.close\s*\(')),
- 'combine_sink':(re.compile(r'\.sink\s*\('), re.compile(r'\.store\s*\(\s*in:\s*&')),
- 'dispatch_source':(re.compile(r'DispatchSource\.(makeTimerSource|makeFileSystemObjectSource|makeReadSource|makeWriteSource)'), re.compile(r'(\.cancel|\.(resume))\s*\(')),
- 'cadisplaylink':(re.compile(r'CADisplayLink\s*\('), re.compile(r'\.invalidate\s*\(')),
- 'kvo_observer':(re.compile(r'addObserver\([^)]*forKeyPath:'), re.compile(r'removeObserver\([^)]*forKeyPath:'))
+
+root = sys.argv[1]
+rules = {
+  "timer": (re.compile(r"Timer\.scheduledTimer"), re.compile(r"\.invalidate\s*\(")),
+  "urlsession_task": (re.compile(r"\.(dataTask|uploadTask|downloadTask)\s*\("), re.compile(r"\.(resume|cancel)\s*\(")),
+  "notification_token": (re.compile(r"NotificationCenter\.default\.addObserver\([^)]*(using:\s*\{|forName:)"), re.compile(r"removeObserver\s*\(")),
+  "file_handle": (re.compile(r"FileHandle\s*\(\s*for(Reading|Writing|Updating)(From|To|AtPath)\s*:"), re.compile(r"\.close\s*\(")),
+  "combine_sink": (re.compile(r"\.sink\s*\("), re.compile(r"\.store\s*\(\s*in:\s*&")),
+  "dispatch_source": (re.compile(r"DispatchSource\.(makeTimerSource|makeFileSystemObjectSource|makeReadSource|makeWriteSource)"), re.compile(r"(\.cancel|\.(resume))\s*\(")),
+  "cadisplaylink": (re.compile(r"CADisplayLink\s*\("), re.compile(r"\.invalidate\s*\(")),
+  "kvo_observer": (re.compile(r"addObserver\([^)]*forKeyPath:"), re.compile(r"removeObserver\([^)]*forKeyPath:")),
 }
-for dp,_,fs in os.walk(root):
+
+for dp, _, fs in os.walk(root):
   for fn in fs:
-    if not fn.endswith(('.swift','.mm','.m')): continue
-    p=os.path.join(dp,fn)
-  try: s=open(p,'r',encoding='utf-8',errors='ignore').read()
-    except: continue
-    for kind,(acq,rel) in rules.items():
-      ac=len(acq.findall(s)); rl=len(rel.findall(s))
-      if ac>rl:
+    if not fn.endswith((".swift", ".mm", ".m")):
+      continue
+    p = os.path.join(dp, fn)
+    try:
+      s = open(p, "r", encoding="utf-8", errors="ignore").read()
+    except Exception:
+      continue
+    for kind, (acq, rel) in rules.items():
+      ac = len(acq.findall(s))
+      rl = len(rel.findall(s))
+      if ac > rl:
         print(f"{p}\t{kind}\tacquire={ac} cleanup={rl}")
 PY
-      local out
-      out=$(python3 "$tmp_py" "$PROJECT_DIR" 2>/dev/null || true)
+
+    if out=$(python3 "$tmp_py" "$PROJECT_DIR" 2>"$err_file"); then
       if [[ -n "$out" ]]; then
         while IFS=$'\t' read -r location kind message; do
           [[ -z "$location" ]] && continue
@@ -1217,7 +1398,12 @@ PY
       else
         print_finding "good" "All tracked resource acquisitions show matching cleanups"
       fi
-  return 0
+      return 0
+    fi
+
+    err_preview="$(head -n 1 "$err_file" 2>/dev/null || true)"
+    [[ -z "$err_preview" ]] && err_preview="Run: python3 $tmp_py $PROJECT_DIR"
+    print_finding "info" 0 "Resource lifecycle fallback failed" "$err_preview"
   fi
 
  local rid header_shown=0

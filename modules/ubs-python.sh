@@ -488,8 +488,12 @@ run_resource_lifecycle_checks() {
   print_subheader "Resource lifecycle correlation"
   local helper="$SCRIPT_DIR/helpers/resource_lifecycle_py.py"
   if [[ -f "$helper" ]] && command -v python3 >/dev/null 2>&1; then
-    local output
-    if output=$(python3 "$helper" "$PROJECT_DIR" 2>/dev/null); then
+    local output helper_err helper_err_preview helper_err_tmp
+    helper_err="/dev/null"
+    if helper_err_tmp="$(mktemp -t ubs-py-resource-lifecycle.XXXXXX 2>/dev/null || mktemp)"; then
+      helper_err="$helper_err_tmp"
+    fi
+    if output=$(python3 "$helper" "$PROJECT_DIR" 2>"$helper_err"); then
       if [[ -z "$output" ]]; then
         print_finding "good" "All tracked resource acquisitions have matching cleanups"
       else
@@ -503,9 +507,13 @@ run_resource_lifecycle_checks() {
           print_finding "$severity" 1 "$summary [$location]" "$detail"
         done <<<"$output"
       fi
+      [[ "$helper_err" != "/dev/null" ]] && rm -f "$helper_err" 2>/dev/null || true
       return
     else
-      print_finding "info" 0 "AST helper failed" "See stderr for details"
+      helper_err_preview="$(head -n 1 "$helper_err" 2>/dev/null || true)"
+      [[ -z "$helper_err_preview" ]] && helper_err_preview="Run: python3 $helper $PROJECT_DIR"
+      print_finding "info" 0 "AST helper failed" "$helper_err_preview"
+      [[ "$helper_err" != "/dev/null" ]] && rm -f "$helper_err" 2>/dev/null || true
     fi
   else
     if [[ ! -f "$helper" ]]; then

@@ -19,13 +19,13 @@ MODULE_PATH_TEMPLATE="$REPO_RAW/modules/ubs-%s.sh"
 # Known-good module digests (sha256) for supply-chain verification.
 declare -A MODULE_CHECKSUMS=(
   [cpp]='b451503aa899e0b79aa6328eb0af11730ce0c4b5e95e5db4839293adc64c7e93'
-  [golang]='5b57e9880a9ce20726fda62ff317d32d6972686fdc9ede68bfab133cae1d34be'
+  [golang]='bf4c50906986a001efed60a6ffdf36fff8478a64bc14959b13b49818c51b4dc9'
   [java]='4bd80dcf4a91f230038c97cf177610b3fa1481d9e9759cd134b15fe0510af22b'
   [js]='d0eb5bfc0b59111addd6eb6ef3b4d771d0317574519c461d4c7110261b94106c'
-  [python]='4413e8a0a91f379e4c91b5d4b8dc0ee3f97793818753c3e33971f5c3cb527e05'
+  [python]='a33c6564e613379e2a97238a5eee21412de610aedd546319bab563d61081c41e'
   [ruby]='3756886cfbb9c8838ef965dc0e323b878b2b6a707b4e58e4646039f25f680026'
   [rust]='e1502d38d4d2899a8a51397311b4026e5934f73e22ea28b9004556a8ec3ae620'
-  [swift]='b6918b42391ff54c9ee8166c23cf06ba77bb61168a439986e83c8b3332d828ca'
+  [swift]='ef5eeccc2dd45e7f43a21c7ec4ef2c69ae9e20ef104aec8d341835aa32c4a1ad'
 )
 
 # Pinned ast-grep release for tool-cache auto-provisioning (JS/TS accuracy).
