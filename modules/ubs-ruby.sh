@@ -267,10 +267,28 @@ print_finding() {
   esac
 }
 print_code_sample() { local file=$1; local line=$2; local code=$3; say "${GRAY}      $file:$line${RESET}"; say "${WHITE}      $code${RESET}"; }
+
+# Parse grep/rg output line handling Windows drive letters (C:/path...)
+# Sets: PARSED_FILE, PARSED_LINE, PARSED_CODE
+parse_grep_line() {
+  local rawline="$1"
+  PARSED_FILE="" PARSED_LINE="" PARSED_CODE=""
+  # Windows drive letter pattern first (C:/path:line:code), then Unix (/path:line:code)
+  if [[ "$rawline" =~ ^([A-Za-z]:.+):([0-9]+):(.*)$ ]] || [[ "$rawline" =~ ^(.+):([0-9]+):(.*)$ ]]; then
+    PARSED_FILE="${BASH_REMATCH[1]}"
+    PARSED_LINE="${BASH_REMATCH[2]}"
+    PARSED_CODE="${BASH_REMATCH[3]}"
+    return 0
+  fi
+  return 1
+}
+
 show_detailed_finding() {
   local pattern=$1; local limit=${2:-$DETAIL_LIMIT}; local printed=0
-  while IFS=: read -r file line code; do
-    print_code_sample "$file" "$line" "$code"; printed=$((printed+1))
+  while IFS= read -r rawline; do
+    [[ -z "$rawline" ]] && continue
+    parse_grep_line "$rawline" || continue
+    print_code_sample "$PARSED_FILE" "$PARSED_LINE" "$PARSED_CODE"; printed=$((printed+1))
     [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
   done < <("${GREP_RN[@]}" -e "$pattern" "$PROJECT_DIR" 2>/dev/null | head -n "$limit" || true) || true
 }

@@ -180,9 +180,9 @@ log_dry_run() {
 log_section() {
   local title="$1"
   echo ""
-  echo -e "${BOLD}${BLUE}╔═══════════════════════════════════════════════════${RESET}"
+  echo -e "${BOLD}${BLUE}╔═════════════════════════════════════════════════════╗${RESET}"
   printf "${BOLD}${BLUE}║ %-51s ║${RESET}\n" "$title"
-  echo -e "${BOLD}${BLUE}╚═══════════════════════════════════════════════════${RESET}"
+  echo -e "${BOLD}${BLUE}╚═════════════════════════════════════════════════════╝${RESET}"
 }
 
 record_session_fact() {
@@ -1303,8 +1303,10 @@ verify_installation() {
   # Test 4: Quick smoke test (must fail with detected bugs)
   echo ""
   log "Running smoke test..."
-  local test_file
-  test_file="$(mktemp_in_workdir "ubs-smoke.js.XXXXXX")"
+  local test_dir test_file
+  test_dir="$(mktemp -d -p "$WORKDIR" "ubs-smoke.XXXXXX" 2>/dev/null || mktemp -d "${WORKDIR}/ubs-smoke.XXXXXX")"
+  register_temp_path "$test_dir"
+  test_file="$test_dir/smoke.js"
   cat > "$test_file" << 'SMOKE'
 // Intentional bugs for smoke test
 const value = getUserValue();
@@ -1314,7 +1316,7 @@ if (value === NaN) {
 SMOKE
 
   if [ "$had_ubs" -eq 1 ]; then
-    if safe_timeout 10 ubs --fail-on-warning --ci --only=js "$test_file" >/dev/null 2>&1; then
+    if safe_timeout 10 ubs --fail-on-warning --ci --only=js "$test_dir" >/dev/null 2>&1; then
       warn "Smoke test FAILED - scanner did not flag known bugs (exit 0)"
     else
       success "Smoke test PASSED - scanner detects bugs (non-zero exit)"
@@ -1748,7 +1750,9 @@ diagnostic_check() {
     log "  Cursor: not configured"
   fi
 
-  if [ -f ".codex/rules" ] && grep -q "Ultimate Bug Scanner" ".codex/rules" 2>/dev/null; then
+  # Codex CLI may use .codex/rules as a file OR as a directory with files inside
+  if { [ -f ".codex/rules" ] && grep -q "Ultimate Bug Scanner" ".codex/rules" 2>/dev/null; } || \
+     { [ -d ".codex/rules" ] && grep -rq "Ultimate Bug Scanner" ".codex/rules" 2>/dev/null; }; then
     success "  Codex CLI rules configured"
   else
     log "  Codex: not configured"
@@ -3069,8 +3073,19 @@ append_quick_reference_block() {
     return 0
   fi
 
+  # Handle directory-based rule storage (e.g., Codex CLI uses .codex/rules/ directory)
+  # For directories: check recursively if marker exists anywhere inside, then write to ubs.md
+  if [ -d "$destination" ]; then
+    if grep -rqF "$marker" "$destination" 2>/dev/null; then
+      [ -n "$friendly_name" ] && log "${friendly_name} already contains UBS quick reference"
+      return 0
+    fi
+    destination="$destination/ubs.md"
+  fi
+
   mkdir -p "$(dirname "$destination")"
 
+  # For file-based storage: check if marker exists in the specific target file
   if [ -f "$destination" ] && grep -qF "$marker" "$destination" 2>/dev/null; then
     [ -n "$friendly_name" ] && log "${friendly_name} already contains UBS quick reference"
     return 0
@@ -3586,29 +3601,13 @@ install_dir="$(determine_install_dir)"
 
 run_post_install_doctor "$install_dir/$INSTALL_NAME" "$install_dir"
 
-# If checksum issues were auto-fixed, rerun the installer once to ensure a clean flow
-if [ "$RERUN_AFTER_FIX" -eq 1 ] && [ "${UBS_INSTALL_RERUN_DONE:-0}" -eq 0 ]; then
-  log "Re-running installer after checksum auto-fix to verify clean state..."
-  release_lock
-  UBS_INSTALL_RERUN_DONE=1
-  export UBS_INSTALL_RERUN_DONE
-
-  # Prefer re-exec'ing the current script file when available
-  if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
-    exec "${BASH_SOURCE[0]}" "${ORIGINAL_ARGS[@]}"
+# If checksum issues were auto-fixed, verify doctor now passes (no full installer re-run needed)
+if [ "$RERUN_AFTER_FIX" -eq 1 ]; then
+  log "Verifying doctor passes after checksum fix..."
+  if NO_COLOR=1 "$install_dir/$INSTALL_NAME" doctor >/dev/null 2>&1; then
+    success "Doctor verification passed after auto-fix"
   else
-    # Piped install: fetch a fresh copy and re-run with original args
-    tmp_rerun="$(mktemp -t ubs-install-rerun.XXXXXX.sh)" || {
-      warn "Could not create temp file for rerun; skipping auto-rerun"
-      exit 0
-    }
-    if curl -fsSL "${REPO_URL}/install.sh" -o "$tmp_rerun"; then
-      chmod +x "$tmp_rerun" 2>/dev/null || true
-      exec "$tmp_rerun" "${ORIGINAL_ARGS[@]}"
-    else
-      warn "Failed to download installer for rerun; skipping auto-rerun"
-      exit 0
-    fi
+    warn "Doctor still reports issues after auto-fix. Run 'ubs doctor' to investigate."
   fi
 fi
 

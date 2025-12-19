@@ -384,11 +384,28 @@ print_code_sample() {
   say "${WHITE}      $code${RESET}"
 }
 
+# Parse grep/rg output line handling Windows drive letters (C:/path...)
+# Sets: PARSED_FILE, PARSED_LINE, PARSED_CODE
+parse_grep_line() {
+  local rawline="$1"
+  PARSED_FILE="" PARSED_LINE="" PARSED_CODE=""
+  # Windows drive letter pattern first (C:/path:line:code), then Unix (/path:line:code)
+  if [[ "$rawline" =~ ^([A-Za-z]:.+):([0-9]+):(.*)$ ]] || [[ "$rawline" =~ ^(.+):([0-9]+):(.*)$ ]]; then
+    PARSED_FILE="${BASH_REMATCH[1]}"
+    PARSED_LINE="${BASH_REMATCH[2]}"
+    PARSED_CODE="${BASH_REMATCH[3]}"
+    return 0
+  fi
+  return 1
+}
+
 show_detailed_finding() {
   local pattern=$1; local limit=${2:-$DETAIL_LIMIT}; local printed=0
-  while IFS=: read -r file line code; do
-    [[ -z "$file" || -z "$line" ]] && continue
-    print_code_sample "$file" "$line" "$code"; printed=$((printed+1))
+  while IFS= read -r rawline; do
+    [[ -z "$rawline" ]] && continue
+    parse_grep_line "$rawline" || continue
+    [[ -z "$PARSED_FILE" || -z "$PARSED_LINE" ]] && continue
+    print_code_sample "$PARSED_FILE" "$PARSED_LINE" "$PARSED_CODE"; printed=$((printed+1))
     [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
   done < <("${GREP_RN[@]}" -e "$pattern" "$PROJECT_DIR" 2>/dev/null | head -n "$limit" || true) || true
 }
@@ -796,8 +813,18 @@ PY
 show_ast_examples() {
   local pattern=$1; local limit=${2:-$DETAIL_LIMIT}; local printed=0
   if [[ "$HAS_AST_GREP" -eq 1 ]]; then
-    while IFS=: read -r file line col rest; do
-      local code=""
+    while IFS= read -r rawline; do
+      [[ -z "$rawline" ]] && continue
+      # Parse ast-grep output: file:line:col:rest (Windows: C:/path:line:col:rest)
+      local file line col rest code=""
+      if [[ "$rawline" =~ ^([A-Za-z]:.+):([0-9]+):([0-9]+):(.*)$ ]] || [[ "$rawline" =~ ^(.+):([0-9]+):([0-9]+):(.*)$ ]]; then
+        file="${BASH_REMATCH[1]}"
+        line="${BASH_REMATCH[2]}"
+        col="${BASH_REMATCH[3]}"
+        rest="${BASH_REMATCH[4]}"
+      else
+        continue
+      fi
       if [[ -f "$file" && -n "$line" ]]; then code="$(sed -n "${line}p" "$file" | sed $'s/\t/  /g')"; fi
       print_code_sample "$file" "$line" "${code:-$rest}"
       printed=$((printed+1)); [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break

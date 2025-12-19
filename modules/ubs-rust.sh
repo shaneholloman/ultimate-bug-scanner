@@ -624,10 +624,27 @@ print_code_sample() {
   say "${WHITE}      $code${RESET}"
 }
 
+# Parse grep/rg output line handling Windows drive letters (C:/path...)
+# Sets: PARSED_FILE, PARSED_LINE, PARSED_CODE
+parse_grep_line() {
+  local rawline="$1"
+  PARSED_FILE="" PARSED_LINE="" PARSED_CODE=""
+  # Windows drive letter pattern first (C:/path:line:code), then Unix (/path:line:code)
+  if [[ "$rawline" =~ ^([A-Za-z]:.+):([0-9]+):(.*)$ ]] || [[ "$rawline" =~ ^(.+):([0-9]+):(.*)$ ]]; then
+    PARSED_FILE="${BASH_REMATCH[1]}"
+    PARSED_LINE="${BASH_REMATCH[2]}"
+    PARSED_CODE="${BASH_REMATCH[3]}"
+    return 0
+  fi
+  return 1
+}
+
 show_detailed_finding() {
   local pattern=$1; local limit=${2:-$DETAIL_LIMIT}; local printed=0
-  while IFS=: read -r file line code; do
-    print_code_sample "$file" "$line" "$code"; printed=$((printed+1))
+  while IFS= read -r rawline; do
+    [[ -z "$rawline" ]] && continue
+    parse_grep_line "$rawline" || continue
+    print_code_sample "$PARSED_FILE" "$PARSED_LINE" "$PARSED_CODE"; printed=$((printed+1))
     [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
   done < <("${GREP_RN[@]}" -e "$pattern" "$PROJECT_DIR" 2>/dev/null | head -n "$limit" || true) || true
 }
@@ -733,8 +750,18 @@ PY2
 show_ast_examples() {
   local pattern=$1; local limit=${2:-$DETAIL_LIMIT}; local printed=0
   if [[ "$HAS_AST_GREP" -eq 1 ]]; then
-    while IFS=: read -r file line col rest; do
-      local code=""
+    while IFS= read -r rawline; do
+      [[ -z "$rawline" ]] && continue
+      # Parse ast-grep output: file:line:col:rest (Windows: C:/path:line:col:rest)
+      local file line col rest code=""
+      if [[ "$rawline" =~ ^([A-Za-z]:.+):([0-9]+):([0-9]+):(.*)$ ]] || [[ "$rawline" =~ ^(.+):([0-9]+):([0-9]+):(.*)$ ]]; then
+        file="${BASH_REMATCH[1]}"
+        line="${BASH_REMATCH[2]}"
+        col="${BASH_REMATCH[3]}"
+        rest="${BASH_REMATCH[4]}"
+      else
+        continue
+      fi
       if [[ -f "$file" && -n "$line" ]]; then code="$(sed -n "${line}p" "$file" | sed $'s/\t/  /g')"; fi
       print_code_sample "$file" "$line" "${code:-$rest}"; printed=$((printed+1)); [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
     done < <( ( set +o pipefail; "${AST_GREP_CMD[@]}" --lang rust --pattern "$pattern" -n "$PROJECT_DIR" 2>/dev/null || true ) | head -n "$limit" )
@@ -1912,7 +1939,7 @@ print_category "Detects: TLS verification disabled, weak hash algos, HTTP URLs, 
   "Security misconfigurations can lead to credential leaks and MITM attacks"
 
 print_subheader "Weak hash algorithms (MD5/SHA1)"
-weak_hash=$(( $(ast_search 'md5::$F($$)' || echo 0) + $(ast_search 'sha1::$F($$)' || echo 0) + $("${GREP_RN[@]}" -e "SHA1_FOR_LEGACY_USE_ONLY|MessageDigest::(md5|sha1)\("(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
+weak_hash=$(( $(ast_search 'md5::$F($$)' || echo 0) + $(ast_search 'sha1::$F($$)' || echo 0) + $("${GREP_RN[@]}" -e "SHA1_FOR_LEGACY_USE_ONLY|MessageDigest::(md5|sha1)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
 if [ "$weak_hash" -gt 0 ]; then print_finding "warning" "$weak_hash" "Weak hash algorithm usage (MD5/SHA1)"; show_detailed_finding "md5::|sha1::|SHA1_FOR_LEGACY_USE_ONLY|MessageDigest::(md5|sha1)" 5; add_finding "warning" "$weak_hash" "Weak hash algorithm usage (MD5/SHA1)" "" "${CATEGORY_NAME[8]}" "$(collect_samples_rg "md5::|sha1::|SHA1_FOR_LEGACY_USE_ONLY|MessageDigest::(md5|sha1)" 5)"; else print_finding "good" "No MD5/SHA1 found"; fi
 
 print_subheader "TLS verification disabled"
@@ -2031,6 +2058,7 @@ if [[ "$RUN_CARGO" -eq 1 && "$HAS_CARGO" -eq 1 ]]; then
   fi
 else
   print_finding "info" 1 "cargo not available or disabled; style/lints skipped"
+fi
 fi
 fi
 
@@ -2208,7 +2236,7 @@ print_category "Detects: locks acquired in async fns and potentially held across
   "Holding locks across await can deadlock, starve tasks, and cause latency spikes; std::sync locks can block executor threads"
 
 print_subheader "std::sync lock usage inside async fn (blocking risk)"
-std_lock_async=$(( $(ast_search 'async fn $N($$) { $$ $M.lock() $$ }' || echo 0) + $(ast_search 'async fn $N($$) { $$ $M.read() $$ }' || echo 0) + $(ast_search 'async fn $N($$) { $$ $M.write() $$ }' || echo 0) + $("${GREP_RN[@]}" -e "async\s+fn[^{]*\{[^}]*\.(lock|read|write)\("(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
+std_lock_async=$(( $(ast_search 'async fn $N($$) { $$ $M.lock() $$ }' || echo 0) + $(ast_search 'async fn $N($$) { $$ $M.read() $$ }' || echo 0) + $(ast_search 'async fn $N($$) { $$ $M.write() $$ }' || echo 0) + $("${GREP_RN[@]}" -e "async\s+fn[^{]*\{[^}]*\.(lock|read|write)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
 if [ "$std_lock_async" -gt 0 ]; then
   print_finding "warning" "$std_lock_async" "Blocking std::sync locks in async functions" "Prefer tokio::sync locks or spawn_blocking; avoid blocking executor threads"
   add_finding "warning" "$std_lock_async" "Blocking std::sync locks in async functions" "Prefer tokio::sync locks or spawn_blocking; avoid blocking executor threads" "${CATEGORY_NAME[20]}" "$(collect_samples_rg "async\s+fn[^{]*\{[^}]*\.(lock|read|write)\(" 3)"
@@ -2257,7 +2285,7 @@ fi
 
 print_subheader "panic!/unwrap/expect inside Drop"
 drop_panic=$(( $(ast_search 'panic!($$)' || echo 0) + $("${GREP_RN[@]}" -e "impl\s+Drop\s+for|fn\s+drop\(&mut\s+self\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
-drop_panic_hits=$("${GREP_RN[@]}" -e "fn\s+drop\(&mut\s+self\)|impl\s+Drop\s+for" "$PROJECT_DIR" 2>/dev/null | (grep -A25 -E "panic!\(|\.(unwrap|expect)\("(" || true) | (grep -Ec "panic!\(|\.(unwrap|expect)\("(" || true))
+drop_panic_hits=$("${GREP_RN[@]}" -e "fn\s+drop\(&mut\s+self\)|impl\s+Drop\s+for" "$PROJECT_DIR" 2>/dev/null | (grep -A25 -E "panic!\(|\.(unwrap|expect)\(" || true) | (grep -Ec "panic!\(|\.(unwrap|expect)\(" || true))
 drop_panic_hits=$(printf '%s\n' "${drop_panic_hits:-0}" | awk 'END{print $0+0}')
 if [ "$drop_panic_hits" -gt 0 ]; then
   print_finding "warning" "$drop_panic_hits" "Potential panics inside Drop implementations" "Panics during Drop + unwinding can abort; avoid unwrap/expect/panic in destructors"
@@ -2284,7 +2312,7 @@ else
 fi
 
 print_subheader "try_into().unwrap()/expect() (panic on conversion failure)"
-try_into_unwrap=$(( $(ast_search '$X.try_into().unwrap()' || echo 0) + $(ast_search '$X.try_into().expect($MSG)' || echo 0) + $("${GREP_RN[@]}" -e "\.try_into\(\)\.(unwrap|expect)\("(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
+try_into_unwrap=$(( $(ast_search '$X.try_into().unwrap()' || echo 0) + $(ast_search '$X.try_into().expect($MSG)' || echo 0) + $("${GREP_RN[@]}" -e "\.try_into\(\)\.(unwrap|expect)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
 if [ "$try_into_unwrap" -gt 0 ]; then
   print_finding "warning" "$try_into_unwrap" "try_into().unwrap()/expect() present" "Handle conversion errors explicitly; panics can be input-dependent"
   add_finding "warning" "$try_into_unwrap" "try_into().unwrap()/expect() present" "Handle conversion errors explicitly; panics can be input-dependent" "${CATEGORY_NAME[22]}" "$(collect_samples_rg "\.try_into\(\)\.(unwrap|expect)\(" 3)"
@@ -2300,21 +2328,21 @@ print_category "Detects: parse/from_str/env-var unwraps, decode unwraps, missing
   "Parsing and decoding failures often happen in prod on edge inputs; unwrap/expect turns them into panics"
 
 print_subheader "parse::<T>().unwrap()/expect()"
-parse_unwrap=$(( $(ast_search '$S.parse::<$T>().unwrap()' || echo 0) + $(ast_search '$S.parse::<$T>().expect($MSG)' || echo 0) + $("${GREP_RN[@]}" -e "\.parse::<[^>]+>\(\)\.(unwrap|expect)\("(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
+parse_unwrap=$(( $(ast_search '$S.parse::<$T>().unwrap()' || echo 0) + $(ast_search '$S.parse::<$T>().expect($MSG)' || echo 0) + $("${GREP_RN[@]}" -e "\.parse::<[^>]+>\(\)\.(unwrap|expect)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
 if [ "$parse_unwrap" -gt 0 ]; then
   print_finding "warning" "$parse_unwrap" "parse::<T>().unwrap()/expect() present" "Validate input or propagate errors with context"
   add_finding "warning" "$parse_unwrap" "parse::<T>().unwrap()/expect() present" "Validate input or propagate errors with context" "${CATEGORY_NAME[23]}" "$(collect_samples_rg "\.parse::<[^>]+>\(\)\.(unwrap|expect)\(" 3)"
 fi
 
 print_subheader "serde_json::from_str(...).unwrap()/expect()"
-serde_unwrap=$(( $(ast_search 'serde_json::from_str($S).unwrap()' || echo 0) + $(ast_search 'serde_json::from_str($S).expect($MSG)' || echo 0) + $("${GREP_RN[@]}" -e "serde_json::from_str\([^)]*\)\.(unwrap|expect)\("(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
+serde_unwrap=$(( $(ast_search 'serde_json::from_str($S).unwrap()' || echo 0) + $(ast_search 'serde_json::from_str($S).expect($MSG)' || echo 0) + $("${GREP_RN[@]}" -e "serde_json::from_str\([^)]*\)\.(unwrap|expect)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
 if [ "$serde_unwrap" -gt 0 ]; then
   print_finding "warning" "$serde_unwrap" "serde_json::from_str(...).unwrap()/expect()" "Add context, validation, and schema checks; avoid panics on malformed JSON"
   add_finding "warning" "$serde_unwrap" "serde_json::from_str(...).unwrap()/expect()" "Add context, validation, and schema checks; avoid panics on malformed JSON" "${CATEGORY_NAME[23]}" "$(collect_samples_rg "serde_json::from_str\([^)]*\)\.(unwrap|expect)\(" 3)"
 fi
 
 print_subheader "std::env::var(...).unwrap()/expect()"
-env_unwrap=$(( $(ast_search 'std::env::var($K).unwrap()' || echo 0) + $(ast_search 'std::env::var($K).expect($MSG)' || echo 0) + $("${GREP_RN[@]}" -e "std::env::var\([^)]*\)\.(unwrap|expect)\("(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
+env_unwrap=$(( $(ast_search 'std::env::var($K).unwrap()' || echo 0) + $(ast_search 'std::env::var($K).expect($MSG)' || echo 0) + $("${GREP_RN[@]}" -e "std::env::var\([^)]*\)\.(unwrap|expect)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
 if [ "$env_unwrap" -gt 0 ]; then
   print_finding "warning" "$env_unwrap" "env::var(...).unwrap()/expect()" "Handle missing/invalid env vars with defaults or clear error propagation"
   add_finding "warning" "$env_unwrap" "env::var(...).unwrap()/expect()" "Handle missing/invalid env vars with defaults or clear error propagation" "${CATEGORY_NAME[23]}" "$(collect_samples_rg "std::env::var\([^)]*\)\.(unwrap|expect)\(" 3)"

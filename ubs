@@ -18,14 +18,14 @@ MODULE_PATH_TEMPLATE="$REPO_RAW/modules/ubs-%s.sh"
 
 # Known-good module digests (sha256) for supply-chain verification.
 declare -A MODULE_CHECKSUMS=(
-  [cpp]='b451503aa899e0b79aa6328eb0af11730ce0c4b5e95e5db4839293adc64c7e93'
-  [golang]='bf4c50906986a001efed60a6ffdf36fff8478a64bc14959b13b49818c51b4dc9'
-  [java]='4bd80dcf4a91f230038c97cf177610b3fa1481d9e9759cd134b15fe0510af22b'
-  [js]='d04861845e0e3fee32a8096cc9a6b024d8a3568f8b187c66b456d9c3ab92f5b7'
-  [python]='a33c6564e613379e2a97238a5eee21412de610aedd546319bab563d61081c41e'
-  [ruby]='3756886cfbb9c8838ef965dc0e323b878b2b6a707b4e58e4646039f25f680026'
-  [rust]='e1502d38d4d2899a8a51397311b4026e5934f73e22ea28b9004556a8ec3ae620'
-  [swift]='ef5eeccc2dd45e7f43a21c7ec4ef2c69ae9e20ef104aec8d341835aa32c4a1ad'
+  [cpp]='2a3e1b32e010a0e6ff290ffee9c7a7ff6395d73f83711137b46299e8bc699be2'
+  [golang]='a7d30e568b7cdb45f7f84431d7a4abda04cee336a0cce5e166af9f5f0031e2f5'
+  [java]='c7888dae1c2ef47eb24ecce7fb9cf7a684abdd46021688d99f3df99545ac7906'
+  [js]='6449b4f2e0b6a4f3fc40376b1c41e29d65cc94e7263959e0db4546eb6fe6e8d2'
+  [python]='f025705876bc43369da75cba76467e5e1c67ddf46271a781714d3bd6b51e6fd7'
+  [ruby]='16a77ca502bf2272b79e78fcbb00a54b3c396f2a11fdd31d756502360917cdda'
+  [rust]='c371c761a632c478b827bc259498145f8cf6ff55d8cb06360d5732c1e272e467'
+  [swift]='0a3c0f472482e47e9c2c740f911085e3bd58044a3f85bbcdee16a6676d1f914a'
 )
 
 # Pinned ast-grep release for tool-cache auto-provisioning (JS/TS accuracy).
@@ -1146,28 +1146,107 @@ run_doctor(){
 apply_ignore_filters(){
   [[ -n "$GLOBAL_EXCLUDE_PATTERNS" ]] || return 0
   [[ -d "$SOURCE_PROJECT_DIR" ]] || return 0
-  if ! need_cmd rsync; then
-    say "${YELLOW}${WARN}${RESET} rsync not available; .ubsignore entries will be advisory only"
-    return 0
-  fi
+
   local dest="$TMPDIR_RUN/scan"
   rm -rf "$dest" 2>/dev/null || true
   ensure_dir "$dest"
-  local -a patterns args
+  local -a patterns
   IFS=',' read -r -a patterns <<<"$GLOBAL_EXCLUDE_PATTERNS"
-  args=(-a --delete)
-  for pat in "${patterns[@]}"; do
-    [[ -z "$pat" ]] && continue
-    args+=( "--exclude=$pat" )
-  done
-  if rsync "${args[@]}" "$SOURCE_PROJECT_DIR"/ "$dest"/ >/dev/null 2>&1; then
-    FILTERED_PROJECT_DIR="$dest"
-    PROJECT_DIR="$FILTERED_PROJECT_DIR"
-    say "${DIM}${INFO}${RESET} Created filtered scan workspace at ${FILTERED_PROJECT_DIR}"
-  else
-    say "${YELLOW}${WARN}${RESET} Failed to apply ignore filters; scanning original tree"
-    rm -rf "$dest" || true
+
+  # Helper: check if destination has at least one file (copy succeeded meaningfully)
+  dest_has_files() {
+    [[ -n "$(find "$dest" -type f 2>/dev/null | head -n 1)" ]]
+  }
+
+  # Try rsync first (fastest and most reliable)
+  if need_cmd rsync; then
+    local -a args=(-a --delete)
+    for pat in "${patterns[@]}"; do
+      [[ -z "$pat" ]] && continue
+      args+=( "--exclude=$pat" )
+    done
+    if rsync "${args[@]}" "$SOURCE_PROJECT_DIR"/ "$dest"/ >/dev/null 2>&1 && dest_has_files; then
+      FILTERED_PROJECT_DIR="$dest"
+      PROJECT_DIR="$FILTERED_PROJECT_DIR"
+      say "${DIM}${INFO}${RESET} Created filtered scan workspace at ${FILTERED_PROJECT_DIR}"
+      return 0
+    fi
+    # Rsync failed or produced empty result; clean up and try next method
+    rm -rf "$dest" 2>/dev/null || true
+    ensure_dir "$dest"
   fi
+
+  # Fallback: use tar with --exclude (commonly available on Windows via Git Bash/MSYS)
+  if need_cmd tar; then
+    local -a tar_excludes=()
+    for pat in "${patterns[@]}"; do
+      [[ -z "$pat" ]] && continue
+      tar_excludes+=( "--exclude=$pat" )
+    done
+    if (cd "$SOURCE_PROJECT_DIR" && tar cf - "${tar_excludes[@]}" . 2>/dev/null) | (cd "$dest" && tar xf - 2>/dev/null) && dest_has_files; then
+      FILTERED_PROJECT_DIR="$dest"
+      PROJECT_DIR="$FILTERED_PROJECT_DIR"
+      say "${DIM}${INFO}${RESET} Created filtered scan workspace at ${FILTERED_PROJECT_DIR} (tar fallback)"
+      return 0
+    fi
+    # Tar failed or produced empty result; clean up and try next method
+    rm -rf "$dest" 2>/dev/null || true
+    ensure_dir "$dest"
+  fi
+
+  # Python fallback (most reliable cross-platform)
+  if need_cmd python3; then
+    local patterns_json
+    patterns_json=$(printf '%s\n' "${patterns[@]}" | python3 -c "import sys, json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))" 2>/dev/null)
+    if [[ -n "$patterns_json" ]] && python3 - "$SOURCE_PROJECT_DIR" "$dest" "$patterns_json" <<'PY' 2>/dev/null
+import sys, os, shutil, json, fnmatch, pathlib
+
+src = pathlib.Path(sys.argv[1]).resolve()
+dst = pathlib.Path(sys.argv[2]).resolve()
+patterns = json.loads(sys.argv[3])
+
+def should_exclude(rel_path, name):
+    for pat in patterns:
+        if fnmatch.fnmatch(rel_path, pat) or fnmatch.fnmatch(name, pat):
+            return True
+        # Check path components
+        for part in pathlib.Path(rel_path).parts:
+            if fnmatch.fnmatch(part, pat):
+                return True
+    return False
+
+for root, dirs, files in os.walk(src, topdown=True):
+    root_path = pathlib.Path(root)
+    rel_root = root_path.relative_to(src)
+    dst_root = dst / rel_root
+
+    # Filter directories (modifying dirs in-place prunes traversal)
+    dirs[:] = [d for d in dirs if not should_exclude(str(rel_root / d), d)]
+
+    # Create destination directory
+    dst_root.mkdir(parents=True, exist_ok=True)
+
+    # Copy files that aren't excluded
+    for f in files:
+        rel_file = str(rel_root / f) if str(rel_root) != '.' else f
+        if not should_exclude(rel_file, f):
+            try:
+                shutil.copy2(root_path / f, dst_root / f)
+            except (OSError, shutil.Error):
+                pass  # Skip files that can't be copied
+PY
+    then
+      if dest_has_files; then
+        FILTERED_PROJECT_DIR="$dest"
+        PROJECT_DIR="$FILTERED_PROJECT_DIR"
+        say "${DIM}${INFO}${RESET} Created filtered scan workspace at ${FILTERED_PROJECT_DIR} (python fallback)"
+        return 0
+      fi
+    fi
+  fi
+
+  say "${YELLOW}${WARN}${RESET} Failed to apply ignore filters; scanning original tree"
+  rm -rf "$dest" 2>/dev/null || true
 }
 
 restore_original_paths(){

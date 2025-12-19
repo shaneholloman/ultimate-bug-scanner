@@ -541,10 +541,27 @@ print_code_sample() {
   say "${WHITE}      $code${RESET}"
 }
 
+# Parse grep/rg output line handling Windows drive letters (C:/path...)
+# Sets: PARSED_FILE, PARSED_LINE, PARSED_CODE
+parse_grep_line() {
+  local rawline="$1"
+  PARSED_FILE="" PARSED_LINE="" PARSED_CODE=""
+  # Windows drive letter pattern first (C:/path:line:code), then Unix (/path:line:code)
+  if [[ "$rawline" =~ ^([A-Za-z]:.+):([0-9]+):(.*)$ ]] || [[ "$rawline" =~ ^(.+):([0-9]+):(.*)$ ]]; then
+    PARSED_FILE="${BASH_REMATCH[1]}"
+    PARSED_LINE="${BASH_REMATCH[2]}"
+    PARSED_CODE="${BASH_REMATCH[3]}"
+    return 0
+  fi
+  return 1
+}
+
 show_detailed_finding() {
   local pattern=$1; local limit=${2:-$DETAIL_LIMIT}; local printed=0
-  while IFS=: read -r file line code; do
-    print_code_sample "$file" "$line" "$code"; printed=$((printed+1))
+  while IFS= read -r rawline; do
+    [[ -z "$rawline" ]] && continue
+    parse_grep_line "$rawline" || continue
+    print_code_sample "$PARSED_FILE" "$PARSED_LINE" "$PARSED_CODE"; printed=$((printed+1))
     [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
   done < <("${GREP_RN[@]}" -e "$pattern" "$PROJECT_DIR" 2>/dev/null | head -n "$limit" || true) || true
 }
@@ -564,9 +581,11 @@ show_ast_detailed_patterns() {
   [[ "$HAS_AST_GREP" -eq 1 ]] || return 1
   local printed=0 pattern
   for pattern in "$@"; do
-    while IFS=: read -r file line code; do
-      [[ -n "$file" && -n "$line" ]] || continue
-      print_code_sample "$file" "$line" "$code"
+    while IFS= read -r rawline; do
+      [[ -z "$rawline" ]] && continue
+      parse_grep_line "$rawline" || continue
+      [[ -n "$PARSED_FILE" && -n "$PARSED_LINE" ]] || continue
+      print_code_sample "$PARSED_FILE" "$PARSED_LINE" "$PARSED_CODE"
       printed=$((printed + 1))
       [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && return 0
     done < <(( set +o pipefail; "${AST_GREP_CMD[@]}" --pattern "$pattern" "$PROJECT_DIR" 2>/dev/null || true ) | head -n "$limit" || true) || true
@@ -2649,9 +2668,11 @@ if [ "$count" -gt 0 ]; then
         [ "$sample_limit" -le 0 ] && break
       done <<<"$typeof_samples"
     else
-      while IFS=: read -r sample_path sample_line sample_text; do
-        [ -z "$sample_path" ] && continue
-        print_code_sample "$sample_path" "$sample_line" "$sample_text"
+      while IFS= read -r rawline; do
+        [ -z "$rawline" ] && continue
+        parse_grep_line "$rawline" || continue
+        [ -z "$PARSED_FILE" ] && continue
+        print_code_sample "$PARSED_FILE" "$PARSED_LINE" "$PARSED_CODE"
         sample_limit=$((sample_limit - 1))
         [ "$sample_limit" -le 0 ] && break
       done <<<"$typeof_samples"
