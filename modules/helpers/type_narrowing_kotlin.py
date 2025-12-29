@@ -180,7 +180,7 @@ def main() -> int:
         for line, col, message in issues:
             any_output = True
             print(f"{path}:{line}:{col}\t{message}")
-    return 0 if any_output or root.is_dir() else 0
+    return 0
 
 
 if __name__ == "__main__":
