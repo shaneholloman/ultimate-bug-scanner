@@ -1893,10 +1893,19 @@ YAML
 id: js.then-without-catch
 language: javascript
 rule:
-  pattern: $P.then($ARGS)
-  not:
-    has:
-      pattern: .catch($CATCH)
+  all:
+    - pattern: $P.then($ARGS)
+    - not:
+        has:
+          pattern: .catch($CATCH)
+    - not:
+        inside:
+          kind: try_statement
+          stopBy: end
+    - not:
+        inside:
+          kind: return_statement
+          stopBy: end
 severity: warning
 message: "Promise.then without catch/finally; handle rejections"
 YAML
@@ -1905,17 +1914,32 @@ YAML
 id: js.async.then-no-catch
 language: javascript
 rule:
-  pattern: $P.then($ARGS)
-  not:
-    has:
-      pattern: .catch($CATCH)
+  all:
+    - pattern: $P.then($ARGS)
+    - not:
+        has:
+          pattern: .catch($CATCH)
+    - not:
+        inside:
+          kind: try_statement
+          stopBy: end
+    - not:
+        inside:
+          kind: return_statement
+          stopBy: end
 severity: warning
 message: "Promise.then without .catch/.finally; add rejection handling"
 YAML
   cat >"$AST_RULE_DIR/async-promiseall-no-try.yml" <<'YAML'
 id: js.async.promiseall-no-try
 language: javascript
-rule: { pattern: await Promise.all($ARGS), not: { inside: { kind: try_statement } } }
+rule:
+  all:
+    - pattern: await Promise.all($ARGS)
+    - not:
+        inside:
+          kind: try_statement
+          stopBy: end
 severity: warning
 message: "await Promise.all() without try/catch; wrap to handle aggregate failures"
 YAML
@@ -1928,18 +1952,23 @@ rule:
     - not:
         inside:
           kind: try_statement
+          stopBy: end
     - not:
         inside:
           kind: return_statement
+          stopBy: end
     - not:
         inside:
           pattern: await Promise.all($ARGS)
+          stopBy: end
     - not:
         inside:
           pattern: await Promise.allSettled($ARGS)
+          stopBy: end
     - not:
         inside:
           pattern: await Promise.race($ARGS)
+          stopBy: end
 severity: warning
 message: "await without try/catch; wrap to handle rejections"
 YAML
@@ -2083,10 +2112,12 @@ YAML
 id: js.json-parse-without-try
 language: javascript
 rule:
-  pattern: JSON.parse($X)
-  not:
-    inside:
-      kind: try_statement
+  all:
+    - pattern: JSON.parse($X)
+    - not:
+        inside:
+          kind: try_statement
+          stopBy: end
 severity: warning
 message: "JSON.parse without try/catch; malformed input will throw"
 YAML
@@ -2108,6 +2139,7 @@ rule:
             - pattern: Promise.allSettled($$$)
             - kind: return_statement
             - kind: try_statement
+          stopBy: end
     - not:
         regex: "^(document\\.|window\\.|console\\.|JSON\\.|Math\\.|Date\\.|Array\\.|Object\\.|Set\\.|Map\\.|WeakMap\\.|WeakSet\\.|Intl\\.|Number\\.|String\\.|Boolean\\.|parse\\b|encode\\b|decode\\b|transform\\b|render\\b|append\\b|push\\b|join\\b|filter\\b|map\\b|reduce\\b|forEach\\b|has\\b|get\\b|set\\b)"
 severity: warning
@@ -2118,14 +2150,19 @@ YAML
 id: js.fetch.no-catch
 language: javascript
 rule:
-  pattern: fetch($ARGS)
-  not:
-    any:
-      - inside:
+  all:
+    - pattern: fetch($ARGS)
+    - not:
+        inside:
           kind: try_statement
-      - inside:
+          stopBy: end
+    - not:
+        inside:
           kind: return_statement
-      - pattern: .catch($CATCH)
+          stopBy: end
+    - not:
+        has:
+          pattern: .catch($CATCH)
 severity: warning
 message: "fetch() without catch/try; network failures will be unhandled"
 YAML
