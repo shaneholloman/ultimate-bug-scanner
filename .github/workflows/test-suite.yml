@@ -29,6 +29,31 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify checksums (early fail if stale)
+        run: |
+          echo "Verifying SHA256SUMS integrity..."
+          ACTUAL_UBS=$(sha256sum ubs | awk '{print $1}')
+          ACTUAL_INSTALL=$(sha256sum install.sh | awk '{print $1}')
+          EXPECTED_UBS=$(grep '  ubs$' SHA256SUMS | awk '{print $1}')
+          EXPECTED_INSTALL=$(grep '  install.sh$' SHA256SUMS | awk '{print $1}')
+
+          FAIL=0
+          if [[ "$ACTUAL_UBS" != "$EXPECTED_UBS" ]]; then
+            echo "::error::ubs checksum mismatch (expected $EXPECTED_UBS, got $ACTUAL_UBS)"
+            FAIL=1
+          fi
+          if [[ "$ACTUAL_INSTALL" != "$EXPECTED_INSTALL" ]]; then
+            echo "::error::install.sh checksum mismatch (expected $EXPECTED_INSTALL, got $ACTUAL_INSTALL)"
+            FAIL=1
+          fi
+
+          if [[ "$FAIL" -eq 1 ]]; then
+            echo ""
+            echo "SHA256SUMS is out of sync! Run: ./scripts/update_checksums.sh"
+            exit 1
+          fi
+          echo "All checksums verified!"
+
       - name: Set up uv with caching
         uses: astral-sh/setup-uv@v7
         with:
