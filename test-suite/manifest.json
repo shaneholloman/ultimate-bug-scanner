@@ -1775,7 +1775,7 @@
     },
     {
       "id": "toon-format-fallback",
-      "description": "TOON format falls back to JSON when toon binary is not available.",
+      "description": "TOON format falls back to JSON when toon-tr binary is not available.",
       "path": "test-suite/buggy",
       "language": "js",
       "tags": [
@@ -1797,7 +1797,7 @@
           "\"scanners\":"
         ],
         "require_substrings_stderr": [
-          "Warning: toon (TOON encoder) not found in PATH"
+          "Warning: toon-tr (TOON encoder) not found in PATH"
         ]
       }
     }

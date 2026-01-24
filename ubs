@@ -144,8 +144,9 @@ trap on_err ERR
 PROJECT_DIR="."
 # Format precedence: CLI > UBS_OUTPUT_FORMAT > TOON_DEFAULT_FORMAT > "text"
 FORMAT="${UBS_OUTPUT_FORMAT:-${TOON_DEFAULT_FORMAT:-text}}"  # text|json|jsonl|sarif|toon
-# TOON encoder binary (default: toon; set to path of toon_rust tr for better performance)
-TOON_BIN="${TOON_BIN:-toon}"
+# TOON encoder binary (default: toon-tr from toon_rust; never use the Node.js `toon` CLI)
+# Note: TOON_TR_PATH is supported for cross-tool consistency.
+TOON_BIN="${TOON_BIN:-${TOON_TR_PATH:-toon-tr}}"
 CI_MODE=0
 FAIL_ON_WARNING=0
 VERBOSE=0
@@ -239,8 +240,8 @@ Environment Variables:
   UBS_OUTPUT_FORMAT=FMT       Default output format (text|json|jsonl|sarif|toon)
                               Overridden by --format CLI flag
   TOON_DEFAULT_FORMAT=FMT     Global fallback format if UBS_OUTPUT_FORMAT not set
-  TOON_BIN=PATH               TOON encoder binary (default: toon)
-                              Set to toon_rust tr path for 10x faster encoding
+  TOON_BIN=PATH               TOON encoder binary (default: toon-tr)
+                              Set to a specific toon_rust encoder path if needed (do not use Node.js `toon`)
   UBS_MAX_DIR_SIZE_MB=N       Max directory size in MB before refusing to scan (default: 1000)
                               Set to 0 to disable this safety check
   UBS_REFUSE_HOME_ROOT=0|1    Whether to refuse scanning \$HOME or / (default: 1)
