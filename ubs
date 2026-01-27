@@ -44,6 +44,15 @@ declare -A HELPER_CHECKSUMS=(
 # ─────────────────────────────────────────────────────────────────────────────
 need_cmd(){ command -v "$1" >/dev/null 2>&1; }
 date_iso(){ if [[ "${CI_MODE:-0}" -eq 1 ]]; then date -u '+%Y-%m-%dT%H:%M:%SZ'; else date '+%Y-%m-%d %H:%M:%S'; fi; }
+json_escape(){
+  local s="${1:-}"
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  printf '%s' "$s"
+}
 
 HELPER_ASSETS=(
   "helpers/resource_lifecycle_py.py"
@@ -484,6 +493,16 @@ else
 fi
 SOURCE_PROJECT_DIR="$PROJECT_DIR"
 
+# Load ignore patterns early so size checks can respect .ubsignore
+if [[ "$MODE" != "doctor" && "$UPDATE_ONLY" -eq 0 ]]; then
+  if [[ -z "$IGNORE_FILE" && -f "$SOURCE_PROJECT_DIR/.ubsignore" ]]; then
+    IGNORE_FILE="$SOURCE_PROJECT_DIR/.ubsignore"
+  fi
+  if [[ -n "$IGNORE_FILE" ]]; then
+    load_ignore_patterns "$IGNORE_FILE"
+  fi
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Safety guards: prevent disk exhaustion when scanning large or sensitive dirs
 # Fixes GitHub issue #12: UBS copies entire scan directory to /tmp
@@ -506,24 +525,80 @@ if [[ "$REFUSE_HOME_ROOT" -eq 1 && -d "$SOURCE_PROJECT_DIR" ]]; then
   fi
 fi
 
-# Check 2: Refuse directories larger than MAX_DIR_SIZE_MB (unless set to 0)
-if [[ "$MAX_DIR_SIZE_MB" -gt 0 && -d "$SOURCE_PROJECT_DIR" ]]; then
-  dir_size_mb=0
+dir_size_mb_filtered(){
+  local dir="$1"
+  local patterns_csv="${2:-}"
+  local result=""
   if need_cmd du; then
-    # Use du -sm for POSIX-ish systems; fall back to du -sk on others
-    # Carefully validate output is numeric before using it
-    result=""
-    result=$(du -sm "$SOURCE_PROJECT_DIR" 2>/dev/null | cut -f1)
+    local -a du_args=()
+    if [[ -n "$patterns_csv" ]] && du --help 2>/dev/null | grep -q -- '--exclude'; then
+      local -a pats=()
+      IFS=',' read -r -a pats <<<"$patterns_csv"
+      for pat in "${pats[@]}"; do
+        [[ -n "$pat" ]] && du_args+=( "--exclude=$pat" )
+      done
+    fi
+    result=$(du -sm "${du_args[@]}" "$dir" 2>/dev/null | cut -f1)
     if [[ "$result" =~ ^[0-9]+$ ]]; then
-      dir_size_mb="$result"
-    else
-      # Fallback for systems where -m flag doesn't work
-      result=$(du -sk "$SOURCE_PROJECT_DIR" 2>/dev/null | cut -f1)
-      if [[ "$result" =~ ^[0-9]+$ ]]; then
-        dir_size_mb=$((result / 1024))
-      fi
+      echo "$result"
+      return 0
+    fi
+    result=$(du -sk "${du_args[@]}" "$dir" 2>/dev/null | cut -f1)
+    if [[ "$result" =~ ^[0-9]+$ ]]; then
+      echo $((result / 1024))
+      return 0
     fi
   fi
+  if need_cmd python3; then
+    python3 - "$dir" "$patterns_csv" <<'PY'
+import fnmatch
+import os
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+patterns_csv = sys.argv[2] if len(sys.argv) > 2 else ""
+patterns = [p for p in patterns_csv.split(",") if p]
+
+def excluded(rel_path, name):
+    for pat in patterns:
+        if fnmatch.fnmatch(rel_path, pat) or fnmatch.fnmatch(name, pat):
+            return True
+        for part in pathlib.Path(rel_path).parts:
+            if fnmatch.fnmatch(part, pat):
+                return True
+    return False
+
+total = 0
+for base, dirs, files in os.walk(root, topdown=True):
+    rel_root = os.path.relpath(base, root)
+    pruned = []
+    for d in dirs:
+        rel = os.path.join(rel_root, d) if rel_root != "." else d
+        if excluded(rel, d):
+            continue
+        pruned.append(d)
+    dirs[:] = pruned
+
+    for f in files:
+        rel = os.path.join(rel_root, f) if rel_root != "." else f
+        if excluded(rel, f):
+            continue
+        try:
+            total += (pathlib.Path(base) / f).stat().st_size
+        except OSError:
+            pass
+
+print(int(total / 1024 / 1024))
+PY
+    return 0
+  fi
+  echo "0"
+}
+
+# Check 2: Refuse directories larger than MAX_DIR_SIZE_MB (unless set to 0)
+if [[ "$MAX_DIR_SIZE_MB" -gt 0 && -d "$SOURCE_PROJECT_DIR" ]]; then
+  dir_size_mb="$(dir_size_mb_filtered "$SOURCE_PROJECT_DIR" "$GLOBAL_EXCLUDE_PATTERNS")"
   if [[ "$dir_size_mb" -gt "$MAX_DIR_SIZE_MB" ]]; then
     say "${RED}${X}${RESET} ${BOLD}Directory too large${RESET}: ${dir_size_mb}MB exceeds limit of ${MAX_DIR_SIZE_MB}MB"
     say "${DIM}UBS copies the scan target to /tmp before analysis, which can exhaust disk space.${RESET}"
@@ -1472,15 +1547,6 @@ if [[ "$MODE" == "sessions" ]]; then
   exit 0
 fi
 
-if [[ "$MODE" != "doctor" && "$UPDATE_ONLY" -eq 0 ]]; then
-  if [[ -z "$IGNORE_FILE" && -f "$SOURCE_PROJECT_DIR/.ubsignore" ]]; then
-    IGNORE_FILE="$SOURCE_PROJECT_DIR/.ubsignore"
-  fi
-  if [[ -n "$IGNORE_FILE" ]]; then
-    load_ignore_patterns "$IGNORE_FILE"
-  fi
-fi
-
 # Detectors (fast ripgrep if available, else find)
 detect_lang(){
   local lang="$1" found=1
@@ -2406,16 +2472,6 @@ done
 # ─────────────────────────────────────────────────────────────────────────────
 # Environment error handling (exit code 2)
 # ─────────────────────────────────────────────────────────────────────────────
-json_escape(){
-  local s="${1:-}"
-  s=${s//\\/\\\\}
-  s=${s//\"/\\\"}
-  s=${s//$'\n'/\\n}
-  s=${s//$'\r'/\\r}
-  s=${s//$'\t'/\\t}
-  printf '%s' "$s"
-}
-
 env_error_excerpt(){
   local lang="$1"
   local err_file="$TMPDIR_RUN/$lang.err"
