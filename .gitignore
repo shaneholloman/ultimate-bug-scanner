@@ -24,6 +24,10 @@ temp/
 *.tmp
 .bv/
 
+# Beads ephemeral files
+.beads/last-touched
+.beads/.bv.lock
+
 # Python environments
 .venv/
 __pycache__/
