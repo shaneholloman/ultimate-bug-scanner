@@ -106,7 +106,7 @@ This keeps the JS module maintainable and ensures future contributors extend str
 | Rust | `test-suite/rust/buggy/` | `test-suite/rust/clean/` | `unwrap()` panics, async tasks, command injection, float precision, type-narrowing demo |
 | Java | `test-suite/java/buggy/` | `test-suite/java/clean/` | Executor leaks, blocking I/O, SQL and command injection |
 | Ruby | `test-suite/ruby/buggy/` | `test-suite/ruby/clean/` | eval/YAML problems, thread leaks, file cleanup |
-| C# | `test-suite/csharp/buggy/` | `test-suite/csharp/clean/` | Task blocking, weak crypto, `throw ex`, `TryParse` vs `Parse`, null/type narrowing fallthrough, helper-backed resource lifecycle |
+| C# | `test-suite/csharp/buggy/` | `test-suite/csharp/clean/` | Task blocking, weak crypto, `throw ex`, `TryParse` vs `Parse`, null/type narrowing fallthrough, helper-backed resource lifecycle, unobserved `Task.Run`/`StartNew` handles |
 
 Every directory has its own README summarizing the files and the scanner categories they exercise (security, async error coverage, resource lifecycle, math/precision, etc.).
 

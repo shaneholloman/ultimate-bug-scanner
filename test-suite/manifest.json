@@ -1897,6 +1897,116 @@
       }
     },
     {
+      "id": "csharp-async-task-handles-buggy",
+      "description": "C# async task-handle helper should flag Task.Run/StartNew handles that are never observed.",
+      "path": "test-suite/csharp/buggy/AsyncTaskHandlesBuggy.cs",
+      "language": "csharp",
+      "tags": [
+        "csharp",
+        "async",
+        "buggy"
+      ],
+      "args": [
+        "--only=csharp",
+        "--fail-on-warning",
+        "--no-dotnet"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Task handles created but never observed"
+        ]
+      }
+    },
+    {
+      "id": "csharp-async-task-handles-clean",
+      "description": "C# async task-handle helper should stay quiet when handles are awaited via Task.WhenAll.",
+      "path": "test-suite/csharp/clean/AsyncTaskHandlesClean.cs",
+      "language": "csharp",
+      "tags": [
+        "csharp",
+        "async",
+        "clean"
+      ],
+      "args": [
+        "--only=csharp",
+        "--no-dotnet"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "warning": {
+            "max": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "csharp-direct-module-json-buggy",
+      "description": "Direct ubs-csharp JSON summary should include helper status for async task handles.",
+      "path": "test-suite/csharp/buggy/AsyncTaskHandlesBuggy.cs",
+      "language": "csharp",
+      "ubs_bin": "../modules/ubs-csharp.sh",
+      "tags": [
+        "csharp",
+        "module",
+        "json",
+        "buggy"
+      ],
+      "args": [
+        "--format=json",
+        "--fail-on-warning",
+        "--no-dotnet"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "\"async_task_handles\":\"used\""
+        ]
+      }
+    },
+    {
+      "id": "csharp-ast-pack-shim-buggy",
+      "description": "C# ast-grep rule pack should emit structured per-rule findings when ast-grep returns JSON matches.",
+      "path": "test-suite/csharp/buggy/AstRulePackBuggy.cs",
+      "language": "csharp",
+      "tags": [
+        "csharp",
+        "ast-grep",
+        "buggy"
+      ],
+      "args": [
+        "--only=csharp",
+        "--fail-on-warning",
+        "--no-dotnet"
+      ],
+      "bin_shims": {
+        "ast-grep": "#!/usr/bin/env bash\nif [[ \"${1:-}\" == \"--version\" ]]; then\n  echo \"ast-grep 0.40.1\"\n  exit 0\nfi\nif [[ \"${1:-}\" == \"run\" && \"${2:-}\" == \"--help\" ]]; then\n  exit 0\nfi\nif [[ \"${1:-}\" == \"scan\" ]]; then\n  file=\"$PWD/test-suite/csharp/buggy/AstRulePackBuggy.cs\"\n  cat <<JSON\n[\n  {\"ruleId\":\"cs-async-discarded-task-run\",\"file\":\"$file\",\"range\":{\"start\":{\"row\":5,\"column\":8}}},\n  {\"ruleId\":\"cs-await-in-lock\",\"file\":\"$file\",\"range\":{\"start\":{\"row\":8,\"column\":12}}}\n]\nJSON\n  exit 0\nfi\nexit 64\n"
+      },
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 2
+          }
+        },
+        "require_substrings": [
+          "Task.Run result discarded without observation",
+          "Await used while holding a lock"
+        ]
+      }
+    },
+    {
       "id": "toon-format-js-buggy",
       "description": "TOON format output for JS buggy fixtures (validates TOON encoding works).",
       "path": "test-suite/buggy",

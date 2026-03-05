@@ -182,7 +182,7 @@ def main() -> int:
         except ValueError:
             display = path
         for line, col, message in issues:
-            print(f"{display}:{line}:{col}\twarning\t{message}")
+            print(f"{display}:{line}:{col}\twarning\tunobserved_task_handle\t{message}")
     return 0
 
 

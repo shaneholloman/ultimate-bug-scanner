@@ -247,6 +247,7 @@ ultimate_bug_scanner/
 │   ├── ubs-csharp.sh                  # C# scanner
 │   ├── README.md                      # Module interface contract
 │   └── helpers/                       # AST correlation & type narrowing helpers
+│       ├── async_task_handles_csharp.py # C# async task-handle analysis
 │       ├── resource_lifecycle_csharp.py # C# resource lifecycle analysis
 │       ├── resource_lifecycle_go.go   # Go resource lifecycle analysis
 │       ├── resource_lifecycle_java.py # Java resource lifecycle analysis

@@ -35,7 +35,7 @@ MODULE_PATH_TEMPLATE="$REPO_RAW/modules/ubs-%s.sh"
 # Known-good module digests (sha256) for supply-chain verification.
 declare -A MODULE_CHECKSUMS=(
   [cpp]='16193339dcb4b80ccab6b6a7906d092969133bdca86cf38ca2c80b320b00da44'
-  [csharp]='8470233fdfcc0b9c4ff890f8579bf5120fbdbff574c5c230c361b60b20163e4b'
+  [csharp]='2135d4057e8368d434bc21acc3fe6a0a0d1702f1f9c77e3c533ed8f98982dc72'
   [golang]='464d15de72457a522806ec92d9b4a8a24c7b23233baa2204225b41cb7b540858'
   [java]='6bf5710d2c970d1dbf9705ad1d28c7de19f7ea7c6c62eaf1f5ea599df574e35f'
   [js]='2ef4321af6c25c8c3eeb8c23ec174e407585c1f5a76020788f67ad66ebb727c0'
@@ -47,7 +47,7 @@ declare -A MODULE_CHECKSUMS=(
 
 # Helper assets used by some modules (AST correlation and type narrowing).
 declare -A HELPER_CHECKSUMS=(
-  ['helpers/async_task_handles_csharp.py']='13d749dc47490d495af1660b4717d3af896e34bc884556b43f6dccf97b6ceabb'
+  ['helpers/async_task_handles_csharp.py']='a1efff32352dab3dafce18e96a39a1bd2fa4085305ba1604a799fbd3e09d3022'
   ['helpers/resource_lifecycle_csharp.py']='6a3562049d3e616781ccf941a56a8abc1925fd6b0d95d510a66a35118ee95f28'
   ['helpers/resource_lifecycle_go.go']='10215d2c772dd7905a7e9c60a56899a9d702f1c950e1bfd30d4eb90b190e38bd'
   ['helpers/resource_lifecycle_java.py']='c005da1519eaa751ccf6fa45f99f884aaa30492f91b7c1b527f7f9b782df39f1'

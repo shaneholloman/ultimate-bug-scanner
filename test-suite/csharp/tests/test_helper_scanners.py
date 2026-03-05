@@ -13,6 +13,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TYPE_HELPER = REPO_ROOT / "modules" / "helpers" / "type_narrowing_csharp.py"
 RESOURCE_HELPER = REPO_ROOT / "modules" / "helpers" / "resource_lifecycle_csharp.py"
+ASYNC_HELPER = REPO_ROOT / "modules" / "helpers" / "async_task_handles_csharp.py"
 
 
 def run_helper(helper: Path, sources: dict[str, str]) -> list[str]:
@@ -125,6 +126,67 @@ class CSharpHelperTests(unittest.TestCase):
             },
         )
         self.assertEqual(lines, [])
+
+    def test_async_helper_reports_unobserved_task_handles(self) -> None:
+        lines = run_helper(
+            ASYNC_HELPER,
+            {
+                "buggy.cs": """
+                using System.Threading.Tasks;
+
+                class Demo {
+                    void Run() {
+                        var pending = Task.Run(() => 42);
+                    }
+                }
+                """,
+            },
+        )
+        self.assertTrue(any("\tunobserved_task_handle\t" in line for line in lines))
+        self.assertTrue(any("pending" in line for line in lines))
+
+    def test_async_helper_ignores_observed_task_handles(self) -> None:
+        lines = run_helper(
+            ASYNC_HELPER,
+            {
+                "clean.cs": """
+                using System.Threading.Tasks;
+
+                class Demo {
+                    async Task<int> AwaitedAsync() {
+                        var pending = Task.Run(() => 42);
+                        return await pending;
+                    }
+
+                    Task<int[]> AggregatedAsync() {
+                        var first = Task.Run(() => 1);
+                        var second = Task.Run(() => 2);
+                        return Task.WhenAll(first, second);
+                    }
+                }
+                """,
+            },
+        )
+        self.assertEqual(lines, [])
+
+    def test_async_helper_reports_reassignment_before_observation(self) -> None:
+        lines = run_helper(
+            ASYNC_HELPER,
+            {
+                "reassigned.cs": """
+                using System.Threading.Tasks;
+
+                class Demo {
+                    Task<int> Run() {
+                        var pending = Task.Run(() => 42);
+                        pending = Task.FromResult(5);
+                        return pending;
+                    }
+                }
+                """,
+            },
+        )
+        self.assertTrue(any("\tunobserved_task_handle\t" in line for line in lines))
 
 
 if __name__ == "__main__":  # pragma: no cover

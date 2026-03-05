@@ -477,6 +477,24 @@ search() {
 # ---------- ast-grep ----------
 AST_RULES_DIR=""
 AST_CONFIG_FILE=""
+AST_RULE_IDS=(
+  cs-async-discarded-task-run
+  cs-async-discarded-startnew
+  cs-await-in-lock
+  cs-parallel-foreach-async-lambda
+)
+declare -A AST_RULE_SEVERITY=(
+  [cs-async-discarded-task-run]="warning"
+  [cs-async-discarded-startnew]="warning"
+  [cs-await-in-lock]="warning"
+  [cs-parallel-foreach-async-lambda]="warning"
+)
+declare -A AST_RULE_SUMMARY=(
+  [cs-async-discarded-task-run]="Task.Run result discarded without observation"
+  [cs-async-discarded-startnew]="Task.Factory.StartNew result discarded without observation"
+  [cs-await-in-lock]="Await used while holding a lock"
+  [cs-parallel-foreach-async-lambda]="Parallel.ForEach async lambda drops asynchronous work"
+)
 write_ast_rules() {
   [[ "$HAS_AST_GREP" -eq 1 ]] || return 0
   AST_RULES_DIR="$TMP_DIR/ast-rules"
@@ -484,76 +502,47 @@ write_ast_rules() {
   local rules_file="$AST_RULES_DIR/csharp-pack.yml"
   cat >"$rules_file"<<'YAML'
 rules:
-  - id: cs-async-void
-    message: "async void (except event handlers) can swallow exceptions; prefer Task-returning async."
+  - id: cs-async-discarded-task-run
+    message: "Task.Run result discarded; await or retain the Task so failures are observed."
+    severity: warning
+    language: cs
+    rule:
+      any:
+        - pattern: |
+            Task.Run($$ARGS);
+        - pattern: |
+            _ = Task.Run($$ARGS);
+  - id: cs-async-discarded-startnew
+    message: "Task.Factory.StartNew result discarded; await or retain the Task so failures are observed."
+    severity: warning
+    language: cs
+    rule:
+      any:
+        - pattern: |
+            Task.Factory.StartNew($$ARGS);
+        - pattern: |
+            _ = Task.Factory.StartNew($$ARGS);
+  - id: cs-await-in-lock
+    message: "Await inside lock can deadlock or break monitor assumptions; move async work outside the lock."
     severity: warning
     language: cs
     rule:
       pattern: |
-        async void $M($$) { $$ }
-  - id: cs-task-result
-    message: "Blocking on Task via .Result can deadlock (especially on ASP.NET/UI contexts). Prefer await."
-    severity: critical
-    language: cs
-    rule:
-      pattern: |
-        $T.Result
-  - id: cs-task-wait
-    message: "Blocking on Task via Wait() can deadlock; prefer await."
-    severity: critical
-    language: cs
-    rule:
-      pattern: |
-        $T.Wait()
-  - id: cs-getawaiter-getresult
-    message: "GetAwaiter().GetResult() blocks and can deadlock; prefer await."
-    severity: critical
-    language: cs
-    rule:
-      pattern: |
-        $T.GetAwaiter().GetResult()
-  - id: cs-throw-ex
-    message: "throw ex; resets stack trace. Use bare 'throw;' to preserve it."
+        lock ($OBJ) { $$PRE; await $EXPR; $$POST; }
+  - id: cs-parallel-foreach-async-lambda
+    message: "Parallel.ForEach with async lambda does not await the async work; use Parallel.ForEachAsync or gather Tasks."
     severity: warning
     language: cs
     rule:
-      pattern: |
-        throw $E;
-  - id: cs-empty-catch
-    message: "Empty catch block swallows exceptions."
-    severity: warning
-    language: cs
-    rule:
-      pattern: |
-        catch ($T $E) { }
-  - id: cs-new-httpclient
-    message: "new HttpClient() per call can exhaust sockets; prefer IHttpClientFactory or a shared instance."
-    severity: warning
-    language: cs
-    rule:
-      pattern: |
-        new HttpClient($$)
-  - id: cs-weak-crypto-md5
-    message: "MD5 is cryptographically broken; avoid for security-sensitive hashing."
-    severity: critical
-    language: cs
-    rule:
-      pattern: |
-        MD5.Create()
-  - id: cs-weak-crypto-sha1
-    message: "SHA1 is cryptographically weak; avoid for security-sensitive hashing."
-    severity: critical
-    language: cs
-    rule:
-      pattern: |
-        SHA1.Create()
-  - id: cs-insecure-random
-    message: "System.Random is not cryptographically secure; use RandomNumberGenerator for secrets/tokens."
-    severity: warning
-    language: cs
-    rule:
-      pattern: |
-        new Random($$)
+      any:
+        - pattern: |
+            Parallel.ForEach($SRC, async ($ITEM) => { $$BODY });
+        - pattern: |
+            Parallel.ForEach($SRC, async $ITEM => { $$BODY });
+        - pattern: |
+            Parallel.ForEach($SRC, async ($ITEM) => $EXPR);
+        - pattern: |
+            Parallel.ForEach($SRC, async $ITEM => $EXPR);
 YAML
 
   # Config file
@@ -586,11 +575,126 @@ ast_scan_json_stream() {
   "${AST_GREP_CMD[@]}" scan -c "$AST_CONFIG_FILE" "$PROJECT_DIR" --json 2>/dev/null || true
 }
 
+normalize_ast_severity() {
+  local raw="${1:-warning}"
+  case "${raw,,}" in
+    critical|error) echo "critical" ;;
+    info|note|hint) echo "info" ;;
+    *) echo "warning" ;;
+  esac
+}
+
+ast_scan_json_to_tsv() {
+  local json_path="$1" out="$2"
+  [[ "$HAS_PYTHON" -eq 1 ]] || return 1
+  python3 - "$PROJECT_DIR" "$json_path" >"$out" <<'PY' 2>/dev/null
+import json
+import sys
+from pathlib import Path
+
+project_dir = Path(sys.argv[1]).resolve()
+json_path = Path(sys.argv[2])
+base = project_dir if project_dir.is_dir() else project_dir.parent
+
+def iter_match_objs(blob):
+    if isinstance(blob, list):
+        for item in blob:
+            yield from iter_match_objs(item)
+    elif isinstance(blob, dict):
+        if (
+            "range" in blob
+            and (blob.get("file") or blob.get("path"))
+            and (blob.get("id") or blob.get("rule_id") or blob.get("ruleId"))
+        ):
+            yield blob
+        for value in blob.values():
+            yield from iter_match_objs(value)
+
+def load_json_objects(raw):
+    raw = raw.strip()
+    if not raw:
+        return []
+    try:
+        return [json.loads(raw)]
+    except Exception:
+        objs = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                objs.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return objs
+
+def normalize_path(raw_path):
+    path = Path(str(raw_path))
+    if not path.is_absolute():
+        path = (base / path).resolve()
+    try:
+        display = str(path.relative_to(base))
+    except ValueError:
+        display = str(path)
+    return path, display
+
+def normalize_line(start):
+    if not isinstance(start, dict):
+        return 1, 1
+    if "row" in start:
+        line = int(start.get("row", 0)) + 1
+    else:
+        line = int(start.get("line", 0)) + 1
+    if "column" in start:
+        col = int(start.get("column", 0)) + 1
+    elif "col" in start:
+        col = int(start.get("col", 0)) + 1
+    else:
+        col = 1
+    return max(line, 1), max(col, 1)
+
+def is_ignored(path, line_no, cache):
+    try:
+        lines = cache.setdefault(path, path.read_text(encoding="utf-8", errors="ignore").splitlines())
+    except OSError:
+        return False
+    if 1 <= line_no <= len(lines):
+        return "ubs:ignore" in lines[line_no - 1]
+    return False
+
+raw = json_path.read_text(encoding="utf-8", errors="ignore")
+seen = set()
+line_cache = {}
+
+for obj in load_json_objects(raw):
+    for match in iter_match_objs(obj):
+        rule_id = match.get("rule_id") or match.get("id") or match.get("ruleId")
+        raw_path = match.get("file") or match.get("path")
+        if not rule_id or not raw_path:
+            continue
+        path, display = normalize_path(raw_path)
+        rng = match.get("range") or {}
+        start = rng.get("start") or {}
+        line_no, col_no = normalize_line(start)
+        if is_ignored(path, line_no, line_cache):
+            continue
+        message = match.get("message") or match.get("note") or ""
+        severity = match.get("severity") or match.get("level") or ""
+        key = (rule_id, display, line_no, col_no)
+        if key in seen:
+            continue
+        seen.add(key)
+        print(f"{rule_id}\t{display}\t{line_no}\t{col_no}\t{severity}\t{message}")
+PY
+}
+
 emit_sarif() {
-  local first=1 item level message
+  local first=1 item level message rule_id i
   {
     echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"ubs-csharp","version":"'"$VERSION"'"}},"results":['
-    for item in "${FINDINGS[@]}"; do
+    for ((i=0; i<${#FINDINGS[@]}; i++)); do
+      item="${FINDINGS[$i]}"
+      rule_id="${FINDING_RULE_IDS[$i]:-}"
       local sev cat title file line snippet
       IFS='|' read -r sev cat title file line snippet <<<"$item"
       case "$sev" in
@@ -602,8 +706,8 @@ emit_sarif() {
       [[ -n "$snippet" ]] && message="$message - $snippet"
       [[ $first -eq 0 ]] && echo ','
       first=0
-      printf '  {"ruleId":"csharp.category.%s","level":"%s","message":{"text":"%s"}' \
-        "$(json_escape "$cat")" "$(json_escape "$level")" "$(json_escape "$message")"
+      printf '  {"ruleId":"%s","level":"%s","message":{"text":"%s"}' \
+        "$(json_escape "${rule_id:-csharp.category.$cat}")" "$(json_escape "$level")" "$(json_escape "$message")"
       if [[ -n "$file" ]]; then
         printf ',"locations":[{"physicalLocation":{"artifactLocation":{"uri":"%s"}' "$(json_escape "$file")"
         if [[ "${line:-0}" -gt 0 ]]; then
@@ -673,7 +777,11 @@ TYPE_NARROWING_HELPER_STATUS="not_run"
 TYPE_NARROWING_FINDINGS=0
 RESOURCE_LIFECYCLE_HELPER_STATUS="not_run"
 RESOURCE_LIFECYCLE_FINDINGS=0
+ASYNC_TASK_HELPER_STATUS="not_run"
+ASYNC_TASK_FINDINGS=0
+AST_GREP_STATUS="not_run"
 AST_GREP_SAMPLE_MATCHES=0
+AST_GREP_FINDINGS=0
 
 bump_counter() {
   local sev="$1" n="$2"
@@ -778,7 +886,7 @@ run_csharp_type_narrowing_checks() {
     line="${rest%%:*}"
     [[ -z "$severity" ]] && severity="warning"
     bump_counter "$severity" 1
-    add_finding "$severity" "$cat" "$message" "$file" "${line:-0}" ""
+    add_finding "$severity" "$cat" "$message" "$file" "${line:-0}" "" "csharp.type.guard-fallthrough"
     if [[ "$FORMAT" == "text" && "$shown" -lt "$DETAIL_LIMIT" ]]; then
       echo "  ${DIM}${location}${RESET} - $message"
       shown=$((shown+1))
@@ -828,7 +936,60 @@ run_csharp_resource_lifecycle_helper() {
     line="${rest%%:*}"
     [[ -z "$severity" ]] && severity="warning"
     bump_counter "$severity" 1
-    add_finding "$severity" "$cat" "$message" "$file" "${line:-0}" ""
+    add_finding "$severity" "$cat" "$message" "$file" "${line:-0}" "" "csharp.resource.helper-leak"
+    if [[ "$FORMAT" == "text" && "$shown" -lt "$DETAIL_LIMIT" ]]; then
+      echo "  ${DIM}${location}${RESET} - $message"
+      shown=$((shown+1))
+    fi
+  done <"$report"
+  return 0
+}
+
+run_csharp_async_task_handle_helper() {
+  local cat="$1"
+  local helper="$SCRIPT_DIR/helpers/async_task_handles_csharp.py"
+  local report="$TMP_DIR/csharp.async_task_handles.tsv"
+  local helper_err="$TMP_DIR/csharp.async_task_handles.err"
+
+  if [[ ! -f "$helper" ]]; then
+    ASYNC_TASK_HELPER_STATUS="missing"
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}C# async task-handle helper missing: $helper${RESET}"
+    return 0
+  fi
+  if [[ "$HAS_PYTHON" -eq 0 ]]; then
+    ASYNC_TASK_HELPER_STATUS="python-missing"
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}python3 not found; skipping C# async task-handle helper.${RESET}"
+    return 0
+  fi
+  if ! python3 "$helper" "$PROJECT_DIR" >"$report" 2>"$helper_err"; then
+    ASYNC_TASK_HELPER_STATUS="failed"
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}C# async task-handle helper failed: $(head -n 1 "$helper_err" 2>/dev/null || echo "see $helper_err")${RESET}"
+    return 0
+  fi
+
+  local hits=0
+  hits=$(awk 'END { print NR+0 }' "$report")
+  if [[ "$hits" -eq 0 ]]; then
+    ASYNC_TASK_HELPER_STATUS="clean"
+    [[ "$FORMAT" == "text" ]] && echo "${GREEN}${ICON_OK} No unobserved Task.Run/StartNew handles detected.${RESET}"
+    return 0
+  fi
+
+  ASYNC_TASK_HELPER_STATUS="used"
+  ASYNC_TASK_FINDINGS="$hits"
+  [[ "$FORMAT" == "text" ]] && echo "${YELLOW}${ICON_WARN} Task handles created but never observed ($hits)${RESET}"
+
+  local shown=0 location severity kind message file rest line
+  while IFS=$'\t' read -r location severity kind message; do
+    [[ -z "$location" ]] && continue
+    file="${location%%:*}"
+    rest="${location#*:}"
+    line="${rest%%:*}"
+    [[ -z "$severity" ]] && severity="warning"
+    [[ -z "$kind" ]] && kind="unobserved_task_handle"
+    [[ -z "$message" ]] && message="Task handle created but never awaited/observed"
+    bump_counter "$severity" 1
+    add_finding "$severity" "$cat" "$message" "$file" "${line:-0}" "" "csharp.async.${kind}"
     if [[ "$FORMAT" == "text" && "$shown" -lt "$DETAIL_LIMIT" ]]; then
       echo "  ${DIM}${location}${RESET} - $message"
       shown=$((shown+1))
@@ -840,10 +1001,11 @@ run_csharp_resource_lifecycle_helper() {
 emit_module_metrics() {
   persist_metric_json "tools" "$(printf '{"rg":%s,"ast_grep":%s,"dotnet":%s,"python3":%s,"strict_gitignore":%s,"total_files":%s}' \
     "${HAS_RG:-0}" "${HAS_AST_GREP:-0}" "${HAS_DOTNET:-0}" "${HAS_PYTHON:-0}" "${STRICT_GITIGNORE:-0}" "${TOTAL_FILES:-0}")"
-  persist_metric_json "helpers" "$(printf '{"type_narrowing":{"status":"%s","findings":%s},"resource_lifecycle":{"status":"%s","findings":%s},"ast_grep":{"sample_matches":%s}}' \
+  persist_metric_json "helpers" "$(printf '{"type_narrowing":{"status":"%s","findings":%s},"resource_lifecycle":{"status":"%s","findings":%s},"async_task_handles":{"status":"%s","findings":%s},"ast_grep":{"status":"%s","sample_matches":%s,"structured_findings":%s}}' \
     "$(json_escape "${TYPE_NARROWING_HELPER_STATUS:-not_run}")" "${TYPE_NARROWING_FINDINGS:-0}" \
     "$(json_escape "${RESOURCE_LIFECYCLE_HELPER_STATUS:-not_run}")" "${RESOURCE_LIFECYCLE_FINDINGS:-0}" \
-    "${AST_GREP_SAMPLE_MATCHES:-0}")"
+    "$(json_escape "${ASYNC_TASK_HELPER_STATUS:-not_run}")" "${ASYNC_TASK_FINDINGS:-0}" \
+    "$(json_escape "${AST_GREP_STATUS:-not_run}")" "${AST_GREP_SAMPLE_MATCHES:-0}" "${AST_GREP_FINDINGS:-0}")"
   persist_metric_json "dotnet" "$(printf '{"available":%s,"target_found":%s,"target":"%s","build_enabled":%s,"test_enabled":%s,"format_enabled":%s,"deps_enabled":%s}' \
     "${HAS_DOTNET:-0}" "$([[ -n "${DOTNET_TARGET:-}" ]] && echo 1 || echo 0)" "$(json_escape "${DOTNET_TARGET:-}")" \
     "$([[ "${NO_DOTNET_BUILD:-0}" -eq 0 ]] && echo 1 || echo 0)" \
@@ -1105,6 +1267,8 @@ search '\bThread\.Sleep\s*\(' "$tmp"
     [[ "$FORMAT" == "text" ]] && echo "${YELLOW}${ICON_WARN} Thread.Sleep(...) ($hits) - blocks thread; in async code prefer Task.Delay${RESET}"
     [[ "$FORMAT" == "text" ]] && head -n "$DETAIL_LIMIT" "$tmp" | print_matches "Thread.Sleep" "Thread.Sleep" "warning" "$cat" || true
   fi
+
+  run_csharp_async_task_handle_helper "$cat"
 }
 
 category_4_numeric_fp() {
@@ -1560,24 +1724,78 @@ category_17_ast_grep_pack() {
   category_enabled "$cat" || return 0
   [[ "$FORMAT" == "text" ]] && echo "" && echo "${BOLD}[$cat] ${CATEGORY_NAMES[$cat]}${RESET}"
   if [[ "$HAS_AST_GREP" -eq 0 ]]; then
+    AST_GREP_STATUS="unavailable"
     [[ "$FORMAT" == "text" ]] && echo "${DIM}ast-grep not available (install ast-grep, or ensure 'sg' is ast-grep).${RESET}"
     return 0
   fi
 
   write_ast_rules
-  [[ "$FORMAT" == "text" ]] && echo "${GREEN}${ICON_OK} ast-grep configured (language: cs). Use --format=sarif for SARIF output.${RESET}"
+  [[ "$FORMAT" == "text" ]] && echo "${GREEN}${ICON_OK} ast-grep configured (language: cs). Running structured rule pack.${RESET}"
 
-  # Quick sanity: stream a few findings
-  local s
-  s="$(ast_scan_json_stream | head -n 200 | count_lines)"
+  local ast_json="$TMP_DIR/cat17.ast.json"
+  local ast_err="$TMP_DIR/cat17.ast.err"
+  local ast_tsv="$TMP_DIR/cat17.ast.tsv"
+  local rc=0
+  if "${AST_GREP_CMD[@]}" scan -c "$AST_CONFIG_FILE" "$PROJECT_DIR" --json >"$ast_json" 2>"$ast_err"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [[ "$rc" -ne 0 && "$rc" -ne 1 ]]; then
+    AST_GREP_STATUS="failed"
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}ast-grep scan failed: $(head -n 1 "$ast_err" 2>/dev/null || echo "see $ast_err")${RESET}"
+    return 0
+  fi
+  if ! ast_scan_json_to_tsv "$ast_json" "$ast_tsv"; then
+    AST_GREP_STATUS="$([[ "$HAS_PYTHON" -eq 1 ]] && echo "failed" || echo "python-missing")"
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}python3 unavailable or parser failed; skipping structured ast-grep ingestion.${RESET}"
+    return 0
+  fi
+
+  local s=0
+  s=$(awk 'END { print NR+0 }' "$ast_tsv")
   AST_GREP_SAMPLE_MATCHES="$s"
-  if [[ "$FORMAT" == "text" ]]; then
-    if [[ "$s" -gt 0 ]]; then
-      bump_counter info 1
-      echo "${CYAN}${ICON_INFO} ast-grep produced matches (sampled). Use --format=sarif for full details.${RESET}"
-    else
-      echo "${DIM}ast-grep scan produced no quick matches (or output suppressed).${RESET}"
+  AST_GREP_FINDINGS="$s"
+  if [[ "$s" -eq 0 ]]; then
+    AST_GREP_STATUS="clean"
+    [[ "$FORMAT" == "text" ]] && echo "${GREEN}${ICON_OK} ast-grep found no structural-only C# findings.${RESET}"
+    return 0
+  fi
+
+  AST_GREP_STATUS="used"
+  declare -A rule_counts=()
+  declare -A rule_samples=()
+  declare -A rule_sample_counts=()
+  local rule_id file line col raw_sev raw_message severity title
+  while IFS=$'\t' read -r rule_id file line col raw_sev raw_message; do
+    [[ -z "$rule_id" || -z "$file" ]] && continue
+    severity="$(normalize_ast_severity "${AST_RULE_SEVERITY[$rule_id]:-${raw_sev:-warning}}")"
+    title="${AST_RULE_SUMMARY[$rule_id]:-${raw_message:-$rule_id}}"
+    bump_counter "$severity" 1
+    add_finding "$severity" "$cat" "$title" "$file" "${line:-0}" "" "$rule_id"
+    rule_counts["$rule_id"]=$(( ${rule_counts["$rule_id"]:-0} + 1 ))
+    if [[ ${rule_sample_counts[$rule_id]:-0} -lt 3 ]]; then
+      if [[ -n "${rule_samples[$rule_id]:-}" ]]; then
+        rule_samples["$rule_id"]+=", "
+      fi
+      rule_samples["$rule_id"]+="$file:${line:-0}"
+      rule_sample_counts["$rule_id"]=$(( ${rule_sample_counts[$rule_id]:-0} + 1 ))
     fi
+  done <"$ast_tsv"
+
+  if [[ "$FORMAT" == "text" ]]; then
+    echo "${CYAN}${ICON_INFO} ast-grep emitted structured C# findings ($s).${RESET}"
+    while IFS= read -r rule_id; do
+      [[ -z "$rule_id" ]] && continue
+      severity="$(normalize_ast_severity "${AST_RULE_SEVERITY[$rule_id]:-warning}")"
+      title="${AST_RULE_SUMMARY[$rule_id]:-$rule_id}"
+      case "$severity" in
+        critical) echo "${RED}${ICON_CRIT} ${title} (${rule_counts[$rule_id]}) [${rule_id}]${RESET}" ;;
+        warning) echo "${YELLOW}${ICON_WARN} ${title} (${rule_counts[$rule_id]}) [${rule_id}]${RESET}" ;;
+        *) echo "${CYAN}${ICON_INFO} ${title} (${rule_counts[$rule_id]}) [${rule_id}]${RESET}" ;;
+      esac
+      [[ -n "${rule_samples[$rule_id]:-}" ]] && echo "  ${DIM}${rule_samples[$rule_id]}${RESET}"
+    done < <(printf '%s\n' "${!rule_counts[@]}" | sort)
   fi
 }
 
@@ -1675,19 +1893,23 @@ category_20_async_locks() {
   local tmp="$TMP_DIR/cat20.lock.txt"
   local hits=0
 
+  if [[ "$AST_GREP_STATUS" == "used" || "$AST_GREP_STATUS" == "clean" ]]; then
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}Exact await-in-lock detection handled by ast-grep; skipping file-level lock/await heuristic.${RESET}"
+  else
 search '\block\s*\(' "$tmp"
-  hits=$(cat "$tmp" | count_lines)
-  if [[ "$hits" -gt 0 ]]; then
-    local await_file="$TMP_DIR/cat20.await.txt"
-    search '\bawait\b' "$await_file"
-    local await_hits
-    await_hits=$(cat "$await_file" | count_lines)
-    if [[ "$await_hits" -gt 0 ]]; then
-      bump_counter warning "$hits"
-      [[ "$FORMAT" == "text" ]] && echo "${YELLOW}${ICON_WARN} lock(...) used in files that also use await ($hits lock sites) - ensure you never await while holding a lock${RESET}"
-      [[ "$FORMAT" == "text" ]] && head -n "$DETAIL_LIMIT" "$tmp" | print_matches "lock in async code" "lock(" "warning" "$cat" || true
-    else
-      [[ "$FORMAT" == "text" ]] && echo "${DIM}lock(...) found, but no 'await' tokens in scan scope (skipping).${RESET}"
+    hits=$(cat "$tmp" | count_lines)
+    if [[ "$hits" -gt 0 ]]; then
+      local await_file="$TMP_DIR/cat20.await.txt"
+      search '\bawait\b' "$await_file"
+      local await_hits
+      await_hits=$(cat "$await_file" | count_lines)
+      if [[ "$await_hits" -gt 0 ]]; then
+        bump_counter warning "$hits"
+        [[ "$FORMAT" == "text" ]] && echo "${YELLOW}${ICON_WARN} lock(...) used in files that also use await ($hits lock sites) - ensure you never await while holding a lock${RESET}"
+        [[ "$FORMAT" == "text" ]] && head -n "$DETAIL_LIMIT" "$tmp" | print_matches "lock in async code" "lock(" "warning" "$cat" || true
+      else
+        [[ "$FORMAT" == "text" ]] && echo "${DIM}lock(...) found, but no 'await' tokens in scan scope (skipping).${RESET}"
+      fi
     fi
   fi
 
