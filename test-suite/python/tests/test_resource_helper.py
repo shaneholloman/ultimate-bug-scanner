@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the Python resource lifecycle helper."""
+"""Regression tests for helper-backed resource lifecycle analyzers."""
 from __future__ import annotations
 
 import shutil
@@ -11,18 +11,20 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-HELPER = REPO_ROOT / "modules" / "helpers" / "resource_lifecycle_py.py"
+PYTHON_HELPER = REPO_ROOT / "modules" / "helpers" / "resource_lifecycle_py.py"
+RUBY_HELPER = REPO_ROOT / "modules" / "helpers" / "resource_lifecycle_ruby.py"
+SWIFT_HELPER = REPO_ROOT / "modules" / "helpers" / "resource_lifecycle_swift.py"
 
 
-def run_helper(source_map: dict[str, str]) -> list[str]:
-    tmpdir = Path(tempfile.mkdtemp(prefix="ubs-resource-helper-"))
+def run_helper(helper: Path, source_map: dict[str, str], *, prefix: str = "ubs-resource-helper-") -> list[str]:
+    tmpdir = Path(tempfile.mkdtemp(prefix=prefix))
     try:
         for rel, code in source_map.items():
             path = tmpdir / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(textwrap.dedent(code), encoding="utf-8")
         result = subprocess.run(
-            [sys.executable, str(HELPER), str(tmpdir)],
+            [sys.executable, str(helper), str(tmpdir)],
             capture_output=True,
             text=True,
             check=False,
@@ -44,6 +46,7 @@ def parse(lines: list[str]) -> list[tuple[str, str, str]]:
 class ResourceHelperTests(unittest.TestCase):
     def test_reports_leaks_across_kinds(self) -> None:
         lines = run_helper(
+            PYTHON_HELPER,
             {
                 "leaky.py": """
                 import asyncio
@@ -74,6 +77,7 @@ class ResourceHelperTests(unittest.TestCase):
 
     def test_release_in_nested_scope_marks_outer_resource(self) -> None:
         lines = run_helper(
+            PYTHON_HELPER,
             {
                 "nested.py": """
                 import asyncio
@@ -92,6 +96,7 @@ class ResourceHelperTests(unittest.TestCase):
 
     def test_reassignment_marks_latest_resource_as_released(self) -> None:
         lines = run_helper(
+            PYTHON_HELPER,
             {
                 "reassign.py": """
                 def demo():
@@ -110,6 +115,7 @@ class ResourceHelperTests(unittest.TestCase):
 
     def test_clean_project_stays_quiet(self) -> None:
         lines = run_helper(
+            PYTHON_HELPER,
             {
                 "clean.py": """
                 import asyncio
@@ -135,6 +141,7 @@ class ResourceHelperTests(unittest.TestCase):
 
     def test_chained_cleanup_does_not_report(self) -> None:
         lines = run_helper(
+            PYTHON_HELPER,
             {
                 "chained.py": """
                 import asyncio
@@ -154,6 +161,107 @@ class ResourceHelperTests(unittest.TestCase):
                 asyncio.run(runner())
                 """,
             }
+        )
+        self.assertEqual(lines, [])
+
+    def test_ruby_helper_reports_resource_leaks(self) -> None:
+        lines = run_helper(
+            RUBY_HELPER,
+            {
+                "leaky.rb": """
+                require "net/http"
+
+                worker = Thread.new do
+                  sleep 0.1
+                end
+
+                file = File.open("/tmp/demo.txt", "w")
+                file.write("hi")
+
+                http = Net::HTTP.start("example.com", 80)
+                puts worker
+                puts file
+                puts http
+                """,
+            },
+            prefix="ubs-ruby-resource-helper-",
+        )
+        entries = parse(lines)
+        kinds = {kind for _, kind, _ in entries}
+        self.assertIn("thread_join", kinds)
+        self.assertIn("file_handle", kinds)
+        self.assertIn("http_session", kinds)
+
+    def test_ruby_helper_respects_cleanup(self) -> None:
+        lines = run_helper(
+            RUBY_HELPER,
+            {
+                "clean.rb": """
+                require "net/http"
+
+                worker = Thread.new do
+                  sleep 0.1
+                end
+                worker.join
+
+                file = File.open("/tmp/demo.txt", "w")
+                file.write("ok")
+                file.close
+
+                http = Net::HTTP.start("example.com", 80)
+                http.finish
+                """,
+            },
+            prefix="ubs-ruby-resource-helper-",
+        )
+        self.assertEqual(lines, [])
+
+    def test_swift_helper_reports_resource_leaks(self) -> None:
+        lines = run_helper(
+            SWIFT_HELPER,
+            {
+                "Leaky.swift": """
+                import Foundation
+
+                func leakEverything(url: URL, session: URLSession, publisher: AnyObject) {
+                    let task = session.dataTask(with: url)
+                    let timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in }
+                    let handle = try! FileHandle(forWritingTo: url)
+                    let link = CADisplayLink(target: NSObject(), selector: #selector(NSObject.description))
+                    _ = publisher.sink { _ in }
+                    print(task, timer, handle, link)
+                }
+                """,
+            },
+            prefix="ubs-swift-resource-helper-",
+        )
+        entries = parse(lines)
+        kinds = {kind for _, kind, _ in entries}
+        self.assertIn("urlsession_task", kinds)
+        self.assertIn("timer", kinds)
+        self.assertIn("file_handle", kinds)
+        self.assertIn("cadisplaylink", kinds)
+
+    def test_swift_helper_respects_cleanup(self) -> None:
+        lines = run_helper(
+            SWIFT_HELPER,
+            {
+                "Clean.swift": """
+                import Foundation
+
+                func tidy(url: URL, session: URLSession) {
+                    let task = session.dataTask(with: url)
+                    task.resume()
+                    let timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { _ in }
+                    timer.invalidate()
+                    let handle = try! FileHandle(forWritingTo: url)
+                    try? handle.close()
+                    let link = CADisplayLink(target: NSObject(), selector: #selector(NSObject.description))
+                    link.invalidate()
+                }
+                """,
+            },
+            prefix="ubs-swift-resource-helper-",
         )
         self.assertEqual(lines, [])
 

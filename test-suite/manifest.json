@@ -1803,6 +1803,100 @@
       }
     },
     {
+      "id": "csharp-type-narrowing-buggy",
+      "description": "C# null/type narrowing guard fallthrough should produce warnings.",
+      "path": "test-suite/csharp/buggy/TypeNarrowingBuggy.cs",
+      "language": "csharp",
+      "tags": [
+        "csharp",
+        "type-narrowing",
+        "buggy"
+      ],
+      "args": [
+        "--only=csharp",
+        "--fail-on-warning",
+        "--no-dotnet"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        }
+      }
+    },
+    {
+      "id": "csharp-type-narrowing-clean",
+      "description": "C# null/type narrowing guard exits should stay quiet.",
+      "path": "test-suite/csharp/clean/TypeNarrowingClean.cs",
+      "language": "csharp",
+      "tags": [
+        "csharp",
+        "type-narrowing",
+        "clean"
+      ],
+      "args": [
+        "--only=csharp",
+        "--no-dotnet"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "warning": {
+            "max": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "csharp-resource-lifecycle-buggy",
+      "description": "C# disposable/resource helpers should flag leaked handles.",
+      "path": "test-suite/csharp/buggy/ResourceLifecycleBuggy.cs",
+      "language": "csharp",
+      "tags": [
+        "csharp",
+        "resource-lifecycle",
+        "buggy"
+      ],
+      "args": [
+        "--only=csharp",
+        "--fail-on-warning",
+        "--no-dotnet"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        }
+      }
+    },
+    {
+      "id": "csharp-resource-lifecycle-clean",
+      "description": "C# helper-backed resource lifecycle checks should respect using var cleanup.",
+      "path": "test-suite/csharp/clean/ResourceLifecycleClean.cs",
+      "language": "csharp",
+      "tags": [
+        "csharp",
+        "resource-lifecycle",
+        "clean"
+      ],
+      "args": [
+        "--only=csharp",
+        "--no-dotnet"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "warning": {
+            "max": 0
+          }
+        }
+      }
+    },
+    {
       "id": "toon-format-js-buggy",
       "description": "TOON format output for JS buggy fixtures (validates TOON encoding works).",
       "path": "test-suite/buggy",

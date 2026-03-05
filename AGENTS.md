@@ -247,9 +247,11 @@ ultimate_bug_scanner/
 │   ├── ubs-csharp.sh                  # C# scanner
 │   ├── README.md                      # Module interface contract
 │   └── helpers/                       # AST correlation & type narrowing helpers
+│       ├── resource_lifecycle_csharp.py # C# resource lifecycle analysis
 │       ├── resource_lifecycle_go.go   # Go resource lifecycle analysis
 │       ├── resource_lifecycle_java.py # Java resource lifecycle analysis
 │       ├── resource_lifecycle_py.py   # Python resource lifecycle analysis
+│       ├── type_narrowing_csharp.py   # C# type narrowing
 │       ├── type_narrowing_kotlin.py   # Kotlin type narrowing
 │       ├── type_narrowing_rust.py     # Rust type narrowing
 │       ├── type_narrowing_swift.py    # Swift type narrowing
@@ -275,7 +277,7 @@ ultimate_bug_scanner/
 |------|---------|
 | `ubs` | Meta-runner: CLI parsing, language detection, `.ubsignore` support, module dispatch (concurrent), output merging (jq), supply-chain checksum verification, auto-update |
 | `modules/ubs-*.sh` | Per-language scanners: file detection, ripgrep-based heuristics, JSON/SARIF output, severity classification |
-| `modules/helpers/` | AST-level analysis helpers (Python/Go/JS): resource lifecycle tracking, type narrowing |
+| `modules/helpers/` | AST-level analysis helpers (Python/Go/JS/C#): resource lifecycle tracking, type narrowing |
 | `install.sh` | Signed installer for `curl \| bash` distribution |
 | `scripts/update_checksums.sh` | Regenerates SHA-256 checksums in the `ubs` meta-runner after module changes |
 | `test-suite/manifest.json` | Expected results manifest for regression testing |
@@ -339,7 +341,7 @@ Additional integrity controls:
 - **`.ubsignore` support** — gitignore-like exclusion for intentionally buggy fixtures, generated assets, vendor directories
 - **Three output formats** — text (human), JSON (automation), SARIF (GitHub Code Scanning / IDEs)
 - **`--ci` mode** — stable UTC ISO-8601 timestamps for reproducible CI output
-- **Helper assets for deep analysis** — Python/Go/JS helpers handle AST-level resource lifecycle and type narrowing checks that regex alone cannot express
+- **Helper assets for deep analysis** — Python/Go/JS/C# helpers handle AST-level resource lifecycle and type narrowing checks that regex alone cannot express
 - **Nix flake for packaging** — reproducible builds, dev shell, NixOS module
 - **Docker image** — `debian:bookworm-slim` base for containerized CI use
 - **Console output should be informative, detailed, stylish, and colorful**, fully leveraging appropriate libraries/escape sequences wherever possible

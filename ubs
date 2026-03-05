@@ -35,21 +35,26 @@ MODULE_PATH_TEMPLATE="$REPO_RAW/modules/ubs-%s.sh"
 # Known-good module digests (sha256) for supply-chain verification.
 declare -A MODULE_CHECKSUMS=(
   [cpp]='16193339dcb4b80ccab6b6a7906d092969133bdca86cf38ca2c80b320b00da44'
-  [csharp]='a28aefbd04a545e49d986a4bfd46fdc562213ac15105ead7453f157f8887521c'
+  [csharp]='8470233fdfcc0b9c4ff890f8579bf5120fbdbff574c5c230c361b60b20163e4b'
   [golang]='464d15de72457a522806ec92d9b4a8a24c7b23233baa2204225b41cb7b540858'
   [java]='6bf5710d2c970d1dbf9705ad1d28c7de19f7ea7c6c62eaf1f5ea599df574e35f'
   [js]='2ef4321af6c25c8c3eeb8c23ec174e407585c1f5a76020788f67ad66ebb727c0'
   [python]='dfa584639c21494ddf107ec4562c550798b2b97db15ff34e11c4694ec2b6fb11'
-  [ruby]='0351acfbab83ab86a339307d1f07493e26dd383238576959b1882aa7d1de9d6f'
+  [ruby]='00b3e9613ff989b13db67474653e4ea386c3a997e4a2f1d34a2eef67a0d419db'
   [rust]='8c183151bf2416f9a4c98060a96d28dd2365e9d01a20c98852473ec6d6661784'
   [swift]='1429436c7de226ef2302dc8860e9737a44cbf23028da97437a0c89baa6b7870b'
 )
 
 # Helper assets used by some modules (AST correlation and type narrowing).
 declare -A HELPER_CHECKSUMS=(
+  ['helpers/async_task_handles_csharp.py']='13d749dc47490d495af1660b4717d3af896e34bc884556b43f6dccf97b6ceabb'
+  ['helpers/resource_lifecycle_csharp.py']='6a3562049d3e616781ccf941a56a8abc1925fd6b0d95d510a66a35118ee95f28'
   ['helpers/resource_lifecycle_go.go']='10215d2c772dd7905a7e9c60a56899a9d702f1c950e1bfd30d4eb90b190e38bd'
   ['helpers/resource_lifecycle_java.py']='c005da1519eaa751ccf6fa45f99f884aaa30492f91b7c1b527f7f9b782df39f1'
   ['helpers/resource_lifecycle_py.py']='1e884ff42c988fa6a19f9b8f8375bde2334ebcde61735bc4f10b7dc3c900483e'
+  ['helpers/resource_lifecycle_ruby.py']='beffcd5bcac833e4dba7f49e04e296837846eff46580eab27565d1cb429b1dc2'
+  ['helpers/resource_lifecycle_swift.py']='33a78e83acdffaf0d05b05d240bff5f408d55cd9798d0ae01bd69c36f3afbd0f'
+  ['helpers/type_narrowing_csharp.py']='b9b0c16f67608dfc79addcb44d0638ef7e4af96840220bdd671e98ac1f5ca12c'
   ['helpers/type_narrowing_kotlin.py']='6f0f4482e8c349d15ac2830956baf193eedd2461d1ef836267c78da86c78ad79'
   ['helpers/type_narrowing_rust.py']='355ad60ce6dffb9a7c63169cb83705854612c931e2e8c3a166a81b0cb810647f'
   ['helpers/type_narrowing_swift.py']='f950bafa92391964e4779c77d37dcc11b0ffeab9bc351be439b4709c0f01b41a'
@@ -114,9 +119,14 @@ PY
 }
 
 HELPER_ASSETS=(
+  "helpers/async_task_handles_csharp.py"
+  "helpers/resource_lifecycle_csharp.py"
   "helpers/resource_lifecycle_py.py"
   "helpers/resource_lifecycle_go.go"
   "helpers/resource_lifecycle_java.py"
+  "helpers/resource_lifecycle_ruby.py"
+  "helpers/resource_lifecycle_swift.py"
+  "helpers/type_narrowing_csharp.py"
   "helpers/type_narrowing_ts.js"
   "helpers/type_narrowing_rust.py"
   "helpers/type_narrowing_kotlin.py"
@@ -328,7 +338,7 @@ Options:
   --jobs=N                Parallelism hint (passed to children if supported)
   --ignore-file=PATH      Read additional ignore globs (default: PROJECT/.ubsignore if present)
   --skip-size-check       Skip directory size guard (use with care)
-  --skip-type-narrowing   Skip JS/Rust/Kotlin/Swift type narrowing checks (falls back to basic heuristics)
+  --skip-type-narrowing   Skip JS/Rust/Kotlin/Swift/C# type narrowing checks (falls back to basic heuristics)
   --no-auto-update        Disable auto-update (even if UBS_ENABLE_AUTO_UPDATE=1)
   --staged                Scan only files staged for commit (git index)
   --diff, --git-diff      Scan only modified files (working tree vs HEAD)

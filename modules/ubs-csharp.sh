@@ -22,6 +22,7 @@ shopt -s lastpipe 2>/dev/null || true
 
 VERSION="3.0"
 SCRIPT_NAME="$(basename "$0")"
+SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PROJECT_DIR="."
 FORMAT="text"        # text|json|sarif
@@ -107,10 +108,12 @@ json_escape() {
 
 # ---------- findings model ----------
 declare -a FINDINGS=()
+declare -a FINDING_RULE_IDS=()
 add_finding() {
-  # args: severity category title file line snippet
-  local sev="$1" cat="$2" title="$3" file="$4" line="$5" snippet="$6"
+  # args: severity category title file line snippet [rule_id]
+  local sev="$1" cat="$2" title="$3" file="$4" line="$5" snippet="$6" rule_id="${7:-}"
   FINDINGS+=("${sev}|${cat}|${title}|${file}|${line}|${snippet}")
+  FINDING_RULE_IDS+=("$rule_id")
 }
 emit_findings_json() {
   local out="$1"
@@ -120,12 +123,18 @@ emit_findings_json() {
     echo '  "summary": {"files":'"${TOTAL_FILES:-0}"',"critical":'"${CRITICAL_FINDINGS:-0}"',"warning":'"${WARNING_FINDINGS:-0}"',"info":'"${INFO_FINDINGS:-0}"'},'
     echo '  "findings": ['
     local first=1
-    local item
-    for item in "${FINDINGS[@]}"; do
+    local item rule_id i
+    for ((i=0; i<${#FINDINGS[@]}; i++)); do
+      item="${FINDINGS[$i]}"
+      rule_id="${FINDING_RULE_IDS[$i]:-}"
       IFS='|' read -r sev cat title file line snippet <<<"$item"
       [[ $first -eq 0 ]] && echo ','
       first=0
-      echo -n '    {"severity":"'"$(json_escape "$sev")"'","category":"'"$(json_escape "$cat")"'","title":"'"$(json_escape "$title")"'","file":"'"$(json_escape "$file")"'","line":'"${line:-0}"',"snippet":"'"$(json_escape "$snippet")"'"}'
+      echo -n '    {"severity":"'"$(json_escape "$sev")"'","category":"'"$(json_escape "$cat")"'","title":"'"$(json_escape "$title")"'","file":"'"$(json_escape "$file")"'","line":'"${line:-0}"',"snippet":"'"$(json_escape "$snippet")"'"'
+      if [[ -n "$rule_id" ]]; then
+        echo -n ',"rule_id":"'"$(json_escape "$rule_id")"'"'
+      fi
+      echo -n '}'
     done
     echo ''
     echo '  ]'
@@ -145,8 +154,22 @@ emit_summary_json() {
   echo '  "format":"'"$FORMAT"'",'
   echo '  "tool":"ubs-csharp",'
   echo '  "version":"'"$VERSION"'",'
+  echo '  "tooling":{"rg":'"${HAS_RG:-0}"',"ast_grep":'"${HAS_AST_GREP:-0}"',"dotnet":'"${HAS_DOTNET:-0}"',"python3":'"${HAS_PYTHON:-0}"'},'
+  echo '  "helpers":{"type_narrowing":"'"$(json_escape "${TYPE_NARROWING_HELPER_STATUS:-not_run}")"'","resource_lifecycle":"'"$(json_escape "${RESOURCE_LIFECYCLE_HELPER_STATUS:-not_run}")"'","async_task_handles":"'"$(json_escape "${ASYNC_TASK_HELPER_STATUS:-not_run}")"'"},'
   echo '  "exit_code":'"${EXIT_CODE:-0}"''
   echo '}'
+}
+
+persist_metric_json() {
+  local key="$1" payload="$2"
+  [[ -n "$key" && -n "$payload" ]] || return 0
+  [[ -n "${UBS_METRICS_DIR:-}" ]] || return 0
+  mkdir -p "$UBS_METRICS_DIR" 2>/dev/null || true
+  {
+    printf '{"%s":' "$key"
+    printf '%s' "$payload"
+    printf '}'
+  } >"$UBS_METRICS_DIR/$key.json"
 }
 
 filter_file_list_with_globs() {
@@ -201,24 +224,38 @@ HAS_DOTNET=0
 HAS_PYTHON=0
 AST_GREP_CMD=()
 
+ast_grep_candidate_valid() {
+  local version=""
+  if ! version="$("$@" --version 2>/dev/null)"; then
+    return 1
+  fi
+  printf '%s' "$version" | grep -qi 'ast-grep'
+}
+
+set_ast_grep_candidate() {
+  if ast_grep_candidate_valid "$@"; then
+    HAS_AST_GREP=1
+    AST_GREP_CMD=("$@")
+    return 0
+  fi
+  return 1
+}
+
 detect_tools() {
   if command -v rg >/dev/null 2>&1; then HAS_RG=1; fi
   if command -v python3 >/dev/null 2>&1; then HAS_PYTHON=1; fi
 
   # Prefer ast-grep binary if present
-  if command -v ast-grep >/dev/null 2>&1; then
-    HAS_AST_GREP=1
-    AST_GREP_CMD=(ast-grep)
+  if command -v ast-grep >/dev/null 2>&1 && set_ast_grep_candidate ast-grep; then
+    :
   elif command -v sg >/dev/null 2>&1; then
     # Avoid unix "sg" (setgid) collision: check it looks like ast-grep
-    if sg --version 2>/dev/null | grep -qi 'ast-grep'; then
-      HAS_AST_GREP=1
-      AST_GREP_CMD=(sg)
+    if set_ast_grep_candidate sg; then
+      :
     fi
-  elif command -v npx >/dev/null 2>&1; then
+  elif command -v npx >/dev/null 2>&1 && set_ast_grep_candidate npx -y @ast-grep/cli; then
     # Fallback: node-based ast-grep
-    HAS_AST_GREP=1
-    AST_GREP_CMD=(npx -y @ast-grep/cli)
+    :
   fi
 
   if command -v dotnet >/dev/null 2>&1; then HAS_DOTNET=1; fi
@@ -632,6 +669,11 @@ TOTAL_FILES=0
 CRITICAL_FINDINGS=0
 WARNING_FINDINGS=0
 INFO_FINDINGS=0
+TYPE_NARROWING_HELPER_STATUS="not_run"
+TYPE_NARROWING_FINDINGS=0
+RESOURCE_LIFECYCLE_HELPER_STATUS="not_run"
+RESOURCE_LIFECYCLE_FINDINGS=0
+AST_GREP_SAMPLE_MATCHES=0
 
 bump_counter() {
   local sev="$1" n="$2"
@@ -686,6 +728,128 @@ run_dotnet_step() {
   fi
   DOTNET_LOG="$logfile"
   return "$rc"
+}
+
+run_csharp_type_narrowing_checks() {
+  local cat="$1"
+  local helper="$SCRIPT_DIR/helpers/type_narrowing_csharp.py"
+  local report="$TMP_DIR/csharp.type_narrowing.tsv"
+  local helper_err="$TMP_DIR/csharp.type_narrowing.err"
+
+  if [[ "${UBS_SKIP_TYPE_NARROWING:-0}" == "1" ]]; then
+    TYPE_NARROWING_HELPER_STATUS="skipped"
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}C# type narrowing helper skipped (UBS_SKIP_TYPE_NARROWING=1).${RESET}"
+    return 0
+  fi
+  if [[ ! -f "$helper" ]]; then
+    TYPE_NARROWING_HELPER_STATUS="missing"
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}C# type narrowing helper missing: $helper${RESET}"
+    return 0
+  fi
+  if [[ "$HAS_PYTHON" -eq 0 ]]; then
+    TYPE_NARROWING_HELPER_STATUS="python-missing"
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}python3 not found; skipping C# type narrowing helper.${RESET}"
+    return 0
+  fi
+
+  if ! python3 "$helper" "$PROJECT_DIR" >"$report" 2>"$helper_err"; then
+    TYPE_NARROWING_HELPER_STATUS="failed"
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}C# type narrowing helper failed: $(head -n 1 "$helper_err" 2>/dev/null || echo "see $helper_err")${RESET}"
+    return 0
+  fi
+
+  local hits=0
+  hits=$(awk 'END { print NR+0 }' "$report")
+  if [[ "$hits" -eq 0 ]]; then
+    TYPE_NARROWING_HELPER_STATUS="clean"
+    [[ "$FORMAT" == "text" ]] && echo "${GREEN}${ICON_OK} No obvious null/type narrowing fallthrough bugs detected.${RESET}"
+    return 0
+  fi
+
+  TYPE_NARROWING_HELPER_STATUS="used"
+  TYPE_NARROWING_FINDINGS="$hits"
+  [[ "$FORMAT" == "text" ]] && echo "${YELLOW}${ICON_WARN} Null/type guard fallthrough issues ($hits) - guards do not safely narrow the fallthrough path${RESET}"
+
+  local shown=0 location severity message file rest line
+  while IFS=$'\t' read -r location severity message; do
+    [[ -z "$location" ]] && continue
+    file="${location%%:*}"
+    rest="${location#*:}"
+    line="${rest%%:*}"
+    [[ -z "$severity" ]] && severity="warning"
+    bump_counter "$severity" 1
+    add_finding "$severity" "$cat" "$message" "$file" "${line:-0}" ""
+    if [[ "$FORMAT" == "text" && "$shown" -lt "$DETAIL_LIMIT" ]]; then
+      echo "  ${DIM}${location}${RESET} - $message"
+      shown=$((shown+1))
+    fi
+  done <"$report"
+}
+
+run_csharp_resource_lifecycle_helper() {
+  local cat="$1"
+  local helper="$SCRIPT_DIR/helpers/resource_lifecycle_csharp.py"
+  local report="$TMP_DIR/csharp.resource_lifecycle.tsv"
+  local helper_err="$TMP_DIR/csharp.resource_lifecycle.err"
+
+  if [[ ! -f "$helper" ]]; then
+    RESOURCE_LIFECYCLE_HELPER_STATUS="missing"
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}C# resource lifecycle helper missing: $helper${RESET}"
+    return 1
+  fi
+  if [[ "$HAS_PYTHON" -eq 0 ]]; then
+    RESOURCE_LIFECYCLE_HELPER_STATUS="python-missing"
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}python3 not found; lifecycle correlation reduced (helper skipped).${RESET}"
+    return 1
+  fi
+  if ! python3 "$helper" "$PROJECT_DIR" >"$report" 2>"$helper_err"; then
+    RESOURCE_LIFECYCLE_HELPER_STATUS="failed"
+    [[ "$FORMAT" == "text" ]] && echo "${DIM}C# resource lifecycle helper failed: $(head -n 1 "$helper_err" 2>/dev/null || echo "see $helper_err")${RESET}"
+    return 1
+  fi
+
+  local hits=0
+  hits=$(awk 'END { print NR+0 }' "$report")
+  if [[ "$hits" -eq 0 ]]; then
+    RESOURCE_LIFECYCLE_HELPER_STATUS="clean"
+    [[ "$FORMAT" == "text" ]] && echo "${GREEN}${ICON_OK} No obvious disposable/resource leaks detected by helper.${RESET}"
+    return 0
+  fi
+
+  RESOURCE_LIFECYCLE_HELPER_STATUS="used"
+  RESOURCE_LIFECYCLE_FINDINGS="$hits"
+  [[ "$FORMAT" == "text" ]] && echo "${YELLOW}${ICON_WARN} Potential resource lifecycle leaks (helper): $hits${RESET}"
+
+  local shown=0 location severity message file rest line
+  while IFS=$'\t' read -r location severity message; do
+    [[ -z "$location" ]] && continue
+    file="${location%%:*}"
+    rest="${location#*:}"
+    line="${rest%%:*}"
+    [[ -z "$severity" ]] && severity="warning"
+    bump_counter "$severity" 1
+    add_finding "$severity" "$cat" "$message" "$file" "${line:-0}" ""
+    if [[ "$FORMAT" == "text" && "$shown" -lt "$DETAIL_LIMIT" ]]; then
+      echo "  ${DIM}${location}${RESET} - $message"
+      shown=$((shown+1))
+    fi
+  done <"$report"
+  return 0
+}
+
+emit_module_metrics() {
+  persist_metric_json "tools" "$(printf '{"rg":%s,"ast_grep":%s,"dotnet":%s,"python3":%s,"strict_gitignore":%s,"total_files":%s}' \
+    "${HAS_RG:-0}" "${HAS_AST_GREP:-0}" "${HAS_DOTNET:-0}" "${HAS_PYTHON:-0}" "${STRICT_GITIGNORE:-0}" "${TOTAL_FILES:-0}")"
+  persist_metric_json "helpers" "$(printf '{"type_narrowing":{"status":"%s","findings":%s},"resource_lifecycle":{"status":"%s","findings":%s},"ast_grep":{"sample_matches":%s}}' \
+    "$(json_escape "${TYPE_NARROWING_HELPER_STATUS:-not_run}")" "${TYPE_NARROWING_FINDINGS:-0}" \
+    "$(json_escape "${RESOURCE_LIFECYCLE_HELPER_STATUS:-not_run}")" "${RESOURCE_LIFECYCLE_FINDINGS:-0}" \
+    "${AST_GREP_SAMPLE_MATCHES:-0}")"
+  persist_metric_json "dotnet" "$(printf '{"available":%s,"target_found":%s,"target":"%s","build_enabled":%s,"test_enabled":%s,"format_enabled":%s,"deps_enabled":%s}' \
+    "${HAS_DOTNET:-0}" "$([[ -n "${DOTNET_TARGET:-}" ]] && echo 1 || echo 0)" "$(json_escape "${DOTNET_TARGET:-}")" \
+    "$([[ "${NO_DOTNET_BUILD:-0}" -eq 0 ]] && echo 1 || echo 0)" \
+    "$([[ "${NO_DOTNET_TEST:-0}" -eq 0 ]] && echo 1 || echo 0)" \
+    "$([[ "${NO_DOTNET_FORMAT:-0}" -eq 0 ]] && echo 1 || echo 0)" \
+    "$([[ "${NO_DOTNET_DEPS:-0}" -eq 0 ]] && echo 1 || echo 0)")"
 }
 
 # ---------- analysis steps ----------
@@ -851,6 +1015,8 @@ search '^\s*#nullable\s+disable\b' "$tmp"
     [[ "$FORMAT" == "text" ]] && echo "${YELLOW}${ICON_WARN} '#nullable disable' found ($hits) - may hide nullability bugs${RESET}"
     [[ "$FORMAT" == "text" ]] && head -n "$DETAIL_LIMIT" "$tmp" | print_matches "#nullable disable" "#nullable disable" "warning" "$cat" || true
   fi
+
+  run_csharp_type_narrowing_checks "$cat"
 
   # throwing System.Exception directly (smell)
 search '\bthrow\s+new\s+Exception\s*\(' "$tmp"
@@ -1404,6 +1570,7 @@ category_17_ast_grep_pack() {
   # Quick sanity: stream a few findings
   local s
   s="$(ast_scan_json_stream | head -n 200 | count_lines)"
+  AST_GREP_SAMPLE_MATCHES="$s"
   if [[ "$FORMAT" == "text" ]]; then
     if [[ "$s" -gt 0 ]]; then
       bump_counter info 1
@@ -1437,6 +1604,14 @@ category_19_resource_lifecycle() {
   local cat=19
   category_enabled "$cat" || return 0
   [[ "$FORMAT" == "text" ]] && echo "" && echo "${BOLD}[$cat] ${CATEGORY_NAMES[$cat]}${RESET}"
+
+  if run_csharp_resource_lifecycle_helper "$cat"; then
+    return 0
+  fi
+
+  if [[ "$HAS_PYTHON" -eq 1 && "$RESOURCE_LIFECYCLE_HELPER_STATUS" != "python-missing" ]]; then
+    RESOURCE_LIFECYCLE_HELPER_STATUS="fallback"
+  fi
 
   if [[ "$HAS_PYTHON" -eq 0 ]]; then
     [[ "$FORMAT" == "text" ]] && echo "${DIM}python3 not found; lifecycle correlation reduced (skipping).${RESET}"
@@ -1483,6 +1658,7 @@ PY
 
   local hits
   hits=$(cat "$report" | count_lines)
+  RESOURCE_LIFECYCLE_FINDINGS="$hits"
   if [[ "$hits" -gt 0 ]]; then
     bump_counter warning "$hits"
     [[ "$FORMAT" == "text" ]] && echo "${YELLOW}${ICON_WARN} Potential resource lifecycle imbalances (heuristic): $hits${RESET}"
@@ -1690,6 +1866,8 @@ main() {
       echo "${DIM}Tip: run with --format=sarif to generate SARIF from ast-grep rules.${RESET}"
     fi
   fi
+
+  emit_module_metrics
 
   # Outputs
   if [[ -n "$EMIT_FINDINGS_JSON" ]]; then

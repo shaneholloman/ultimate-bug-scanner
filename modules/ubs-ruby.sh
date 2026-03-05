@@ -1302,6 +1302,28 @@ count=$("${GREP_RN[@]}" -e "Tempfile\.new\(|Dir\.mktmpdir\(" "$PROJECT_DIR" 2>/d
 if [ "$count" -gt 0 ]; then print_finding "info" "$count" "Tempfile/tmpdir without block may leak"; fi
 
 run_resource_lifecycle_checks() {
+  local helper="$SCRIPT_DIR/helpers/resource_lifecycle_ruby.py"
+  if [[ -f "$helper" ]] && command -v python3 >/dev/null 2>&1; then
+    local output
+    output="$(python3 "$helper" "$PROJECT_DIR" 2>/dev/null || true)"
+    if [[ -n "$output" ]]; then
+      print_subheader "Resource lifecycle correlation"
+      while IFS=$'\t' read -r location kind message; do
+        [[ -z "$location" || -z "$kind" ]] && continue
+        local summary="${RESOURCE_LIFECYCLE_SUMMARY[$kind]:-Resource imbalance}"
+        local remediation="${RESOURCE_LIFECYCLE_REMEDIATION[$kind]:-Ensure matching cleanup call}"
+        local severity="${RESOURCE_LIFECYCLE_SEVERITY[$kind]:-warning}"
+        local detail="$remediation"
+        [[ -n "$message" ]] && detail="$message"
+        print_finding "$severity" 1 "$summary [$location]" "$detail"
+      done <<<"$output"
+      return 0
+    fi
+    print_subheader "Resource lifecycle correlation"
+    print_finding "good" "All tracked resource acquisitions have matching cleanups"
+    return 0
+  fi
+
   local header_shown=0
   local rid
   for rid in "${RESOURCE_LIFECYCLE_IDS[@]}"; do

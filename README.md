@@ -336,7 +336,7 @@ This command deletes the UBS binary, shell RC snippets/aliases, config under `~/
 |------|--------------|----------------|
 | `--dry-run` | Prints every install action (downloads, PATH edits, hook writes, cleanup) without touching disk. Dry runs still resolve config, detect agents, and show you exactly what *would* change. | Audit the installer, demo it to teammates, or validate CI steps without modifying a workstation. |
 | `--self-test` | Immediately runs `test-suite/install/run_tests.sh` after installation and exits non-zero if the smoke suite fails. | CI/CD jobs and verified setups can prove the installer still works end-to-end before trusting a release. |
-| `--skip-type-narrowing` | Skip the Node.js + TypeScript readiness probe **and** the cross-language guard analyzers (JS/Rust/Kotlin/Swift). | Useful for air-gapped hosts or environments that want to stay in heuristic-only mode. |
+| `--skip-type-narrowing` | Skip the Node.js + TypeScript readiness probe **and** the cross-language guard analyzers (JS/Rust/Kotlin/Swift/C#). | Useful for air-gapped hosts or environments that want to stay in heuristic-only mode. |
 | `--skip-typos` | Skip the Typos spellchecker installation + diagnostics. | Handy when corp images already provide Typos or when you deliberately disable spellcheck automation. |
 | `--skip-doctor` | Skip the automatic `ubs doctor` run + session summary after install. | Use when CI already runs doctor separately or when you're iterating locally and want a faster finish. |
 
@@ -347,7 +347,7 @@ This command deletes the UBS binary, shell RC snippets/aliases, config under `~/
 > After every install the script now double-checks `command -v ubs`. If another copy shadows the freshly written binary, you’ll get an explicit warning with both paths so you can fix PATH order before running scans.
 
 > [!TIP]
-> Type narrowing relies on Node.js plus the `typescript` npm package *and* the Python helpers that power the Rust/Kotlin/Swift checks. The installer now checks Node/TypeScript readiness, can optionally run `npm install -g typescript`, and surfaces the status inside `install.sh --diagnose`. Use `--skip-type-narrowing` if you’re on an air-gapped host or plan to keep the heuristic-only mode.
+> Type narrowing relies on Node.js plus the `typescript` npm package *and* the Python helpers that power the Rust/Kotlin/Swift/C# checks. The installer now checks Node/TypeScript readiness, can optionally run `npm install -g typescript`, and surfaces the status inside `install.sh --diagnose`. Use `--skip-type-narrowing` if you’re on an air-gapped host or plan to keep the heuristic-only mode.
 
 > [!TIP]
 > To avoid global npm permission issues, the installer now detects/installs [bun](https://bun.sh/) just like other dependencies and uses `bun install --global typescript` by default, falling back to npm only if bun isn’t available.
@@ -982,7 +982,7 @@ Performance:
 Rule Control:
   --skip=CSV               Skip categories by number (see output for numbers)
                            Example: --skip=11,14  # Skip debug code + TODOs
-  --skip-type-narrowing    Disable tsserver-based guard analysis (falls back to text heuristics)
+  --skip-type-narrowing    Disable helper-backed guard analysis (falls back to text heuristics)
   --rules=DIR              Additional ast-grep rules directory
                            Rules are merged with built-in rules
   --no-auto-update         Disable automatic self-update
@@ -1338,9 +1338,11 @@ Language-specific helper scripts (Python AST walkers, Go analyzers, TypeScript t
 ```bash
 # Helper checksums embedded in each module:
 modules/helpers/
+├── resource_lifecycle_csharp.py # SHA-256 verified
 ├── resource_lifecycle_py.py    # SHA-256 verified
 ├── resource_lifecycle_go.go    # SHA-256 verified
 ├── resource_lifecycle_java.py  # SHA-256 verified
+├── type_narrowing_csharp.py    # SHA-256 verified
 ├── type_narrowing_ts.js        # SHA-256 verified
 ├── type_narrowing_rust.py      # SHA-256 verified
 ├── type_narrowing_kotlin.py    # SHA-256 verified
@@ -1601,6 +1603,7 @@ ubs .
 
 - **Python** – `modules/helpers/resource_lifecycle_py.py` now reasons over the AST, tracking `with`/`async with`, alias imports, and `.open()`/`.connect()` calls so `ubs-python` warns only when a handle is truly leaking. Pathlib `Path.open()` and similar patterns are handled without brittle regexes.
 - **Java** – New ast-grep rules (`java.resource.executor-no-shutdown`, `java.resource.thread-no-join`, `java.resource.jdbc-no-close`, `java.resource.resultset-no-close`, `java.resource.statement-no-close`) ensure ExecutorServices, raw `Thread`s, `java.sql.Connection`s, `Statement`/`PreparedStatement`/`CallableStatement`, and `ResultSet` handles all get proper shutdown/close semantics before the regex fallback ever runs.
+- **C#** – `modules/helpers/resource_lifecycle_csharp.py` and `modules/helpers/type_narrowing_csharp.py` now catch disposable-handle leaks (`CancellationTokenSource`, stream-like readers/writers, `HttpRequestMessage`) and null/`TryGetValue` guards that log but still fall through into dereferences.
 - **C++ / Rust / Ruby** – These modules already relied on ast-grep rule packs; the “Universal AST Adoption” epic is now complete with every language module (JS, Python, Go, C++, Rust, Java, Ruby, Swift, C#) running semantic detectors instead of fragile grep-only heuristics.
 
 #### Python – AST helper in action
@@ -2312,6 +2315,7 @@ Beyond regex pattern matching, UBS includes **deep AST-based analyzers** for lan
 | Language | Helper Location | Analysis Focus |
 |----------|-----------------|----------------|
 | TypeScript/JavaScript | `modules/helpers/type_narrowing_ts.js` | Null guards, optional chaining, type predicates |
+| C# | `modules/helpers/type_narrowing_csharp.py` | Null guards, `TryGetValue` fallthrough, dereference after failed narrowing |
 | Rust | `modules/helpers/type_narrowing_rust.py` | Option/Result handling, unwrap usage |
 | Kotlin | `modules/helpers/type_narrowing_kotlin.py` | Nullable types, smart casts, `.kt`/`.kts` files |
 | Swift | `modules/helpers/type_narrowing_swift.py` | Optional binding, guard statements |

@@ -65,9 +65,14 @@ def main():
         new_checksums[lang] = checksum
 
     helper_map = {
+        "helpers/async_task_handles_csharp.py": "helpers/async_task_handles_csharp.py",
+        "helpers/resource_lifecycle_csharp.py": "helpers/resource_lifecycle_csharp.py",
         "helpers/resource_lifecycle_py.py": "helpers/resource_lifecycle_py.py",
         "helpers/resource_lifecycle_go.go": "helpers/resource_lifecycle_go.go",
         "helpers/resource_lifecycle_java.py": "helpers/resource_lifecycle_java.py",
+        "helpers/resource_lifecycle_ruby.py": "helpers/resource_lifecycle_ruby.py",
+        "helpers/resource_lifecycle_swift.py": "helpers/resource_lifecycle_swift.py",
+        "helpers/type_narrowing_csharp.py": "helpers/type_narrowing_csharp.py",
         "helpers/type_narrowing_ts.js": "helpers/type_narrowing_ts.js",
         "helpers/type_narrowing_rust.py": "helpers/type_narrowing_rust.py",
         "helpers/type_narrowing_kotlin.py": "helpers/type_narrowing_kotlin.py",
