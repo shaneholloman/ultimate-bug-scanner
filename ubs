@@ -604,6 +604,19 @@ else
   fi
 fi
 SOURCE_PROJECT_DIR="$PROJECT_DIR"
+TARGETED_SCAN_MODE=0
+if [[ -n "$GIT_MODE" || ${#SCAN_FILES[@]} -gt 0 ]]; then
+  TARGETED_SCAN_MODE=1
+fi
+
+if [[ "$SHOW_VERSION" -eq 1 ]]; then
+  short_sha=""
+  if git rev-parse --short HEAD >/dev/null 2>&1; then
+    short_sha="$(git rev-parse --short HEAD 2>/dev/null || true)"
+  fi
+  say "UBS Meta-Runner v${UBS_VERSION}${short_sha:+ (git $short_sha)}"
+  exit 0
+fi
 
 # Load ignore patterns early so size checks can respect .ubsignore
 if [[ "$MODE" != "doctor" && "$UPDATE_ONLY" -eq 0 ]]; then
@@ -621,7 +634,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Check 1: Refuse to scan home directory or root (unless explicitly allowed)
-if [[ "$REFUSE_HOME_ROOT" -eq 1 && -d "$SOURCE_PROJECT_DIR" ]]; then
+if [[ "$TARGETED_SCAN_MODE" -eq 0 && "$REFUSE_HOME_ROOT" -eq 1 && -d "$SOURCE_PROJECT_DIR" ]]; then
   resolved_dir="$(cd "$SOURCE_PROJECT_DIR" 2>/dev/null && pwd -P)"
   if [[ "$resolved_dir" == "$HOME" ]]; then
     say "${RED}${X}${RESET} ${BOLD}Refusing to scan home directory${RESET}"
@@ -716,7 +729,7 @@ PY
 }
 
 # Check 2: Refuse directories larger than MAX_DIR_SIZE_MB (unless set to 0)
-if [[ "$SKIP_SIZE_CHECK" -eq 0 && "$MAX_DIR_SIZE_MB" -gt 0 && -d "$SOURCE_PROJECT_DIR" ]]; then
+if [[ "$TARGETED_SCAN_MODE" -eq 0 && "$SKIP_SIZE_CHECK" -eq 0 && "$MAX_DIR_SIZE_MB" -gt 0 && -d "$SOURCE_PROJECT_DIR" ]]; then
   dir_size_mb="$(dir_size_mb_filtered "$SOURCE_PROJECT_DIR" "$GLOBAL_EXCLUDE_PATTERNS")"
   if [[ "${QUIET:-0}" -eq 0 ]]; then
     say "${DIM}${INFO}${RESET} Scan size after ignores: ${dir_size_mb}MB (limit ${MAX_DIR_SIZE_MB}MB)"
@@ -732,15 +745,6 @@ if [[ "$SKIP_SIZE_CHECK" -eq 0 && "$MAX_DIR_SIZE_MB" -gt 0 && -d "$SOURCE_PROJEC
     say "${DIM}  • Disable the check:${RESET} UBS_MAX_DIR_SIZE_MB=0 ubs ..."
     exit 2
   fi
-fi
-
-if [[ "$SHOW_VERSION" -eq 1 ]]; then
-  short_sha=""
-  if git rev-parse --short HEAD >/dev/null 2>&1; then
-    short_sha="$(git rev-parse --short HEAD 2>/dev/null || true)"
-  fi
-  say "UBS Meta-Runner v${UBS_VERSION}${short_sha:+ (git $short_sha)}"
-  exit 0
 fi
 
 if [[ -n "$CATEGORY_FILTER" ]]; then
@@ -1023,12 +1027,12 @@ prepare_files_workspace(){
   done
 
   if [[ ${#resolved[@]} -eq 0 ]]; then
-    say "${RED}$X --files: no valid files specified${RESET}"
+    say "${RED}$X no valid files specified for explicit file scan${RESET}"
     exit 2
   fi
 
   if ! need_cmd rsync; then
-    say "${RED}$X rsync not found; required for --files${RESET}"
+    say "${RED}$X rsync not found; required for explicit file scans${RESET}"
     exit 1
   fi
 
@@ -2191,7 +2195,9 @@ cleanup(){
 trap cleanup EXIT
 COMBINED_JSON_FILE="$TMPDIR_RUN/combined.json"
 
-apply_ignore_filters
+if [[ "$TARGETED_SCAN_MODE" -eq 0 ]]; then
+  apply_ignore_filters
+fi
 if [[ "$SUGGEST_IGNORE" -eq 1 ]]; then
   suggest_ignore_candidates
 fi

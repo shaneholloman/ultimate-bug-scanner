@@ -262,6 +262,39 @@
       }
     },
     {
+      "id": "meta-explicit-files-bypass-size-guard",
+      "description": "Regression: explicit file targets must bypass whole-repo size guards and scan only the requested files.",
+      "path": "test-suite/js/clean/security.js",
+      "language": "js",
+      "tags": [
+        "meta",
+        "regression",
+        "files",
+        "size-guard"
+      ],
+      "env": {
+        "UBS_MAX_DIR_SIZE_MB": "1"
+      },
+      "args": [
+        "--only=js,python",
+        "test-suite/python/clean/clean_async_security.py"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 1
+          }
+        },
+        "require_substrings": [
+          "Preparing shadow workspace for 2 specified file(s)"
+        ]
+      }
+    },
+    {
       "id": "js-edge-cases",
       "description": "Aggregate JS edge-case directory (unicode, timezone, floating-point).",
       "path": "test-suite/edge-cases",
