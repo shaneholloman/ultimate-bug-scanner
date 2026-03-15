@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  UBS_NO_AUTO_UPDATE: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Syntax-check shell scripts
+        run: |
+          bash -n install.sh
+          bash -n ubs
+
+      - name: Verify entrypoint loads
+        run: ./ubs --help >/dev/null
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv with caching
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends jq ripgrep
+
+      - name: Install ast-grep
+        run: npm install -g @ast-grep/cli >/dev/null
+
+      - name: Sync Python dependencies
+        run: uv sync --locked --python 3.13
+
+      - name: Run manifest smoke suite
+        env:
+          NO_COLOR: "1"
+          UBS_LOG_JSON: "1"
+        run: |
+          cd test-suite && uv run python run_manifest.py --fail-fast \
+            --case js-core-buggy \
+            --case js-core-clean \
+            --case js-node-buggy \
+            --case js-node-clean \
+            --case golang-buggy \
+            --case golang-clean \
+            --case cpp-buggy \
+            --case cpp-clean \
+            --case rust-buggy \
+            --case rust-clean \
+            --case java-buggy \
+            --case java-clean \
+            --case ruby-buggy \
+            --case ruby-clean
+
+      - name: Run helper test suites
+        env:
+          NO_COLOR: "1"
+          UBS_LOG_JSON: "1"
+        run: |
+          uv run python test-suite/shareable/test_shareable_reports.py
+          uv run python test-suite/python/tests/test_resource_helper.py
+          uv run python test-suite/python/tests/test_git_safety_guard.py
+          uv run python test-suite/java/tests/test_resource_lifecycle_helper.py
+          uv run python test-suite/csharp/tests/test_helper_scanners.py
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Run shellcheck
+        run: |
+          shellcheck -S error install.sh ubs modules/*.sh scripts/*.sh
+
+      - name: Compile-check Python files
+        run: python3 -m compileall scripts modules/helpers
