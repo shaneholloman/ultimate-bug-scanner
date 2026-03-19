@@ -2317,10 +2317,10 @@ print_category "Detects: mutable defaults, many params, nested defs, returns" \
   "Function-level bugs cause subtle state leaks and readability problems."
 
 print_subheader "Mutable default arguments"
-count=$("${GREP_RN[@]}" -e "def[[:space:]]+[A-Za-z_][A-Za-z0-9_]*\([^\)]*(\[\]|{}|set\(\))[^\)]*\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+count=$("${GREP_RN[@]}" -e "def[[:space:]]+[A-Za-z_][A-Za-z0-9_]*\([^\)]*=[[:space:]]*(\[\]|\{\}|set\(\))[^\)]*\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
 if [ "$count" -gt 0 ]; then
   print_finding "critical" "$count" "Mutable default arguments" "Use None + set default in body"
-  show_detailed_finding "def[[:space:]]+[A-Za-z_][A-Za-z0-9_]*\([^\)]*(\[\]|{}|set\(\))[^\)]*\)" 5
+  show_detailed_finding "def[[:space:]]+[A-Za-z_][A-Za-z0-9_]*\([^\)]*=[[:space:]]*(\[\]|\{\}|set\(\))[^\)]*\)" 5
 else
   print_finding "good" "No mutable default arguments"
 fi

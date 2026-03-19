@@ -2986,7 +2986,7 @@ print_subheader "Hardcoded secrets/credentials"
 count=$("${GREP_RNI[@]}" -e "\b(password|api_?key|secret|token)\b[[:space:]]*[:=][[:space:]]*['\"]([^'\"]+)['\"]" "$PROJECT_DIR" 2>/dev/null |   (grep -v "process\.env" || true) | count_lines)
 if [ "$count" -gt 0 ]; then
   print_finding "critical" "$count" "Possible hardcoded secrets" "Use environment variables or secret managers"
-  show_detailed_finding "\b(password|api_?key|secret|token)\b[[:space:]]*[:=][[:space:]]*['\"]" 3
+  show_detailed_finding "\b(password|api_?key|secret|token)\b[[:space:]]*[:=][[:space:]]*['\"]([^'\"]+)['\"]" 3
 fi
 
 print_subheader "RegExp denial of service (ReDoS) risk"
