@@ -1598,6 +1598,95 @@ severity: warning
 message: "imp is deprecated; use importlib"
 YAML
 
+  # ───── Session-mined bug patterns (cass flywheel) ──────────────────────────
+  # Rules derived from bugs found via iterative deep-audit sessions
+  # across mcp_agent_mail, misc_coding_agent_tips, and other Python codebases.
+
+  cat >"$AST_RULE_DIR/json-load-no-try.yml" <<'YAML'
+id: py.json-load-no-try
+language: python
+rule:
+  pattern: json.load($F)
+  not:
+    inside:
+      kind: try_statement
+severity: warning
+message: "json.load() without try/except crashes on malformed JSON or empty files"
+YAML
+
+  cat >"$AST_RULE_DIR/stub-function-pass.yml" <<'YAML'
+id: py.stub-function-pass
+language: python
+rule:
+  pattern: |
+    def $NAME($$$):
+        pass
+severity: info
+message: "Function body is just 'pass'; will silently do nothing at runtime"
+YAML
+
+  cat >"$AST_RULE_DIR/stub-function-ellipsis.yml" <<'YAML'
+id: py.stub-function-ellipsis
+language: python
+rule:
+  pattern: |
+    def $NAME($$$):
+        ...
+severity: info
+message: "Function body is just '...'; will silently do nothing at runtime"
+YAML
+
+  cat >"$AST_RULE_DIR/env-get-empty-truthy.yml" <<'YAML'
+id: py.env-get-empty-string
+language: python
+rule:
+  any:
+    - pattern: os.environ.get($KEY)
+    - pattern: os.getenv($KEY)
+  inside:
+    kind: if_statement
+severity: info
+message: "os.getenv returns '' for set-but-empty vars (falsy); verify empty-string handling is intentional"
+YAML
+
+  cat >"$AST_RULE_DIR/retry-missing-decorator.yml" <<'YAML'
+id: py.sqlite-no-retry
+language: python
+rule:
+  any:
+    - pattern: cursor.execute($$$)
+    - pattern: conn.execute($$$)
+  not:
+    inside:
+      kind: try_statement
+severity: info
+message: "Database execute without exception handling; consider retry logic for OperationalError/SQLITE_BUSY"
+YAML
+
+  cat >"$AST_RULE_DIR/write-not-atomic.yml" <<'YAML'
+id: py.write-not-atomic
+language: python
+rule:
+  any:
+    - pattern: |
+        with open($PATH, "w") as $F:
+            $$$
+    - pattern: |
+        with open($PATH, "wb") as $F:
+            $$$
+severity: info
+message: "Non-atomic write (truncates then writes); for durability, write to temp file and os.rename()"
+YAML
+
+  cat >"$AST_RULE_DIR/signal-handler-too-complex.yml" <<'YAML'
+id: py.signal-handler-io
+language: python
+rule:
+  pattern: signal.signal($SIG, $HANDLER)
+severity: info
+message: "Signal handlers should be minimal (set a flag); avoid I/O, locks, or complex logic inside them"
+YAML
+
   # Done writing rules
 }
 

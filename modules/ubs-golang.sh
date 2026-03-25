@@ -1489,6 +1489,118 @@ severity: info
 message: "Prefer 'any' for empty interface in modern Go."
 YAML
 
+  # ───── Session-mined bug patterns (cass flywheel) ──────────────────────────
+  # Rules derived from 42+ Go bugs found via iterative deep-audit sessions
+  # in the ntm (Named Tmux Manager) codebase.
+
+  cat >"$AST_RULE_DIR/go-map-no-ok.yml" <<'YAML'
+id: go.map-lookup-no-ok
+language: go
+rule:
+  pattern: $V := $MAP[$KEY]
+  not:
+    any:
+      - pattern: $V, $OK := $MAP[$KEY]
+      - pattern: $V, _ := $MAP[$KEY]
+severity: warning
+message: "Map lookup without comma-ok returns zero value for missing keys; use v, ok := m[k]"
+YAML
+
+  cat >"$AST_RULE_DIR/go-sort-slice-param.yml" <<'YAML'
+id: go.sort-slice-mutates
+language: go
+rule:
+  any:
+    - pattern: sort.Slice($S, $$$)
+    - pattern: sort.SliceStable($S, $$$)
+severity: info
+message: "sort.Slice mutates the slice in-place; if this is a parameter or shared slice, callers' data is modified"
+YAML
+
+  cat >"$AST_RULE_DIR/go-content-type-prefix.yml" <<'YAML'
+id: go.content-type-prefix-match
+language: go
+rule:
+  any:
+    - pattern: strings.HasPrefix($CT, "application/json")
+severity: info
+message: "Content-type prefix check matches application/jsonpatch+json; use mime.ParseMediaType() for precision"
+YAML
+
+  cat >"$AST_RULE_DIR/go-remove-no-err.yml" <<'YAML'
+id: go.os-remove-no-error-check
+language: go
+rule:
+  pattern: |
+    os.Remove($PATH)
+  not:
+    inside:
+      any:
+        - pattern: $ERR := os.Remove($PATH)
+        - pattern: $ERR = os.Remove($PATH)
+        - pattern: if $ERR := os.Remove($PATH); $$$
+severity: warning
+message: "os.Remove error ignored; handle or check for os.ErrNotExist at minimum"
+YAML
+
+  cat >"$AST_RULE_DIR/go-sync-before-remove.yml" <<'YAML'
+id: go.missing-sync-before-remove
+language: go
+rule:
+  any:
+    - pattern: |
+        $F.Close()
+        os.Remove($PATH)
+    - pattern: |
+        $F.Close()
+        os.Rename($SRC, $DST)
+severity: info
+message: "Close without Sync before Remove/Rename; buffered data may be lost on crash. Call f.Sync() first"
+YAML
+
+  cat >"$AST_RULE_DIR/go-fmt-errorf-no-w.yml" <<'YAML'
+id: go.fmt-errorf-no-wrap
+language: go
+rule:
+  pattern: fmt.Errorf($FMT, $ERR)
+  not:
+    has:
+      regex: "%w"
+severity: info
+message: "fmt.Errorf without %w loses error chain; use %w to wrap the original error"
+YAML
+
+  cat >"$AST_RULE_DIR/go-json-decode-no-limit.yml" <<'YAML'
+id: go.json-decode-no-limit
+language: go
+rule:
+  pattern: json.NewDecoder($BODY).Decode($$$)
+severity: info
+message: "Unbounded JSON decode from request body; use io.LimitReader to prevent DoS via large payloads"
+YAML
+
+  cat >"$AST_RULE_DIR/go-pgrep-unanchored.yml" <<'YAML'
+id: go.exec-pgrep-unanchored
+language: go
+rule:
+  any:
+    - pattern: exec.Command("pgrep", $PATTERN)
+    - pattern: exec.Command("pgrep", "-f", $PATTERN)
+severity: info
+message: "pgrep matches substrings by default; use -x (exact) or anchor the pattern to avoid false positives"
+YAML
+
+  cat >"$AST_RULE_DIR/go-time-after-leak.yml" <<'YAML'
+id: go.time-after-in-loop
+language: go
+rule:
+  pattern: time.After($DUR)
+  inside:
+    kind: for_statement
+severity: warning
+message: "time.After in loop leaks timers until they fire; use time.NewTimer with Stop/Reset"
+YAML
+
   # Strict mode severity bumps (best-effort)
   if [[ "$STRICT_MODE" -eq 1 ]]; then
     sed -i.bak -E 's/^severity:[[:space:]]*info$/severity: warning/' "$AST_RULE_DIR"/*.yml 2>/dev/null || true

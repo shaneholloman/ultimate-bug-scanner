@@ -2264,6 +2264,91 @@ rule:
 severity: warning
 message: "MutationObserver created without disconnect()."
 YAML
+
+  # ───── Session-mined bug patterns (cass flywheel) ──────────────────────────
+  # Rules derived from 17+ TS/JS bugs found via iterative deep-audit sessions
+  # in the jeffreys-skills-md SaaS codebase.
+
+  cat >"$AST_RULE_DIR/js-nullish-chain.yml" <<'YAML'
+id: js.nullish-coalescing-chain
+language: typescript
+rule:
+  pattern: $A ?? $B ?? $C
+severity: info
+message: "Chained ?? operators have left-to-right precedence; add parentheses to clarify intent"
+YAML
+
+  cat >"$AST_RULE_DIR/js-json-parse-no-try.yml" <<'YAML'
+id: js.json-parse-no-try
+language: typescript
+rule:
+  pattern: JSON.parse($X)
+  not:
+    inside:
+      kind: try_statement
+severity: warning
+message: "JSON.parse without try/catch crashes on malformed input"
+YAML
+
+  cat >"$AST_RULE_DIR/js-usememo-empty-deps.yml" <<'YAML'
+id: js.react.useMemo-empty-deps
+language: typescript
+rule:
+  any:
+    - pattern: useMemo(() => $BODY, [])
+    - pattern: useCallback(($$$) => $BODY, [])
+severity: info
+message: "Empty dependency array with non-trivial body; verify all referenced values are truly stable or add them to deps"
+YAML
+
+  cat >"$AST_RULE_DIR/js-sort-undefined.yml" <<'YAML'
+id: js.tanstack.sortUndefined-direction
+language: typescript
+rule:
+  regex: "sortUndefined:\\s*-1"
+severity: info
+message: "sortUndefined: -1 sorts nulls to top; use 1 to sort to bottom (common expectation)"
+YAML
+
+  cat >"$AST_RULE_DIR/js-require-user-admin.yml" <<'YAML'
+id: js.auth.requireUser-in-admin
+language: typescript
+rule:
+  pattern: requireUser($$$)
+severity: info
+message: "requireUser() in this route; verify requireAdmin() isn't needed for admin-only endpoints"
+YAML
+
+  cat >"$AST_RULE_DIR/js-non-atomic-write.yml" <<'YAML'
+id: js.fs.writeFileSync-not-atomic
+language: typescript
+rule:
+  any:
+    - pattern: fs.writeFileSync($PATH, $DATA)
+    - pattern: writeFileSync($PATH, $DATA)
+severity: info
+message: "writeFileSync is not atomic; for durability, write to temp file and rename"
+YAML
+
+  cat >"$AST_RULE_DIR/js-stale-closure-useeffect.yml" <<'YAML'
+id: js.react.useEffect-empty-deps
+language: typescript
+rule:
+  any:
+    - pattern: useEffect(() => { $$$ }, [])
+severity: info
+message: "useEffect with empty deps runs once; verify no referenced values change over the component lifecycle"
+YAML
+
+  cat >"$AST_RULE_DIR/js-operator-precedence-nullish.yml" <<'YAML'
+id: js.operator-precedence-ternary-nullish
+language: typescript
+rule:
+  any:
+    - pattern: $A ?? $B ? $C : $D
+severity: warning
+message: "?? and ternary have ambiguous precedence; add parentheses: ($A ?? $B) ? ... or $A ?? ($B ? ...)"
+YAML
 }
 
 ensure_ast_rule_results() {

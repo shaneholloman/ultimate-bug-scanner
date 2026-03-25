@@ -1608,6 +1608,140 @@ severity: info
 message: "chars().nth(n) is O(n); repeated use can be a perf hotspot"
 YAML
 
+  # ───── Session-mined bug patterns (cass flywheel) ──────────────────────────
+  # Rules derived from 130+ Rust bugs found via iterative deep-audit sessions
+  # across frankensqlite, frankensearch, cass, mcp_agent_mail_rust, beads_rust.
+
+  cat >"$AST_RULE_DIR/strict-utf8.yml" <<'YAML'
+id: rust.strict-utf8
+language: rust
+rule:
+  any:
+    - pattern: String::from_utf8($X).unwrap()
+    - pattern: str::from_utf8($X).unwrap()
+    - pattern: String::from_utf8($X).expect($MSG)
+    - pattern: str::from_utf8($X).expect($MSG)
+severity: warning
+message: "from_utf8().unwrap() panics on invalid UTF-8; consider from_utf8_lossy() for untrusted input"
+YAML
+
+  cat >"$AST_RULE_DIR/instant-now-elapsed.yml" <<'YAML'
+id: rust.instant-now-elapsed
+language: rust
+rule:
+  pattern: Instant::now().elapsed()
+severity: warning
+message: "Instant::now().elapsed() is always ~0ns; you likely want elapsed() on a previously-stored Instant"
+YAML
+
+  cat >"$AST_RULE_DIR/parse-float-no-finite-check.yml" <<'YAML'
+id: rust.parse-float-no-finite-check
+language: rust
+rule:
+  any:
+    - pattern: $X.parse::<f64>().unwrap_or($D)
+    - pattern: $X.parse::<f32>().unwrap_or($D)
+severity: info
+message: "parse::<f64>() can produce INFINITY/NaN; validate with is_finite() after parsing"
+YAML
+
+  cat >"$AST_RULE_DIR/wrapping-arithmetic.yml" <<'YAML'
+id: rust.wrapping-arithmetic
+language: rust
+rule:
+  any:
+    - pattern: $X.wrapping_add($Y)
+    - pattern: $X.wrapping_sub($Y)
+    - pattern: $X.wrapping_mul($Y)
+severity: info
+message: "wrapping arithmetic silently overflows; verify this is intentional and not masking a bug"
+YAML
+
+  cat >"$AST_RULE_DIR/from-slice-panic.yml" <<'YAML'
+id: rust.from-slice-panic
+language: rust
+rule:
+  any:
+    - pattern: Nonce::from_slice($X)
+    - pattern: GenericArray::from_slice($X)
+    - pattern: Key::from_slice($X)
+severity: warning
+message: "from_slice panics if input length is wrong; validate length first or use try_from"
+YAML
+
+  cat >"$AST_RULE_DIR/instant-subtraction-panic.yml" <<'YAML'
+id: rust.instant-subtraction
+language: rust
+rule:
+  pattern: $A - $DUR
+  inside:
+    any:
+      - pattern: Instant::now() - $DUR
+severity: warning
+message: "Instant subtraction panics if duration exceeds system uptime; use checked_sub()"
+YAML
+
+  cat >"$AST_RULE_DIR/i64-negate-overflow.yml" <<'YAML'
+id: rust.i64-negate-overflow
+language: rust
+rule:
+  any:
+    - pattern: (-$X) as i64
+    - pattern: $X.wrapping_neg()
+    - pattern: -($X as i64)
+severity: info
+message: "Negating i64::MIN wraps silently to i64::MIN; consider checked_neg() or promote to i128"
+YAML
+
+  cat >"$AST_RULE_DIR/hashmap-entry-zero-value.yml" <<'YAML'
+id: rust.hashmap-index-panic
+language: rust
+rule:
+  pattern: $MAP[$KEY]
+  not:
+    inside:
+      any:
+        - pattern: $MAP.get($KEY)
+        - pattern: $MAP.contains_key($KEY)
+severity: info
+message: "HashMap indexing panics if key is missing; prefer .get() or .entry()"
+YAML
+
+  cat >"$AST_RULE_DIR/write-not-atomic.yml" <<'YAML'
+id: rust.write-not-atomic
+language: rust
+rule:
+  any:
+    - pattern: std::fs::write($PATH, $DATA)
+    - pattern: fs::write($PATH, $DATA)
+severity: info
+message: "fs::write is not atomic (truncates then writes); for durability, write to a temp file and rename"
+YAML
+
+  cat >"$AST_RULE_DIR/spawn-no-join.yml" <<'YAML'
+id: rust.thread-spawn-no-join
+language: rust
+rule:
+  pattern: std::thread::spawn($CLOSURE)
+  not:
+    inside:
+      pattern: let $HANDLE = std::thread::spawn($CLOSURE)
+severity: warning
+message: "thread::spawn result discarded; panics in the thread will be silently lost. Keep the JoinHandle"
+YAML
+
+  cat >"$AST_RULE_DIR/tokio-spawn-no-handle.yml" <<'YAML'
+id: rust.tokio-spawn-no-handle
+language: rust
+rule:
+  pattern: tokio::spawn($FUTURE)
+  not:
+    inside:
+      pattern: let $HANDLE = tokio::spawn($FUTURE)
+severity: info
+message: "tokio::spawn result discarded; errors in the task will be silently lost"
+YAML
+
   # Copy rules for external usage if requested
   if [[ -n "$DUMP_RULES_DIR" ]]; then cp -R "$AST_RULE_DIR"/. "$DUMP_RULES_DIR"/ 2>/dev/null || true; fi
 }
