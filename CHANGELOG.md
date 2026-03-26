@@ -8,9 +8,9 @@ Repository: <https://github.com/Dicklesworthstone/ultimate_bug_scanner>
 
 ---
 
-## [Unreleased] (after v5.0.6)
+## [v5.0.7] - 2026-03-25 **[Release]**
 
-> Commits on `master` since 2026-01-05. Not yet tagged.
+> 80 commits since v5.0.6 — biggest release since v5.0.0.
 
 ### 9th Language: C#
 
@@ -64,6 +64,12 @@ UBS now scans C# codebases, bringing the total to 9 supported languages.
 - Add CI workflow for build, test, and lint ([`e58e2c2`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/e58e2c2958dc28d6c19f0b477eaa5955a6b8f0a2))
 - Add ACFS notification workflow for installer changes ([`88464ea`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/88464ea))
 
+### Session-Mined Bug Patterns
+
+- Add 37 session-mined bug patterns for Go, Rust, Python, and JS/TS ([`1ed3c4c`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/1ed3c4c))
+- Concurrent agent refinements to bug detection rules ([`6539a45`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/6539a45))
+- Refine Go and JS/TS ast-grep rules to reduce false positives ([`5f50e30`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/5f50e30))
+
 ### Other
 
 - Update license to MIT with OpenAI/Anthropic Rider ([`534c897`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/534c8977a2d13daa9206c408a46c6c8bb4f19971))
@@ -71,6 +77,9 @@ UBS now scans C# codebases, bringing the total to 9 supported languages.
 - Add GitHub social preview image ([`b3bdbf8`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/b3bdbf8b51f812d25ab3a85242692b93d53195ac))
 - Add Homebrew package manager installation option to README ([`22254dc`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/22254dc))
 - Prioritize Homebrew/Scoop installation methods in docs ([`883969c`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/883969c))
+- Add comprehensive CHANGELOG.md documenting project history ([`1149f8f`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/1149f8f))
+
+**Full diff:** [`v5.0.6...v5.0.7`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/compare/v5.0.6...v5.0.7)
 
 ---
 
@@ -467,7 +476,8 @@ Deep type safety checks that detect missing null guards and type checks:
 ---
 
 <!-- Link references -->
-[Unreleased]: https://github.com/Dicklesworthstone/ultimate_bug_scanner/compare/v5.0.6...HEAD
+[Unreleased]: https://github.com/Dicklesworthstone/ultimate_bug_scanner/compare/v5.0.7...HEAD
+[v5.0.7]: https://github.com/Dicklesworthstone/ultimate_bug_scanner/releases/tag/v5.0.7
 [v5.0.6]: https://github.com/Dicklesworthstone/ultimate_bug_scanner/releases/tag/v5.0.6
 [v5.0.5]: https://github.com/Dicklesworthstone/ultimate_bug_scanner/releases/tag/v5.0.5
 [v5.0.4]: https://github.com/Dicklesworthstone/ultimate_bug_scanner/releases/tag/v5.0.4

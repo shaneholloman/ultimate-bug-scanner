@@ -52,7 +52,7 @@ UBS is a **pure Bash project** — the meta-runner (`ubs`) and all language modu
 - **Shell dialect:** Bash 5+ with `set -Eeuo pipefail`
 - **Package management:** Nix flake (`flake.nix`) for reproducible dev shells and packaging; `pyproject.toml` (uv-managed, Python 3.13) for helper tooling only
 - **Core runtime dependencies:** `bash`, `jq`, `ripgrep`, `git`, `curl`, `python3`
-- **Version:** Tracked in `VERSION` file (currently 5.0.5)
+- **Version:** Tracked in `VERSION` file (currently 5.0.7)
 - **Unsafe code:** N/A (shell scripts)
 
 ### Key Dependencies
