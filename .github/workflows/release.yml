@@ -328,11 +328,20 @@ jobs:
     name: Notify Homebrew Tap
     runs-on: ubuntu-latest
     needs: publish
+    env:
+      TAP_TOKEN: ${{ secrets.ACFS_REPO_DISPATCH_TOKEN }}
     steps:
+      - name: Skip dispatch when token missing
+        if: ${{ env.TAP_TOKEN == '' }}
+        run: |
+          echo "::warning::ACFS_REPO_DISPATCH_TOKEN not set; skipping Homebrew tap dispatch."
+          echo "The tap's scheduled check (every 6h) will pick up the new version automatically."
+
       - name: Trigger formula update
+        if: ${{ env.TAP_TOKEN != '' }}
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          token: ${{ env.TAP_TOKEN }}
           repository: Dicklesworthstone/homebrew-tap
           event-type: formula-update
           client-payload: |
@@ -342,6 +351,7 @@ jobs:
             }
 
       - name: Log dispatch
+        if: ${{ env.TAP_TOKEN != '' }}
         run: |
           echo "✅ Dispatched formula-update event to homebrew-tap"
           echo "   Tool: ubs"
