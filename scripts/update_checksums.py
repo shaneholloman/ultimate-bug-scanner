@@ -49,7 +49,8 @@ def main():
         "golang": "ubs-golang.sh",
         "java": "ubs-java.sh",
         "ruby": "ubs-ruby.sh",
-        "swift": "ubs-swift.sh"
+        "swift": "ubs-swift.sh",
+        "elixir": "ubs-elixir.sh"
     }
 
     new_checksums = {}

@@ -36,6 +36,7 @@ MODULE_PATH_TEMPLATE="$REPO_RAW/modules/ubs-%s.sh"
 declare -A MODULE_CHECKSUMS=(
   [cpp]='7feb11e7e8ad5bcd2771a7f809521233bc69fd97a97ff07d0ca4e40d2831b910'
   [csharp]='f3d38ad3842780263765d8b6718cc459514119f780cc1d39c9425bf0bf9a51a1'
+  [elixir]='15a87bc4d2aabfb63448c59df787fa193e44611176c5926151ff4b22aea71457'
   [golang]='4818c7a0261c8609dfca84788f252f123959ce1dc1cb1686d2c74232861afe88'
   [java]='e91cf81a39f9323292b7cd0778a9ee56ed879a25eaea612ac4c289dce8c6560b'
   [js]='e79aa9a39cc5808e922abf319ba375c150a5a84b56de979fd4669d9c89ed43c4'
@@ -278,7 +279,7 @@ SESSION_RAW=0
 SESSION_LOG_DIR_OVERRIDE=""
 VERIFY_MODULE_ERR=""
 VERIFY_HELPER_ERR=""
-ALL_LANGS=(js python cpp rust golang java ruby swift csharp)
+ALL_LANGS=(js python cpp rust golang java ruby swift csharp elixir)
 UPDATE_ONLY=0
 FORCE_SELF_UPDATE=0
 CATEGORY_FILTER=""
@@ -325,7 +326,7 @@ Options:
   --fail-on-warning       Exit non-zero if warnings or critical exist
   -v, --verbose           Pass -v to child scanners (if supported)
   -q, --quiet             Reduce console output (also passes -q to scanners)
-  --only=CSV              Restrict to languages: js,python,c,cpp,rust,golang,java,ruby,swift,csharp,cs
+  --only=CSV              Restrict to languages: js,python,c,cpp,rust,golang,java,ruby,swift,csharp,cs,elixir,ex
   --exclude=CSV           Exclude languages
   --module-dir=DIR        Where to store/lookup modules (default: $MODULE_DIR_DEFAULT)
   --category=CSV          Focus on category packs (e.g., resource-lifecycle for AST lifecycle analyzers)
@@ -1881,6 +1882,15 @@ detect_lang(){
           -type f \( -name '*.cs' -o -name '*.csx' -o -name '*.csproj' -o -name '*.sln' -o -name 'Directory.Build.props' -o -name 'Directory.Build.targets' -o -name 'global.json' -o -name 'nuget.config' \) -print -quit 2>/dev/null | grep -q . && found=0
       fi
       ;;
+    elixir)
+      if need_cmd rg; then
+        rg -q --hidden -g '!_build/**' -g '!deps/**' -g '!.elixir_ls/**' -g '!cover/**' \
+           -g '*.ex' -g '*.exs' -g 'mix.exs' -g 'mix.lock' . "$PROJECT_DIR" 2>/dev/null && found=0
+      else
+        find "$PROJECT_DIR" \( -name _build -o -name deps -o -name .elixir_ls -o -name cover -o -name .git \) -prune -o \
+          -type f \( -name '*.ex' -o -name '*.exs' -o -name 'mix.exs' -o -name 'mix.lock' \) -print -quit 2>/dev/null | grep -q . && found=0
+      fi
+      ;;
   esac
   return $found
 }
@@ -2224,6 +2234,7 @@ normalize_lang(){
   case "$1" in
     c) echo "cpp" ;;
     cs|csharp|csharp-dotnet|dotnet|c#) echo "csharp" ;;
+    ex|elixir|phoenix) echo "elixir" ;;
     *) echo "$1" ;;
   esac
 }
