@@ -117,6 +117,35 @@ def parse_module_text_summary(stdout: str, project_label: str) -> Optional[Dict[
     }
 
 
+def parse_toon_summary(stdout: str, project_label: str) -> Optional[Dict[str, Any]]:
+    """Parse UBS --format=toon output to extract aggregate totals.
+
+    TOON output is YAML-like with a top-level ``scanners[N]:`` array whose
+    entries each expose ``critical``, ``warning``, ``info``, and ``files``
+    keys. Totals are the sum across scanners so the manifest's min/max
+    assertions continue to work regardless of format.
+    """
+    if "scanners[" not in stdout or "findings[" not in stdout:
+        return None
+    totals = {"critical": 0, "warning": 0, "info": 0, "files": 0}
+    found_any = False
+    pattern = re.compile(r"^\s+(critical|warning|info|files):\s*(\d+)\s*$")
+    for line in stdout.splitlines():
+        m = pattern.match(line)
+        if not m:
+            continue
+        key = m.group(1)
+        totals[key] += int(m.group(2))
+        found_any = True
+    if not found_any:
+        return None
+    return {
+        "project": project_label,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "totals": totals,
+    }
+
+
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
@@ -281,6 +310,8 @@ def main() -> None:
             summary = parse_text_summary(proc.stdout, case_path_arg)
             if summary is None:
                 summary = parse_module_text_summary(proc.stdout, case_path_arg)
+            if summary is None:
+                summary = parse_toon_summary(proc.stdout, case_path_arg)
             if summary is None:
                 allow_unparseable = bool((case.get("expect") or {}).get("allow_unparseable_output", False))
                 if not allow_unparseable:

@@ -38,7 +38,10 @@ def read_text(path: Path) -> str:
 async def process_users(db, ids):
     async def fetch_one(user_id: str):
         record = await db.fetch(user_id)
-        return json.loads(record)
+        try:
+            return json.loads(record)
+        except json.JSONDecodeError:
+            return None
 
     coros = [fetch_one(user_id) for user_id in ids]
     return await asyncio.gather(*coros)
