@@ -2209,6 +2209,7 @@ tls_insecure=$(( $(ast_search 'reqwest::ClientBuilder::new().danger_accept_inval
 if [ "$tls_insecure" -gt 0 ]; then print_finding "critical" "$tls_insecure" "TLS verification disabled"; add_finding "critical" "$tls_insecure" "TLS verification disabled" "" "${CATEGORY_NAME[8]}"; fi
 
 print_subheader "Shell command execution through -c"
+# shellcheck disable=SC2016  # ast-grep metavariables are literal patterns.
 shell_command_ast=$(( \
   $(ast_search 'std::process::Command::new($S).arg("-c").arg($CMD)' || echo 0) \
   + $(ast_search 'Command::new($S).arg("-c").arg($CMD)' || echo 0) \
