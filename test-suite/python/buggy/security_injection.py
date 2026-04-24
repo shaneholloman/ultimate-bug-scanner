@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import yaml
 import requests
+from subprocess import run as shell_run
 
 USER_INPUT = "admin' OR 1=1 --"
 
@@ -19,6 +20,7 @@ print(data)
 
 # Shell command injection
 subprocess.run(f"ls {USER_INPUT}", shell=True)
+shell_run(f"cat {USER_INPUT}", shell=True)
 
 # SQL injection
 conn = sqlite3.connect(':memory:')

@@ -1191,7 +1191,9 @@ rule:
     - pattern: subprocess.run($$$, shell=True)
     - pattern: subprocess.call($$$, shell=True)
     - pattern: subprocess.check_output($$$, shell=True)
+    - pattern: subprocess.check_call($$$, shell=True)
     - pattern: subprocess.Popen($$$, shell=True)
+    - pattern: $FN($$$, shell=True)
 severity: error
 message: "shell=True is dangerous; prefer exec array with shell=False"
 YAML
@@ -1467,8 +1469,11 @@ language: python
 rule:
   pattern: subprocess.run($$$)
   not:
-    has:
-      pattern: check=$C
+    any:
+      - has:
+          pattern: check=$C
+      - regex: 'check\s*='
+      - regex: 'shell\s*='
 severity: info
 message: "subprocess.run without check=... may silently ignore failures; consider check=True"
 YAML
@@ -1514,8 +1519,10 @@ language: python
 rule:
   pattern: requests.$M($URL, $$$)
   not:
-    has:
-      pattern: timeout=$T
+    any:
+      - has:
+          pattern: timeout=$T
+      - regex: 'timeout\s*='
 severity: info
 message: "requests call without timeout=... may hang"
 YAML
@@ -2364,12 +2371,13 @@ if [ "$count" -gt 0 ]; then
 fi
 
 print_subheader "subprocess shell=True / os.system"
-count=$("${GREP_RN[@]}" -e "subprocess\.(run|call|check_output|Popen)\(.*shell\s*=\s*True" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+shell_true_pattern="^[^#]*\b[A-Za-z_][A-Za-z0-9_\.]*\([^#]*shell\s*=\s*True"
+count=$("${GREP_RN[@]}" -e "$shell_true_pattern" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
 count2=$("${GREP_RN[@]}" -e "os\.system\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
 total=$((count + count2))
 if [ "$total" -gt 0 ]; then
   print_finding "critical" "$total" "Shell command injection risk" "Pass argv list with shell=False"
-  show_detailed_finding "subprocess\.(run|call|check_output|Popen)\(.*shell\s*=\s*True|os\.system\(" 5
+  show_detailed_finding "$shell_true_pattern|os\.system\(" 5
 else
   print_finding "good" "No shell=True / os.system detected"
 fi
