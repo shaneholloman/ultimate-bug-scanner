@@ -68,6 +68,36 @@ async function analyzeFileWithTs(filePath) {
   const scriptKind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true, scriptKind);
   const results = [];
+  const nextNavigationTerminators = new Set();
+  const nextNavigationNamespaces = new Set();
+  const nextNavigationNoReturnExports = new Set([
+    'redirect',
+    'permanentRedirect',
+    'notFound',
+    'forbidden',
+    'unauthorized',
+  ]);
+
+  function collectNoReturnImports() {
+    for (const stmt of sourceFile.statements) {
+      if (!ts.isImportDeclaration(stmt)) continue;
+      if (!ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+      if (stmt.moduleSpecifier.text !== 'next/navigation') continue;
+      const clause = stmt.importClause;
+      if (!clause || !clause.namedBindings) continue;
+      const bindings = clause.namedBindings;
+      if (ts.isNamedImports(bindings)) {
+        for (const specifier of bindings.elements) {
+          const imported = specifier.propertyName ? specifier.propertyName.text : specifier.name.text;
+          if (nextNavigationNoReturnExports.has(imported)) {
+            nextNavigationTerminators.add(specifier.name.text);
+          }
+        }
+      } else if (ts.isNamespaceImport(bindings)) {
+        nextNavigationNamespaces.add(bindings.name.text);
+      }
+    }
+  }
 
   function extractGuardedIdentifier(expression) {
     if (ts.isBinaryExpression(expression)) {
@@ -106,8 +136,23 @@ async function analyzeFileWithTs(filePath) {
     return ts.isIdentifier(node) && node.text === 'undefined';
   }
 
+  function isKnownNoReturnCall(node) {
+    if (!ts.isCallExpression(node)) return false;
+    const callee = node.expression;
+    if (ts.isIdentifier(callee)) {
+      return nextNavigationTerminators.has(callee.text);
+    }
+    if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)) {
+      return nextNavigationNamespaces.has(callee.expression.text) &&
+        nextNavigationNoReturnExports.has(callee.name.text);
+    }
+    return false;
+  }
+
   function blockHasExit(node) {
     if (ts.isReturnStatement(node) || ts.isThrowStatement(node)) return true;
+    if (ts.isExpressionStatement(node) && isKnownNoReturnCall(node.expression)) return true;
+    if (ts.isCallExpression(node) && isKnownNoReturnCall(node)) return true;
     if (ts.isBlock(node)) return node.statements.some(blockHasExit);
     if (ts.isIfStatement(node)) {
       return node.elseStatement ? blockHasExit(node.thenStatement) && blockHasExit(node.elseStatement) : false;
@@ -209,6 +254,7 @@ async function analyzeFileWithTs(filePath) {
     ts.forEachChild(node, visit);
   }
 
+  collectNoReturnImports();
   visit(sourceFile);
   return results;
 }
@@ -217,6 +263,9 @@ async function analyzeFileFallback(filePath) {
   const text = await fs.readFile(filePath, 'utf8');
   const lines = text.split(/\r?\n/);
   const results = [];
+  const nextNavigationImport = /from\s+['"]next\/navigation['"]/.test(text) ||
+    /require\(\s*['"]next\/navigation['"]\s*\)/.test(text);
+  const noReturnCall = /\b(?:redirect|permanentRedirect|notFound|forbidden|unauthorized)\s*\(/;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     // Match both loose (==) and strict (===) equality to be consistent with AST analyzer
@@ -225,7 +274,7 @@ async function analyzeFileFallback(filePath) {
     const name = guard[1];
     let exits = false;
     for (let j = i + 1; j < Math.min(lines.length, i + 6); j++) {
-      if (/return\b|throw\b/.test(lines[j])) {
+      if (/return\b|throw\b/.test(lines[j]) || (nextNavigationImport && noReturnCall.test(lines[j]))) {
         exits = true;
         break;
       }
