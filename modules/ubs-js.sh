@@ -1332,6 +1332,10 @@ SANITIZER_REGEXES = [
     re.compile(r"db\.escape|pool\.escape|connection\.escape|mysql\.escape|sqlstring\.escape"),
 ]
 
+CHILD_PROCESS_APIS = ('execFileSync', 'execFile', 'execSync', 'spawnSync', 'spawn', 'exec')
+CHILD_PROCESS_API_RE = r"(?:execFileSync|execFile|execSync|spawnSync|spawn|exec)"
+CHILD_PROCESS_MODULE_RE = r"['\"](?:node:)?child_process['\"]"
+
 SINKS = [
     (re.compile(r"\.innerHTML\s*=\s*(.+)"), 'js.taint.xss', 'innerHTML write'),
     (re.compile(r"\.outerHTML\s*=\s*(.+)"), 'js.taint.xss', 'outerHTML write'),
@@ -1342,7 +1346,6 @@ SINKS = [
     (re.compile(r"res(?:ponse)?\.json\s*\((.+)\)"), 'js.taint.xss', 'HTTP json send'),
     (re.compile(r"eval\s*\((.+)\)"), 'js.taint.eval', 'eval'),
     (re.compile(r"new\s+Function\s*\((.+)\)"), 'js.taint.eval', 'Function constructor'),
-    (re.compile(r"(?:child_process|cp)\.(?:execFile|exec|spawn|execSync|spawnSync)\s*\((.+)\)"), 'js.taint.command', 'child_process exec'),
     (re.compile(r"shell\.exec\s*\((.+)\)"), 'js.taint.command', 'shell.exec'),
     (re.compile(r"(?:db|pool|connection|client|knex|sequelize|prisma)\.(?:query|execute|raw)\s*\((.+)\)"), 'js.taint.sql', 'SQL execution'),
 ]
@@ -1353,7 +1356,11 @@ DESTRUCT_OBJECT = re.compile(r"^(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(.+)")
 DESTRUCT_ARRAY = re.compile(r"^(?:const|let|var)\s*\[([^]]*)\]\s*=\s*(.+)")
 
 def should_skip(path: Path) -> bool:
-    return any(part in SKIP_DIRS for part in path.parts)
+    try:
+        parts = path.relative_to(BASE_DIR).parts
+    except ValueError:
+        parts = path.parts
+    return any(part in SKIP_DIRS for part in parts)
 
 def iter_js_files(root: Path):
     if root.is_file():
@@ -1439,6 +1446,71 @@ def parse_targets(blob: str):
             targets.append(name)
     return targets
 
+def parse_child_process_members(blob: str):
+    members = set()
+    for chunk in blob.split(','):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        chunk = chunk.split('=')[0].strip()
+        if ':' in chunk:
+            exported, local = chunk.split(':', 1)
+        elif re.search(r"\s+as\s+", chunk):
+            exported, local = re.split(r"\s+as\s+", chunk, maxsplit=1)
+        else:
+            exported, local = chunk, chunk
+        exported = exported.strip()
+        local = normalize_target(local)
+        if exported in CHILD_PROCESS_APIS and re.match(r"^[A-Za-z_$][\w$]*$", local):
+            members.add(local)
+    return members
+
+def source_line(raw: str) -> str:
+    line = raw.strip()
+    if line.startswith('//') or line.startswith('*'):
+        return ''
+    return line
+
+def child_process_bindings(lines):
+    module_aliases = {'child_process', 'cp'}
+    function_aliases = set()
+    api_group = CHILD_PROCESS_API_RE
+
+    for raw in lines:
+        line = source_line(raw)
+        if not line:
+            continue
+        m = re.search(rf"\b(?:const|let|var)\s*\{{([^}}]+)\}}\s*=\s*require\s*\(\s*{CHILD_PROCESS_MODULE_RE}\s*\)", line)
+        if m:
+            function_aliases.update(parse_child_process_members(m.group(1)))
+        m = re.search(rf"\bimport\s*\{{([^}}]+)\}}\s*from\s*{CHILD_PROCESS_MODULE_RE}", line)
+        if m:
+            function_aliases.update(parse_child_process_members(m.group(1)))
+        m = re.search(rf"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*{CHILD_PROCESS_MODULE_RE}\s*\)", line)
+        if m:
+            module_aliases.add(m.group(1))
+        m = re.search(rf"\bimport\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s+{CHILD_PROCESS_MODULE_RE}", line)
+        if m:
+            module_aliases.add(m.group(1))
+        m = re.search(rf"\bimport\s+([A-Za-z_$][\w$]*)\s+from\s+{CHILD_PROCESS_MODULE_RE}", line)
+        if m:
+            module_aliases.add(m.group(1))
+        m = re.search(rf"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*{CHILD_PROCESS_MODULE_RE}\s*\)\.{api_group}\b", line)
+        if m:
+            function_aliases.add(m.group(1))
+
+    alias_group = '|'.join(re.escape(alias) for alias in sorted(module_aliases, key=len, reverse=True))
+    if alias_group:
+        for raw in lines:
+            line = source_line(raw)
+            if not line:
+                continue
+            m = re.search(rf"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:{alias_group})\.{api_group}\b", line)
+            if m:
+                function_aliases.add(m.group(1))
+
+    return module_aliases, function_aliases
+
 def parse_assignments(lines):
     assignments = []
     for idx, raw in enumerate(lines, start=1):
@@ -1497,6 +1569,25 @@ def expr_has_tainted(expr: str, tainted):
         if re.search(rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])", expr):
             return name, meta
     return None, None
+
+def find_child_process_sink(line: str, module_aliases, function_aliases):
+    direct = re.search(rf"require\s*\(\s*{CHILD_PROCESS_MODULE_RE}\s*\)\.{CHILD_PROCESS_API_RE}\s*\((.*)", line)
+    if direct:
+        return direct.group(1), 'child_process exec'
+
+    alias_group = '|'.join(re.escape(alias) for alias in sorted(module_aliases, key=len, reverse=True))
+    if alias_group:
+        member = re.search(rf"(?<![A-Za-z0-9_$])(?:{alias_group})\.{CHILD_PROCESS_API_RE}\s*\((.*)", line)
+        if member:
+            return member.group(1), 'child_process exec'
+
+    function_group = '|'.join(re.escape(name) for name in sorted(function_aliases, key=len, reverse=True))
+    if function_group:
+        bare = re.search(rf"(?<![A-Za-z0-9_$])(?:{function_group})\s*\((.*)", line)
+        if bare:
+            return bare.group(1), 'child_process exec'
+
+    return None
 
 def extend_path(meta, new_node):
     clone = deepcopy(meta)
@@ -1560,10 +1651,35 @@ def analyze_file(path, issues):
     lines = text.splitlines()
     assignments = parse_assignments(lines)
     tainted = record_taint(assignments)
+    child_process_modules, child_process_functions = child_process_bindings(lines)
     for idx, raw in enumerate(lines, start=1):
         stripped = strip_comments(raw)
         if not stripped:
             continue
+        command_sink = find_child_process_sink(source_line(raw), child_process_modules, child_process_functions)
+        if command_sink:
+            expr, sink_label = command_sink
+            if expr and not expr_has_sanitizer(expr, 'js.taint.command'):
+                literal = find_sources(expr)
+                if literal:
+                    snippet, _ = literal[0]
+                    path_desc = f"{snippet.strip()} -> {sink_label}"
+                else:
+                    ref, meta = expr_has_tainted(expr, tainted)
+                    if ref:
+                        path_desc = format_path(meta.get('path', [ref]), sink_label)
+                    else:
+                        path_desc = ''
+                if path_desc:
+                    try:
+                        rel = path.relative_to(BASE_DIR)
+                    except ValueError:
+                        rel = path.name
+                    sample = f"{rel}:{idx} {path_desc}"
+                    bucket = issues['js.taint.command']
+                    bucket['count'] += 1
+                    if len(bucket['samples']) < 3:
+                        bucket['samples'].append(sample)
         for regex, rule, sink_label in SINKS:
             match = regex.search(stripped)
             if not match:

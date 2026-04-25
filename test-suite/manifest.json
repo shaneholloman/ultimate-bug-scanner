@@ -438,7 +438,8 @@
           }
         },
         "require_substrings": [
-          "Lightweight taint analysis"
+          "Lightweight taint analysis",
+          "User input reaches command execution APIs"
         ]
       }
     },
