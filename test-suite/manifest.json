@@ -1286,6 +1286,61 @@
       }
     },
     {
+      "id": "rust-parse-validation-buggy",
+      "description": "Rust parser, deserializer, env-var, and conversion unwraps should be caught as executable code.",
+      "path": "test-suite/rust/buggy/parse_validation.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "parsing",
+        "buggy"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=22,23",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 4
+          }
+        },
+        "require_substrings": [
+          "try_into().unwrap()/expect() present",
+          "parse::<T>().unwrap()/expect() present",
+          "serde/toml deserialization unwrap/expect",
+          "env::var(...).unwrap()/expect()"
+        ]
+      }
+    },
+    {
+      "id": "rust-parse-validation-mentions-clean",
+      "description": "Rust parser/env/deserializer names in comments and strings should not become parser robustness warnings.",
+      "path": "test-suite/rust/clean/parse_validation_mentions.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "parsing",
+        "clean"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "warning": {
+            "max": 0
+          }
+        }
+      }
+    },
+    {
       "id": "rust-security-shell-command-buggy",
       "description": "Rust security fixture with shell -c command execution and a hardcoded Stripe-style secret literal.",
       "path": "test-suite/rust/buggy/security_injection.rs",

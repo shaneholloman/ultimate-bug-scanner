@@ -2956,10 +2956,13 @@ else
 fi
 
 print_subheader "try_into().unwrap()/expect() (panic on conversion failure)"
-try_into_unwrap=$(( $(ast_search '$X.try_into().unwrap()' || echo 0) + $(ast_search '$X.try_into().expect($MSG)' || echo 0) + $("${GREP_RN[@]}" -e "\.try_into\(\)\.(unwrap|expect)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
+# shellcheck disable=SC2016
+try_into_patterns=('$X.try_into().unwrap()' '$X.try_into().expect($MSG)')
+try_into_unwrap=$(count_ast_or_rg "\.try_into\(\)\.(unwrap|expect)\(" "${try_into_patterns[@]}")
 if [ "$try_into_unwrap" -gt 0 ]; then
   print_finding "warning" "$try_into_unwrap" "try_into().unwrap()/expect() present" "Handle conversion errors explicitly; panics can be input-dependent"
-  add_finding "warning" "$try_into_unwrap" "try_into().unwrap()/expect() present" "Handle conversion errors explicitly; panics can be input-dependent" "${CATEGORY_NAME[22]}" "$(collect_samples_rg "\.try_into\(\)\.(unwrap|expect)\(" 3)"
+  show_ast_pattern_examples 3 "${try_into_patterns[@]}" || show_detailed_finding "\.try_into\(\)\.(unwrap|expect)\(" 3
+  add_finding "warning" "$try_into_unwrap" "try_into().unwrap()/expect() present" "Handle conversion errors explicitly; panics can be input-dependent" "${CATEGORY_NAME[22]}" "$(collect_samples_ast_or_rg "\.try_into\(\)\.(unwrap|expect)\(" 3 "${try_into_patterns[@]}")"
 fi
 fi
 
@@ -2972,24 +2975,55 @@ print_category "Detects: parse/from_str/env-var unwraps, decode unwraps, missing
   "Parsing and decoding failures often happen in prod on edge inputs; unwrap/expect turns them into panics"
 
 print_subheader "parse::<T>().unwrap()/expect()"
-parse_unwrap=$(( $(ast_search '$S.parse::<$T>().unwrap()' || echo 0) + $(ast_search '$S.parse::<$T>().expect($MSG)' || echo 0) + $("${GREP_RN[@]}" -e "\.parse::<[^>]+>\(\)\.(unwrap|expect)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
+# shellcheck disable=SC2016
+parse_patterns=('$S.parse::<$T>().unwrap()' '$S.parse::<$T>().expect($MSG)' '$S.parse().unwrap()' '$S.parse().expect($MSG)')
+parse_unwrap=$(count_ast_or_rg "\.parse(<[^>]+>)?\(\)\.(unwrap|expect)\(" "${parse_patterns[@]}")
 if [ "$parse_unwrap" -gt 0 ]; then
   print_finding "warning" "$parse_unwrap" "parse::<T>().unwrap()/expect() present" "Validate input or propagate errors with context"
-  add_finding "warning" "$parse_unwrap" "parse::<T>().unwrap()/expect() present" "Validate input or propagate errors with context" "${CATEGORY_NAME[23]}" "$(collect_samples_rg "\.parse::<[^>]+>\(\)\.(unwrap|expect)\(" 3)"
+  show_ast_pattern_examples 3 "${parse_patterns[@]}" || show_detailed_finding "\.parse(<[^>]+>)?\(\)\.(unwrap|expect)\(" 3
+  add_finding "warning" "$parse_unwrap" "parse::<T>().unwrap()/expect() present" "Validate input or propagate errors with context" "${CATEGORY_NAME[23]}" "$(collect_samples_ast_or_rg "\.parse(<[^>]+>)?\(\)\.(unwrap|expect)\(" 3 "${parse_patterns[@]}")"
 fi
 
-print_subheader "serde_json::from_str(...).unwrap()/expect()"
-serde_unwrap=$(( $(ast_search 'serde_json::from_str($S).unwrap()' || echo 0) + $(ast_search 'serde_json::from_str($S).expect($MSG)' || echo 0) + $("${GREP_RN[@]}" -e "serde_json::from_str\([^)]*\)\.(unwrap|expect)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
+print_subheader "serde/toml deserialization unwrap()/expect()"
+# shellcheck disable=SC2016
+serde_patterns=(
+  'serde_json::from_str($S).unwrap()'
+  'serde_json::from_str($S).expect($MSG)'
+  'serde_json::from_slice($S).unwrap()'
+  'serde_json::from_slice($S).expect($MSG)'
+  'serde_json::from_value($S).unwrap()'
+  'serde_json::from_value($S).expect($MSG)'
+  'serde_yaml::from_str($S).unwrap()'
+  'serde_yaml::from_str($S).expect($MSG)'
+  'toml::from_str($S).unwrap()'
+  'toml::from_str($S).expect($MSG)'
+)
+serde_pattern_rg="(serde_json::from_(str|slice|value)|serde_yaml::from_str|toml::from_str)\([^)]*\)\.(unwrap|expect)\("
+serde_unwrap=$(count_ast_or_rg "$serde_pattern_rg" "${serde_patterns[@]}")
 if [ "$serde_unwrap" -gt 0 ]; then
-  print_finding "warning" "$serde_unwrap" "serde_json::from_str(...).unwrap()/expect()" "Add context, validation, and schema checks; avoid panics on malformed JSON"
-  add_finding "warning" "$serde_unwrap" "serde_json::from_str(...).unwrap()/expect()" "Add context, validation, and schema checks; avoid panics on malformed JSON" "${CATEGORY_NAME[23]}" "$(collect_samples_rg "serde_json::from_str\([^)]*\)\.(unwrap|expect)\(" 3)"
+  print_finding "warning" "$serde_unwrap" "serde/toml deserialization unwrap/expect" "Add context, validation, and schema checks; avoid panics on malformed data"
+  show_ast_pattern_examples 3 "${serde_patterns[@]}" || show_detailed_finding "$serde_pattern_rg" 3
+  add_finding "warning" "$serde_unwrap" "serde/toml deserialization unwrap/expect" "Add context, validation, and schema checks; avoid panics on malformed data" "${CATEGORY_NAME[23]}" "$(collect_samples_ast_or_rg "$serde_pattern_rg" 3 "${serde_patterns[@]}")"
 fi
 
-print_subheader "std::env::var(...).unwrap()/expect()"
-env_unwrap=$(( $(ast_search 'std::env::var($K).unwrap()' || echo 0) + $(ast_search 'std::env::var($K).expect($MSG)' || echo 0) + $("${GREP_RN[@]}" -e "std::env::var\([^)]*\)\.(unwrap|expect)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
+print_subheader "env::var(...).unwrap()/expect()"
+# shellcheck disable=SC2016
+env_patterns=(
+  'std::env::var($K).unwrap()'
+  'std::env::var($K).expect($MSG)'
+  'env::var($K).unwrap()'
+  'env::var($K).expect($MSG)'
+  'std::env::var_os($K).unwrap()'
+  'std::env::var_os($K).expect($MSG)'
+  'env::var_os($K).unwrap()'
+  'env::var_os($K).expect($MSG)'
+)
+env_pattern_rg="(std::)?env::var(_os)?\([^)]*\)\.(unwrap|expect)\("
+env_unwrap=$(count_ast_or_rg "$env_pattern_rg" "${env_patterns[@]}")
 if [ "$env_unwrap" -gt 0 ]; then
   print_finding "warning" "$env_unwrap" "env::var(...).unwrap()/expect()" "Handle missing/invalid env vars with defaults or clear error propagation"
-  add_finding "warning" "$env_unwrap" "env::var(...).unwrap()/expect()" "Handle missing/invalid env vars with defaults or clear error propagation" "${CATEGORY_NAME[23]}" "$(collect_samples_rg "std::env::var\([^)]*\)\.(unwrap|expect)\(" 3)"
+  show_ast_pattern_examples 3 "${env_patterns[@]}" || show_detailed_finding "$env_pattern_rg" 3
+  add_finding "warning" "$env_unwrap" "env::var(...).unwrap()/expect()" "Handle missing/invalid env vars with defaults or clear error propagation" "${CATEGORY_NAME[23]}" "$(collect_samples_ast_or_rg "$env_pattern_rg" 3 "${env_patterns[@]}")"
 fi
 fi
 
