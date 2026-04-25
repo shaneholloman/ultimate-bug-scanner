@@ -39,7 +39,7 @@ UBS now scans C# codebases, bringing the total to 9 supported languages.
 
 - Prevent Cellar path error in Homebrew installs (closes #29) ([`f00743a`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/f00743ad604bf82e1caeb9ccd54af54dc9bdcc00))
 - Bash 4.0 version gate, `script_dir` symlink resolution, checksum refresh (#25, #26, #27) ([`c9a8316`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/c9a831650c95b95c5a6bbb3cc70d48973f635de5))
-- Correct module download URL to use master branch ([`97bb3c0`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/97bb3c0f3243a37324318322cf5ef39501f4a1ce))
+- Correct module download URL to use main branch ([`97bb3c0`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/97bb3c0f3243a37324318322cf5ef39501f4a1ce))
 
 ### Suppression and Ignore System
 
@@ -295,7 +295,7 @@ Resource lifecycle analyzers upgraded to be scope-aware, properly handling retur
 
 ### Installer Hardening
 
-- Installer downloads from master and verifies checksums ([`bc461b0`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/bc461b008638fded5055547ef76374d6feb9db21))
+- Installer downloads from main and verifies checksums ([`bc461b0`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/bc461b008638fded5055547ef76374d6feb9db21))
 - Installer handles piped-from-curl execution correctly ([`b317122`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/b3171220e3fd1cbd904c180790ca64c4a28537c4))
 - Installer rerun after checksum auto-fix via doctor ([`93d820e`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/93d820e9ef92adab7df6892eaa7fe3289d3d7a7e))
 - Smoke test uses detectable NaN bug for validation ([`5b2f0d8`](https://github.com/Dicklesworthstone/ultimate_bug_scanner/commit/5b2f0d8ecd13453f466536f87a59f3d1190efaa9))

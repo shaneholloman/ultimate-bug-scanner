@@ -1231,6 +1231,61 @@
       }
     },
     {
+      "id": "rust-blocking-async-buggy",
+      "description": "Rust blocking operations inside async functions should be reported with async-context samples.",
+      "path": "test-suite/rust/buggy/blocking_async.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "async",
+        "buggy"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=3",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 3
+          }
+        },
+        "require_substrings": [
+          "thread::sleep in async",
+          "Blocking std::fs in async code",
+          "block_on within async function",
+          "std::thread::spawn inside async fn"
+        ]
+      }
+    },
+    {
+      "id": "rust-blocking-async-sync-clean",
+      "description": "Rust blocking operations in synchronous functions should not be mislabeled as async executor blocking.",
+      "path": "test-suite/rust/clean/blocking_sync.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "async",
+        "clean"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=3"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "warning": {
+            "max": 0
+          }
+        }
+      }
+    },
+    {
       "id": "rust-security-shell-command-buggy",
       "description": "Rust security fixture with shell -c command execution and a hardcoded Stripe-style secret literal.",
       "path": "test-suite/rust/buggy/security_injection.rs",

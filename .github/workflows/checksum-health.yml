@@ -133,7 +133,7 @@ git push
 
 ### Why This Happened
 
-The Checksum Sync workflow should auto-fix this on push to master. If you're seeing this issue, the workflow may have failed silently. Check the [Checksum Sync workflow runs](https://github.com/${{ github.repository }}/actions/workflows/checksum-sync.yml).
+The Checksum Sync workflow should auto-fix this on push to main. If you're seeing this issue, the workflow may have failed silently. Check the [Checksum Sync workflow runs](https://github.com/${{ github.repository }}/actions/workflows/checksum-sync.yml).
 
 ---
 *This issue was automatically created by the Checksum Health Check workflow.*

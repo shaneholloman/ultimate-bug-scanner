@@ -29,7 +29,7 @@ shopt -s lastpipe || true
 trap '' SIGPIPE 2>/dev/null || true
 
 UBS_VERSION="5.1.1"
-REPO_RAW="https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/master"
+REPO_RAW="https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/main"
 MODULE_PATH_TEMPLATE="$REPO_RAW/modules/ubs-%s.sh"
 
 # Known-good module digests (sha256) for supply-chain verification.
@@ -42,7 +42,7 @@ declare -A MODULE_CHECKSUMS=(
   [js]='1e59d295bb626213ff2012bd75b121f8cba5162df5a8bf60fcfd9775a403d748'
   [python]='6ac35de3737c6c5c59245214ad56df7114cb4a5ec972e7b633f8f7fdbfb2897a'
   [ruby]='e1027599e32f6f426dc4e0494abd5133be767b5033e0042386a7e2692833bc27'
-  [rust]='cdfba0a69cce80bf4bd645c6c99c04597d0571cbfb2375e51b94ccdfb1ae88d3'
+  [rust]='c6a0a3fea4e4388cdc20a8ed30bdb5dab9283e8194eef0e51583bce1f8c1ea7f'
   [swift]='b3b8466c7044882b2b6d8a01faa8ec1d7844f78b89fa69074bc42a24ea6a8a9c'
 )
 

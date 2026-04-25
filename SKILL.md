@@ -261,10 +261,10 @@ Huge (1M lines):      58 seconds
 
 ```bash
 # One-liner (recommended)
-curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/master/install.sh?$(date +%s)" | bash -s -- --easy-mode
+curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/main/install.sh?$(date +%s)" | bash -s -- --easy-mode
 
 # Manual
-curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/master/ubs \
+curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/main/ubs \
   -o /usr/local/bin/ubs && chmod +x /usr/local/bin/ubs
 ```
 

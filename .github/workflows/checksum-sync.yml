@@ -2,7 +2,7 @@ name: Checksum Sync
 
 on:
   push:
-    branches: ["master"]
+    branches: ["main"]
     paths:
       - "ubs"
       - "install.sh"
@@ -29,7 +29,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Need write access for auto-commit on push to master
+          # Need write access for auto-commit on push to main
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
 
@@ -79,8 +79,8 @@ jobs:
           echo "Please run: ./scripts/update_checksums.sh"
           exit 1
 
-      - name: Auto-update SHA256SUMS (push to master only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && steps.compute.outputs.match == 'false'
+      - name: Auto-update SHA256SUMS (push to main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.compute.outputs.match == 'false'
         run: |
           # Create SHA256SUMS with both entries (install.sh first, then ubs)
           echo "${{ steps.compute.outputs.actual_install }}  install.sh" > SHA256SUMS
@@ -89,7 +89,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Commit and push updated checksums
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && steps.compute.outputs.match == 'false'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.compute.outputs.match == 'false'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

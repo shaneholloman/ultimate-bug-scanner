@@ -979,6 +979,185 @@ collect_samples_ast_or_rg() {
   fi
 }
 
+rust_async_context_matches() {
+  local mode="$1"
+  [[ "$have_python3" -eq 1 ]] || return 1
+  python3 - "$PROJECT_DIR" "$mode" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+mode = sys.argv[2]
+
+patterns = {
+    "sleep": re.compile(r"\b(?:std::)?thread::sleep\s*\("),
+    "fs": re.compile(r"\b(?:std::)?fs::(?:read|read_to_string|write|rename|copy|remove_file)\s*\("),
+    "block_on": re.compile(r"\b(?:futures::executor::block_on|tokio::runtime::Runtime::block_on)\s*\("),
+    "thread_spawn": re.compile(r"\b(?:std::)?thread::spawn\s*\("),
+}
+
+pattern = patterns[mode]
+
+
+def rust_files(path: Path):
+    if path.is_file():
+        if path.suffix == ".rs":
+            yield path
+        return
+    skip_dirs = {".git", "target", ".cargo", "node_modules"}
+    for child in path.rglob("*.rs"):
+        if skip_dirs.intersection(child.parts):
+            continue
+        yield child
+
+
+def mask_comments_and_strings(text: str) -> str:
+    chars = list(text)
+    i = 0
+    n = len(chars)
+    state = "code"
+    quote = ""
+    while i < n:
+        ch = chars[i]
+        nxt = chars[i + 1] if i + 1 < n else ""
+        if state == "code":
+            if ch == "/" and nxt == "/":
+                chars[i] = chars[i + 1] = " "
+                i += 2
+                while i < n and chars[i] != "\n":
+                    chars[i] = " "
+                    i += 1
+                continue
+            if ch == "/" and nxt == "*":
+                chars[i] = chars[i + 1] = " "
+                i += 2
+                state = "block"
+                continue
+            if ch == '"':
+                quote = ch
+                chars[i] = " "
+                i += 1
+                state = "string"
+                continue
+        elif state == "block":
+            if ch == "*" and nxt == "/":
+                chars[i] = chars[i + 1] = " "
+                i += 2
+                state = "code"
+                continue
+            if ch != "\n":
+                chars[i] = " "
+        elif state == "string":
+            if ch == "\\":
+                chars[i] = " "
+                if i + 1 < n and chars[i + 1] != "\n":
+                    chars[i + 1] = " "
+                    i += 2
+                    continue
+            if ch == quote:
+                chars[i] = " "
+                i += 1
+                state = "code"
+                continue
+            if ch != "\n":
+                chars[i] = " "
+        i += 1
+    return "".join(chars)
+
+
+def find_matching_brace(text: str, open_index: int) -> int:
+    depth = 0
+    for idx in range(open_index, len(text)):
+        ch = text[idx]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return idx
+    return -1
+
+
+def line_number(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+async_fn = re.compile(r"\basync\s+fn\s+[A-Za-z_][A-Za-z0-9_]*[^{;]*\{", re.MULTILINE)
+seen = set()
+
+for path in rust_files(root):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        continue
+    masked = mask_comments_and_strings(text)
+    lines = text.splitlines()
+    for fn_match in async_fn.finditer(masked):
+        open_brace = masked.find("{", fn_match.start())
+        if open_brace < 0:
+            continue
+        close_brace = find_matching_brace(masked, open_brace)
+        if close_brace < 0:
+            continue
+        body = masked[open_brace:close_brace + 1]
+        for hit in pattern.finditer(body):
+            offset = open_brace + hit.start()
+            line = line_number(masked, offset)
+            key = (str(path), line, mode)
+            if key in seen:
+                continue
+            seen.add(key)
+            code = lines[line - 1].strip() if 0 < line <= len(lines) else ""
+            if "ubs:ignore" in code:
+                continue
+            print(f"{path}:{line}:{code}")
+PY
+}
+
+count_async_context_matches() {
+  local mode="$1"
+  if [[ "$have_python3" -eq 1 ]]; then
+    rust_async_context_matches "$mode" | count_lines || true
+  else
+    return 1
+  fi
+}
+
+show_async_context_examples() {
+  local mode="$1"
+  local limit="${2:-$DETAIL_LIMIT}"
+  local printed=0
+  [[ "$have_python3" -eq 1 ]] || return 1
+  while IFS= read -r rawline; do
+    [[ -z "$rawline" ]] && continue
+    parse_grep_line "$rawline" || continue
+    print_code_sample "$PARSED_FILE" "$PARSED_LINE" "$PARSED_CODE"
+    printed=$((printed + 1))
+    [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
+  done < <(rust_async_context_matches "$mode" | head -n "$limit")
+  [[ "$printed" -gt 0 ]]
+}
+
+collect_samples_async_context() {
+  local mode="$1"
+  local limit="${2:-$DETAIL_LIMIT}"
+  if [[ "$have_python3" -ne 1 ]]; then
+    printf '[]'
+    return
+  fi
+  mapfile -t lines < <(rust_async_context_matches "$mode" | head -n "$limit")
+  printf '['
+  local i=0
+  local line
+  for line in "${lines[@]}"; do
+    [[ $i -gt 0 ]] && printf ','
+    printf '"%s"' "$(printf '%s' "$line" | json_escape)"
+    i=$((i + 1))
+  done
+  printf ']'
+}
+
 begin_scan_section(){ if [[ "$DISABLE_PIPEFAIL_DURING_SCAN" -eq 1 ]]; then set +o pipefail; fi; set +e; trap - ERR; }
 end_scan_section(){ trap on_err ERR; set -e; if [[ "$DISABLE_PIPEFAIL_DURING_SCAN" -eq 1 ]]; then set -o pipefail; fi; }
 
@@ -2244,18 +2423,47 @@ await_loop=$(( $(ast_search 'for $P in $I { $$ $F.await $$ }' || echo 0) + $("${
 if [ "$await_loop" -gt 0 ]; then print_finding "info" "$await_loop" "await inside loop; consider batched concurrency"; add_finding "info" "$await_loop" "await inside loop; consider batched concurrency" "" "${CATEGORY_NAME[3]}"; fi
 
 print_subheader "Blocking ops inside async (thread::sleep, std::fs)"
-sleep_async=$(( $(ast_search 'std::thread::sleep($$)' || echo 0) + $("${GREP_RN[@]}" -e "thread::sleep\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
-fs_async=$(( $(ast_search 'std::fs::read($$)' || echo 0) + $("${GREP_RN[@]}" -e "std::fs::(read|read_to_string|write|rename|copy|remove_file)" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
-if [ "$sleep_async" -gt 0 ]; then print_finding "warning" "$sleep_async" "thread::sleep in async"; add_finding "warning" "$sleep_async" "thread::sleep in async" "" "${CATEGORY_NAME[3]}"; fi
-if [ "$fs_async" -gt 0 ]; then print_finding "info" "$fs_async" "Blocking std::fs in async code"; add_finding "info" "$fs_async" "Blocking std::fs in async code" "" "${CATEGORY_NAME[3]}"; fi
+if [[ "$have_python3" -eq 1 ]]; then
+  sleep_async=$(count_async_context_matches "sleep")
+  fs_async=$(count_async_context_matches "fs")
+else
+  sleep_async=$(( $(ast_search 'std::thread::sleep($$)' || echo 0) + $("${GREP_RN[@]}" -e "thread::sleep\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
+  fs_async=$(( $(ast_search 'std::fs::read($$)' || echo 0) + $("${GREP_RN[@]}" -e "std::fs::(read|read_to_string|write|rename|copy|remove_file)" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
+fi
+if [ "$sleep_async" -gt 0 ]; then
+  print_finding "warning" "$sleep_async" "thread::sleep in async"
+  show_async_context_examples "sleep" 3 || show_detailed_finding "thread::sleep\(" 3
+  add_finding "warning" "$sleep_async" "thread::sleep in async" "" "${CATEGORY_NAME[3]}" "$(collect_samples_async_context "sleep" 3)"
+fi
+if [ "$fs_async" -gt 0 ]; then
+  print_finding "info" "$fs_async" "Blocking std::fs in async code"
+  show_async_context_examples "fs" 3 || show_detailed_finding "std::fs::(read|read_to_string|write|rename|copy|remove_file)" 3
+  add_finding "info" "$fs_async" "Blocking std::fs in async code" "" "${CATEGORY_NAME[3]}" "$(collect_samples_async_context "fs" 3)"
+fi
 
 print_subheader "block_on within async context"
-block_on=$(( $(ast_search 'futures::executor::block_on($$)' || echo 0) + $(ast_search 'tokio::runtime::Runtime::block_on($$)' || echo 0) ))
-if [ "$block_on" -gt 0 ]; then print_finding "warning" "$block_on" "block_on within async function"; add_finding "warning" "$block_on" "block_on within async function" "" "${CATEGORY_NAME[3]}"; fi
+if [[ "$have_python3" -eq 1 ]]; then
+  block_on=$(count_async_context_matches "block_on")
+else
+  block_on=$(( $(ast_search 'futures::executor::block_on($$)' || echo 0) + $(ast_search 'tokio::runtime::Runtime::block_on($$)' || echo 0) ))
+fi
+if [ "$block_on" -gt 0 ]; then
+  print_finding "warning" "$block_on" "block_on within async function"
+  show_async_context_examples "block_on" 3 || true
+  add_finding "warning" "$block_on" "block_on within async function" "" "${CATEGORY_NAME[3]}" "$(collect_samples_async_context "block_on" 3)"
+fi
 
 print_subheader "std::thread::spawn within async"
-spawn_in_async=$(( $(ast_search 'std::thread::spawn($$)' || echo 0) ))
-if [ "$spawn_in_async" -gt 0 ]; then print_finding "warning" "$spawn_in_async" "std::thread::spawn inside async fn"; add_finding "warning" "$spawn_in_async" "std::thread::spawn inside async fn" "" "${CATEGORY_NAME[3]}"; fi
+if [[ "$have_python3" -eq 1 ]]; then
+  spawn_in_async=$(count_async_context_matches "thread_spawn")
+else
+  spawn_in_async=$(( $(ast_search 'std::thread::spawn($$)' || echo 0) ))
+fi
+if [ "$spawn_in_async" -gt 0 ]; then
+  print_finding "warning" "$spawn_in_async" "std::thread::spawn inside async fn"
+  show_async_context_examples "thread_spawn" 3 || true
+  add_finding "warning" "$spawn_in_async" "std::thread::spawn inside async fn" "" "${CATEGORY_NAME[3]}" "$(collect_samples_async_context "thread_spawn" 3)"
+fi
 
 print_subheader "tokio::spawn usage (heuristic for detached tasks)"
 spawn_count=$("${GREP_RN[@]}" -e "tokio::spawn\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
