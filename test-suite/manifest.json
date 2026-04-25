@@ -1372,6 +1372,66 @@
       }
     },
     {
+      "id": "rust-collections-iterators-buggy",
+      "description": "Rust clone-in-loop, collect::<Vec<_>>, and nth(0) iterator smells should be reported as executable code.",
+      "path": "test-suite/rust/buggy/perf_hotspots.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "collections",
+        "buggy"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=5",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          },
+          "info": {
+            "min": 2
+          }
+        },
+        "require_substrings": [
+          "clone() inside loops - potential perf hit",
+          "collect::<Vec<_>>() usage - consider streaming",
+          "nth(0) detected - prefer next()"
+        ]
+      }
+    },
+    {
+      "id": "rust-collections-mentions-clean",
+      "description": "Rust collection iterator smell names in comments and strings should not become category 5 findings.",
+      "path": "test-suite/rust/clean/string_allocation_mentions.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "collections",
+        "clean"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=5"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "warning": {
+            "max": 0
+          },
+          "info": {
+            "max": 0
+          }
+        }
+      }
+    },
+    {
       "id": "rust-perf-hotspots-buggy",
       "description": "Rust hot-loop Regex::new, chars().nth, and string allocations should be reported as executable code.",
       "path": "test-suite/rust/buggy/perf_hotspots.rs",

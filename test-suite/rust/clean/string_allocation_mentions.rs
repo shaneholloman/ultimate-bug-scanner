@@ -15,10 +15,14 @@ fn documentation_mentions_only() -> &'static str {
     These examples are documentation, not executable allocation smells:
     format!("static label")
     input.to_owned().to_string()
+    for item in items { item.clone(); }
+    items.iter().collect::<Vec<String>>()
+    items.iter().nth(0)
     "#
 }
 
 fn notes() {
     // format!("static label") should not count from comments.
+    // item.clone(), collect::<Vec<_>>(), and nth(0) should stay documentation.
     let _ = documentation_mentions_only();
 }

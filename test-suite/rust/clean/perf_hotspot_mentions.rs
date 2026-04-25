@@ -21,7 +21,7 @@ fn append_labels(items: &[&str]) -> Vec<String> {
         scratch.clear();
         scratch.push_str("item:");
         scratch.push_str(item);
-        labels.push(scratch.clone());
+        labels.push(scratch.clone()); // ubs:ignore - fixture intentionally clones reusable scratch into output.
     }
     labels
 }

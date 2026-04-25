@@ -37,3 +37,17 @@ fn allocate_per_item(items: &[&str]) -> Vec<String> {
     }
     labels
 }
+
+fn iterator_collection_smells(items: &[String]) -> Vec<String> {
+    let mut labels = Vec::new();
+    for item in items {
+        labels.push(item.clone());
+    }
+
+    for value in items.iter().cloned().collect::<Vec<String>>() {
+        labels.push(value);
+    }
+
+    let _ = items.iter().nth(0);
+    labels
+}

@@ -1215,6 +1215,7 @@ mode = sys.argv[2]
 
 patterns = {
     "regex_new": re.compile(r"\b(?:regex::)?Regex::new\s*\("),
+    "clone": re.compile(r"\.clone\s*\("),
     "string_alloc": re.compile(r"\bformat!\s*\(|\.to_string\s*\(|\.to_owned\s*\(|\bString::from\s*\("),
 }
 
@@ -3021,18 +3022,44 @@ print_category "Detects: clone in loops, collect then iterate, nth(0), length ch
   "Iterator misuse often leads to unnecessary allocations or slow paths"
 
 print_subheader "clone() occurrences & clone() in loops"
-clone_any=$(( $(ast_search '$X.clone()' || echo 0) + $("${GREP_RN[@]}" -e "\.clone\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
-clone_loop=$(( $(ast_search 'for $P in $I { $$ $X.clone() $$ }' || echo 0) ))
-if [ "$clone_any" -gt 0 ]; then print_finding "info" "$clone_any" "clone() usages - audit for necessity"; add_finding "info" "$clone_any" "clone() usages - audit for necessity" "" "${CATEGORY_NAME[5]}"; fi
-if [ "$clone_loop" -gt 0 ]; then print_finding "warning" "$clone_loop" "clone() inside loops - potential perf hit"; add_finding "warning" "$clone_loop" "clone() inside loops - potential perf hit" "" "${CATEGORY_NAME[5]}"; fi
+# shellcheck disable=SC2016
+clone_patterns=('$X.clone()')
+clone_any=$(count_ast_or_rg "\.clone\(" "${clone_patterns[@]}")
+if [[ "$have_python3" -eq 1 ]]; then
+  clone_loop=$(count_loop_context_matches "clone")
+else
+  clone_loop=$("${GREP_RN[@]}" -e "(for|while|loop)[^{]*\{[^}]*\.clone\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+fi
+if [ "$clone_any" -gt 0 ]; then
+  print_finding "info" "$clone_any" "clone() usages - audit for necessity"
+  show_ast_pattern_examples 3 "${clone_patterns[@]}" || show_detailed_finding "\.clone\(" 3
+  add_finding "info" "$clone_any" "clone() usages - audit for necessity" "" "${CATEGORY_NAME[5]}" "$(collect_samples_ast_or_rg "\.clone\(" 3 "${clone_patterns[@]}")"
+fi
+if [ "$clone_loop" -gt 0 ]; then
+  print_finding "warning" "$clone_loop" "clone() inside loops - potential perf hit"
+  show_loop_context_examples "clone" 3 || show_detailed_finding "(for|while|loop)[^{]*\{[^}]*\.clone\(" 3
+  add_finding "warning" "$clone_loop" "clone() inside loops - potential perf hit" "" "${CATEGORY_NAME[5]}" "$(collect_samples_loop_context "clone" 3)"
+fi
 
 print_subheader "collect::<Vec<_>>() then for"
-collect_for=$(( $(ast_search 'for $P in $I.collect::<Vec<$T>>() { $$ }' || echo 0) + $("${GREP_RN[@]}" -e "collect::<\s*Vec<" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
-if [ "$collect_for" -gt 0 ]; then print_finding "info" "$collect_for" "Collecting to Vec before iterate - consider streaming"; add_finding "info" "$collect_for" "Collecting to Vec before iterate - consider streaming" "" "${CATEGORY_NAME[5]}"; fi
+# shellcheck disable=SC2016
+collect_vec_patterns=('$I.collect::<Vec<$T>>()')
+collect_for=$(count_ast_or_rg "collect::<\s*Vec<" "${collect_vec_patterns[@]}")
+if [ "$collect_for" -gt 0 ]; then
+  print_finding "info" "$collect_for" "collect::<Vec<_>>() usage - consider streaming"
+  show_ast_pattern_examples 3 "${collect_vec_patterns[@]}" || show_detailed_finding "collect::<\s*Vec<" 3
+  add_finding "info" "$collect_for" "collect::<Vec<_>>() usage - consider streaming" "" "${CATEGORY_NAME[5]}" "$(collect_samples_ast_or_rg "collect::<\s*Vec<" 3 "${collect_vec_patterns[@]}")"
+fi
 
 print_subheader "nth(0) → next()"
-nth0=$(( $(ast_search '$I.nth(0)' || echo 0) + $("${GREP_RN[@]}" -e "\.nth\(\s*0\s*\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
-if [ "$nth0" -gt 0 ]; then print_finding "info" "$nth0" "nth(0) detected - prefer next()"; add_finding "info" "$nth0" "nth(0) detected - prefer next()" "" "${CATEGORY_NAME[5]}"; fi
+# shellcheck disable=SC2016
+nth0_patterns=('$I.nth(0)')
+nth0=$(count_ast_or_rg "\.nth\(\s*0\s*\)" "${nth0_patterns[@]}")
+if [ "$nth0" -gt 0 ]; then
+  print_finding "info" "$nth0" "nth(0) detected - prefer next()"
+  show_ast_pattern_examples 3 "${nth0_patterns[@]}" || show_detailed_finding "\.nth\(\s*0\s*\)" 3
+  add_finding "info" "$nth0" "nth(0) detected - prefer next()" "" "${CATEGORY_NAME[5]}" "$(collect_samples_ast_or_rg "\.nth\(\s*0\s*\)" 3 "${nth0_patterns[@]}")"
+fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
