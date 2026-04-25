@@ -12,5 +12,7 @@ public class BuggySecurity {
             System.out.println(rs.getString(1));
         }
         Runtime.getRuntime().exec("sh -c 'ls '" + user);
+        new ProcessBuilder("sh", "-c", "ls " + user).start();
+        new ProcessBuilder("cmd", "/C", "dir " + user).start();
     }
 }

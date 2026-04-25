@@ -340,7 +340,7 @@ if command -v rg >/dev/null 2>&1; then
   HAS_RG=1
   if [[ "${JOBS}" -eq 0 ]]; then JOBS="$( (command -v nproc >/dev/null && nproc) || sysctl -n hw.ncpu 2>/dev/null || echo 0 )"; fi
   RG_JOBS=(); if [[ "${JOBS}" -gt 0 ]]; then RG_JOBS=(-j "$JOBS"); fi
-  RG_BASE=(--no-config --no-messages --line-number --with-filename --hidden --colors=never "${RG_JOBS[@]}")
+  RG_BASE=(--no-config --no-messages --line-number --with-filename --hidden --color=never "${RG_JOBS[@]}")
   RG_EXCLUDES=()
   for d in "${EXCLUDE_DIRS[@]}"; do RG_EXCLUDES+=( -g "!$d/**" ); done
   RG_INCLUDES=()
@@ -1824,7 +1824,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_run 4; then
 print_header "4. SECURITY"
-print_category "Detects: Insecure SSL, weak hashes, http://, insecure deserialization, Random for secrets" \
+print_category "Detects: Insecure SSL, weak hashes, http://, insecure deserialization, shell command execution, Random for secrets" \
   "Security misconfigurations expose users to attacks and data breaches"
 
 print_subheader "SSL verification disabled (CRITICAL)"
@@ -1863,6 +1863,14 @@ else
     fi
     print_finding "critical" "$runtime_count" "Runtime.exec invoked" "$runtime_desc"
   fi
+fi
+
+print_subheader "ProcessBuilder shell interpreter"
+pb_shell_pattern='new[[:space:]]+ProcessBuilder[[:space:]]*\([[:space:]]*"(sh|bash)"[[:space:]]*,[[:space:]]*"-?c"|new[[:space:]]+ProcessBuilder[[:space:]]*\([[:space:]]*"cmd([.]exe)?"[[:space:]]*,[[:space:]]*"/[cC]"|new[[:space:]]+ProcessBuilder[[:space:]]*\([[:space:]]*"(powershell|pwsh)([.]exe)?"[[:space:]]*,[[:space:]]*"-(Command|EncodedCommand)"'
+pb_shell=$("${GREP_RN[@]}" -e "$pb_shell_pattern" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+if [ "$pb_shell" -gt 0 ]; then
+  print_finding "critical" "$pb_shell" "ProcessBuilder shell interpreter invoked" "Pass arguments directly as argv, or strictly validate and escape every shell fragment"
+  show_detailed_finding "$pb_shell_pattern" 3
 fi
 fi
 
