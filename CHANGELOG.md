@@ -8,6 +8,14 @@ Repository: <https://github.com/Dicklesworthstone/ultimate_bug_scanner>
 
 ---
 
+## [v5.1.2] - 2026-04-25 **[Release]**
+
+### Bug fix
+
+- **Module fetch URL pinned to release tag instead of `main`** — every installed copy of UBS broke as soon as `main` advanced past the release the user had installed (issue #43). The launcher pins per-language module checksums, but `REPO_RAW` pointed at `main/modules/…`, so the moment any module changed on `main` the checksum verification rejected the download and the scanner refused to start. Fixed by pinning `REPO_RAW` to `v${UBS_VERSION}/…` for module/helper fetches while keeping the self-update probe on `main` (so stale installs still discover newer releases). Resolves the "expected `<pin>`, got `<current main>`" failure reported on macOS / Homebrew installs.
+
+---
+
 ## [v5.0.7] - 2026-03-25 **[Release]**
 
 > 80 commits since v5.0.6 — biggest release since v5.0.0.

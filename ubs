@@ -28,8 +28,16 @@ set -Eeuo pipefail
 shopt -s lastpipe || true
 trap '' SIGPIPE 2>/dev/null || true
 
-UBS_VERSION="5.1.1"
-REPO_RAW="https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner/main"
+UBS_VERSION="5.1.2"
+# Module / helper fetches must be checksum-stable for an installed
+# release, so they pin to the tagged tree matching this script's
+# UBS_VERSION. main is reserved for the self-update probe below
+# (which is what advances a stale install onto a newer tag).
+# Issue #43: pinning to "main" caused every installed copy to break
+# the moment main moved past the release the user installed.
+REPO_RAW_BASE="https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_scanner"
+REPO_RAW="${REPO_RAW_BASE}/v${UBS_VERSION}"
+REPO_RAW_LATEST="${REPO_RAW_BASE}/main"
 MODULE_PATH_TEMPLATE="$REPO_RAW/modules/ubs-%s.sh"
 
 # Known-good module digests (sha256) for supply-chain verification.
@@ -2123,7 +2131,10 @@ check_and_update_self(){
   if [[ ! -w "$0" ]]; then return 0; fi
 
   local self_path="$0"
-  local remote_url="$REPO_RAW/ubs"
+  # Self-update intentionally probes main (REPO_RAW_LATEST) rather than
+  # the release-pinned REPO_RAW — otherwise we'd compare against our
+  # own pinned tag and never see a newer release.
+  local remote_url="$REPO_RAW_LATEST/ubs"
   local last_check_file="${XDG_CACHE_HOME:-$HOME/.cache}/ubs/last_update_check"
   ensure_dir "$(dirname "$last_check_file")"
 
