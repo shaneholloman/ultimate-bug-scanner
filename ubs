@@ -39,6 +39,7 @@ REPO_RAW_BASE="https://raw.githubusercontent.com/Dicklesworthstone/ultimate_bug_
 REPO_RAW="${REPO_RAW_BASE}/v${UBS_VERSION}"
 REPO_RAW_LATEST="${REPO_RAW_BASE}/main"
 MODULE_PATH_TEMPLATE="$REPO_RAW/modules/ubs-%s.sh"
+MODULE_PATH_TEMPLATE_LATEST="$REPO_RAW_LATEST/modules/ubs-%s.sh"
 
 # Known-good module digests (sha256) for supply-chain verification.
 declare -A MODULE_CHECKSUMS=(
@@ -617,6 +618,10 @@ TARGETED_SCAN_MODE=0
 if [[ -n "$GIT_MODE" || ${#SCAN_FILES[@]} -gt 0 ]]; then
   TARGETED_SCAN_MODE=1
 fi
+RUN_SCAN_GUARDS=0
+if [[ "$MODE" == "scan" && "$UPDATE_ONLY" -eq 0 ]]; then
+  RUN_SCAN_GUARDS=1
+fi
 
 if [[ "$SHOW_VERSION" -eq 1 ]]; then
   short_sha=""
@@ -643,7 +648,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Check 1: Refuse to scan home directory or root (unless explicitly allowed)
-if [[ "$TARGETED_SCAN_MODE" -eq 0 && "$REFUSE_HOME_ROOT" -eq 1 && -d "$SOURCE_PROJECT_DIR" ]]; then
+if [[ "$RUN_SCAN_GUARDS" -eq 1 && "$TARGETED_SCAN_MODE" -eq 0 && "$REFUSE_HOME_ROOT" -eq 1 && -d "$SOURCE_PROJECT_DIR" ]]; then
   resolved_dir="$(cd "$SOURCE_PROJECT_DIR" 2>/dev/null && pwd -P)"
   if [[ "$resolved_dir" == "$HOME" ]]; then
     say "${RED}${X}${RESET} ${BOLD}Refusing to scan home directory${RESET}"
@@ -749,7 +754,7 @@ PY
 }
 
 # Check 2: Refuse directories larger than MAX_DIR_SIZE_MB (unless set to 0)
-if [[ "$TARGETED_SCAN_MODE" -eq 0 && "$SKIP_SIZE_CHECK" -eq 0 && "$MAX_DIR_SIZE_MB" -gt 0 && -d "$SOURCE_PROJECT_DIR" ]]; then
+if [[ "$RUN_SCAN_GUARDS" -eq 1 && "$TARGETED_SCAN_MODE" -eq 0 && "$SKIP_SIZE_CHECK" -eq 0 && "$MAX_DIR_SIZE_MB" -gt 0 && -d "$SOURCE_PROJECT_DIR" ]]; then
   dir_size_mb="$(dir_size_mb_filtered "$SOURCE_PROJECT_DIR" "$GLOBAL_EXCLUDE_PATTERNS")"
   if [[ "${QUIET:-0}" -eq 0 ]]; then
     say "${DIM}${INFO}${RESET} Scan size after ignores: ${dir_size_mb}MB (limit ${MAX_DIR_SIZE_MB}MB)"
@@ -1922,125 +1927,191 @@ resolve_module_path(){
 download_module(){
   local lang="$1" path="$2"
   ensure_dir "$(dirname "$path")"
-  local url; url=$(printf '%s' "$MODULE_PATH_TEMPLATE" | sed "s/%s/$lang/")
-  say "${BLUE}${INFO}${RESET} fetching module ${BOLD}$lang${RESET} → ${DIM}$path${RESET}"
-  local tmp
-  tmp="$(mktemp -t "ubs-${lang}.XXXXXX" 2>/dev/null || mktemp "${TMPDIR:-/tmp}/ubs-${lang}.XXXXXX" 2>/dev/null)" || {
-    say "${RED}$X failed to create temp file for module download${RESET}"
-    return 1
-  }
-  if need_cmd curl; then
-    if ! curl -fsSL "$url" -o "$tmp"; then
-      say "${RED}$X failed to download module ${BOLD}$lang${RESET}"
+  local release_url latest_url url label tmp head err_msg
+  release_url=$(printf '%s' "$MODULE_PATH_TEMPLATE" | sed "s/%s/$lang/")
+  latest_url=$(printf '%s' "$MODULE_PATH_TEMPLATE_LATEST" | sed "s/%s/$lang/")
+  local -a urls=("$release_url")
+  if [[ "$latest_url" != "$release_url" ]]; then
+    urls+=("$latest_url")
+  fi
+  local total=${#urls[@]} idx=0
+  for url in "${urls[@]}"; do
+    idx=$((idx + 1))
+    label="release"
+    if [[ "$url" == "$latest_url" && "$url" != "$release_url" ]]; then
+      label="main fallback"
+    fi
+    say "${BLUE}${INFO}${RESET} fetching module ${BOLD}$lang${RESET} (${label}) → ${DIM}$path${RESET}"
+    tmp="$(mktemp -t "ubs-${lang}.XXXXXX" 2>/dev/null || mktemp "${TMPDIR:-/tmp}/ubs-${lang}.XXXXXX" 2>/dev/null)" || {
+      say "${RED}$X failed to create temp file for module download${RESET}"
+      return 1
+    }
+    if need_cmd curl; then
+      if ! curl -fsSL "$url" -o "$tmp"; then
+        err_msg="failed to download module $lang"
+      else
+        err_msg=""
+      fi
+    elif need_cmd wget; then
+      if ! wget -q "$url" -O "$tmp"; then
+        err_msg="failed to download module $lang"
+      else
+        err_msg=""
+      fi
+    else
+      say "${RED}$X neither curl nor wget available${RESET}"
       rm -f "$tmp" 2>/dev/null || true
       return 1
     fi
-  elif need_cmd wget; then
-    if ! wget -q "$url" -O "$tmp"; then
-      say "${RED}$X failed to download module ${BOLD}$lang${RESET}"
+    if [[ -n "$err_msg" ]]; then
       rm -f "$tmp" 2>/dev/null || true
+      if [[ "$idx" -lt "$total" ]]; then
+        say "${YELLOW}${WARN}${RESET} ${err_msg} from ${label}; trying main fallback..."
+        continue
+      fi
+      say "${RED}$X ${err_msg}${RESET}"
       return 1
     fi
-  else
-    say "${RED}$X neither curl nor wget available${RESET}"
-    rm -f "$tmp" 2>/dev/null || true
-    return 1
-  fi
-  # sanity checks
-  if [ ! -s "$tmp" ]; then
-    say "${RED}$X empty module file for $lang${RESET}"
-    rm -f "$tmp" 2>/dev/null || true
-    return 1
-  fi
-  local head; head="$(head -n 1 "$tmp" | tr -d '\r')"
-  if [[ ! "$head" =~ ^#! ]]; then
-    say "${RED}$X module missing shebang (lang=$lang)${RESET}"
-    rm -f "$tmp" 2>/dev/null || true
-    return 1
-  fi
-  if should_verify_module_path "$path"; then
-    VERIFY_MODULE_ERR=""
-    local expected="${MODULE_CHECKSUMS[$lang]:-}"
-    if [[ -n "$expected" ]]; then
-      local sha
-      if ! sha="$(compute_sha256 "$tmp")"; then
-        VERIFY_MODULE_ERR="unable to compute checksum (install sha256sum, shasum, or openssl)"
-      elif [[ "$sha" != "$expected" ]]; then
-        VERIFY_MODULE_ERR="checksum mismatch for $lang (expected $expected, got $sha)"
+    # sanity checks
+    if [ ! -s "$tmp" ]; then
+      rm -f "$tmp" 2>/dev/null || true
+      if [[ "$idx" -lt "$total" ]]; then
+        say "${YELLOW}${WARN}${RESET} empty module file for $lang from ${label}; trying main fallback..."
+        continue
+      fi
+      say "${RED}$X empty module file for $lang${RESET}"
+      return 1
+    fi
+    head="$(head -n 1 "$tmp" | tr -d '\r')"
+    if [[ ! "$head" =~ ^#! ]]; then
+      rm -f "$tmp" 2>/dev/null || true
+      if [[ "$idx" -lt "$total" ]]; then
+        say "${YELLOW}${WARN}${RESET} module missing shebang for $lang from ${label}; trying main fallback..."
+        continue
+      fi
+      say "${RED}$X module missing shebang (lang=$lang)${RESET}"
+      return 1
+    fi
+    if should_verify_module_path "$path"; then
+      VERIFY_MODULE_ERR=""
+      local expected="${MODULE_CHECKSUMS[$lang]:-}"
+      if [[ -n "$expected" ]]; then
+        local sha
+        if ! sha="$(compute_sha256 "$tmp")"; then
+          VERIFY_MODULE_ERR="unable to compute checksum (install sha256sum, shasum, or openssl)"
+        elif [[ "$sha" != "$expected" ]]; then
+          VERIFY_MODULE_ERR="checksum mismatch for $lang (expected $expected, got $sha)"
+        fi
+      fi
+      if [[ -n "${VERIFY_MODULE_ERR:-}" ]]; then
+        err_msg="${VERIFY_MODULE_ERR}"
+        rm -f "$tmp" 2>/dev/null || true
+        if [[ "$idx" -lt "$total" ]]; then
+          say "${YELLOW}${WARN}${RESET} module ${BOLD}$lang${RESET} from ${label} failed verification (${err_msg}); trying main fallback..."
+          continue
+        fi
+        say "${RED}$X failed to verify module ${BOLD}$lang${RESET}: $err_msg"
+        return 1
       fi
     fi
-    if [[ -n "${VERIFY_MODULE_ERR:-}" ]]; then
-      local err_msg="${VERIFY_MODULE_ERR}"
-      say "${RED}$X failed to verify module ${BOLD}$lang${RESET}: $err_msg"
+    if ! mv "$tmp" "$path"; then
+      say "${RED}$X failed to finalize module ${BOLD}$lang${RESET} to ${DIM}$path${RESET}"
       rm -f "$tmp" 2>/dev/null || true
       return 1
     fi
-  fi
-  if ! mv "$tmp" "$path"; then
-    say "${RED}$X failed to finalize module ${BOLD}$lang${RESET} to ${DIM}$path${RESET}"
-    rm -f "$tmp" 2>/dev/null || true
-    return 1
-  fi
-  chmod +x "$path" 2>/dev/null || true
-  return 0
+    chmod +x "$path" 2>/dev/null || true
+    return 0
+  done
+  return 1
 }
 
 download_helper_asset(){
   local rel="$1" path="$2"
   ensure_dir "$(dirname "$path")"
-  local url="${REPO_RAW}/modules/${rel}"
-  say "${BLUE}${INFO}${RESET} fetching helper ${BOLD}$rel${RESET} → ${DIM}$path${RESET}"
-  local tmp
-  tmp="$(mktemp -t "ubs-helper.XXXXXX" 2>/dev/null || mktemp "${TMPDIR:-/tmp}/ubs-helper.XXXXXX" 2>/dev/null)" || {
-    say "${RED}$X failed to create temp file for helper download${RESET}"
-    return 1
-  }
-  if need_cmd curl; then
-    if ! curl -fsSL "$url" -o "$tmp"; then
-      say "${RED}$X failed to download helper ${BOLD}$rel${RESET}"
+  local release_url="${REPO_RAW}/modules/${rel}"
+  local latest_url="${REPO_RAW_LATEST}/modules/${rel}"
+  local url label tmp err_msg
+  local -a urls=("$release_url")
+  if [[ "$latest_url" != "$release_url" ]]; then
+    urls+=("$latest_url")
+  fi
+  local total=${#urls[@]} idx=0
+  for url in "${urls[@]}"; do
+    idx=$((idx + 1))
+    label="release"
+    if [[ "$url" == "$latest_url" && "$url" != "$release_url" ]]; then
+      label="main fallback"
+    fi
+    say "${BLUE}${INFO}${RESET} fetching helper ${BOLD}$rel${RESET} (${label}) → ${DIM}$path${RESET}"
+    tmp="$(mktemp -t "ubs-helper.XXXXXX" 2>/dev/null || mktemp "${TMPDIR:-/tmp}/ubs-helper.XXXXXX" 2>/dev/null)" || {
+      say "${RED}$X failed to create temp file for helper download${RESET}"
+      return 1
+    }
+    if need_cmd curl; then
+      if ! curl -fsSL "$url" -o "$tmp"; then
+        err_msg="failed to download helper $rel"
+      else
+        err_msg=""
+      fi
+    elif need_cmd wget; then
+      if ! wget -q "$url" -O "$tmp"; then
+        err_msg="failed to download helper $rel"
+      else
+        err_msg=""
+      fi
+    else
+      say "${RED}$X neither curl nor wget available${RESET}"
       rm -f "$tmp" 2>/dev/null || true
       return 1
     fi
-  elif need_cmd wget; then
-    if ! wget -q "$url" -O "$tmp"; then
-      say "${RED}$X failed to download helper ${BOLD}$rel${RESET}"
+    if [[ -n "$err_msg" ]]; then
       rm -f "$tmp" 2>/dev/null || true
+      if [[ "$idx" -lt "$total" ]]; then
+        say "${YELLOW}${WARN}${RESET} ${err_msg} from ${label}; trying main fallback..."
+        continue
+      fi
+      say "${RED}$X ${err_msg}${RESET}"
       return 1
     fi
-  else
-    say "${RED}$X neither curl nor wget available${RESET}"
-    rm -f "$tmp" 2>/dev/null || true
-    return 1
-  fi
-  if [ ! -s "$tmp" ]; then
-    say "${RED}$X empty helper file for $rel${RESET}"
-    rm -f "$tmp" 2>/dev/null || true
-    return 1
-  fi
-  if should_verify_module_path "$path"; then
-    VERIFY_HELPER_ERR=""
-    local expected="${HELPER_CHECKSUMS[$rel]:-}"
-    if [[ -n "$expected" ]]; then
-      local sha
-      if ! sha="$(compute_sha256 "$tmp")"; then
-        VERIFY_HELPER_ERR="unable to compute checksum (install sha256sum, shasum, or openssl)"
-      elif [[ "$sha" != "$expected" ]]; then
-        VERIFY_HELPER_ERR="checksum mismatch for $rel (expected $expected, got $sha)"
+    if [ ! -s "$tmp" ]; then
+      rm -f "$tmp" 2>/dev/null || true
+      if [[ "$idx" -lt "$total" ]]; then
+        say "${YELLOW}${WARN}${RESET} empty helper file for $rel from ${label}; trying main fallback..."
+        continue
+      fi
+      say "${RED}$X empty helper file for $rel${RESET}"
+      return 1
+    fi
+    if should_verify_module_path "$path"; then
+      VERIFY_HELPER_ERR=""
+      local expected="${HELPER_CHECKSUMS[$rel]:-}"
+      if [[ -n "$expected" ]]; then
+        local sha
+        if ! sha="$(compute_sha256 "$tmp")"; then
+          VERIFY_HELPER_ERR="unable to compute checksum (install sha256sum, shasum, or openssl)"
+        elif [[ "$sha" != "$expected" ]]; then
+          VERIFY_HELPER_ERR="checksum mismatch for $rel (expected $expected, got $sha)"
+        fi
+      fi
+      if [[ -n "${VERIFY_HELPER_ERR:-}" ]]; then
+        err_msg="${VERIFY_HELPER_ERR}"
+        rm -f "$tmp" 2>/dev/null || true
+        if [[ "$idx" -lt "$total" ]]; then
+          say "${YELLOW}${WARN}${RESET} helper ${BOLD}$rel${RESET} from ${label} failed verification (${err_msg}); trying main fallback..."
+          continue
+        fi
+        say "${RED}$X failed to verify helper ${BOLD}$rel${RESET}: $err_msg"
+        return 1
       fi
     fi
-    if [[ -n "${VERIFY_HELPER_ERR:-}" ]]; then
-      local err_msg="${VERIFY_HELPER_ERR}"
-      say "${RED}$X failed to verify helper ${BOLD}$rel${RESET}: $err_msg"
+    if ! mv "$tmp" "$path"; then
+      say "${RED}$X failed to finalize helper ${BOLD}$rel${RESET} to ${DIM}$path${RESET}"
       rm -f "$tmp" 2>/dev/null || true
       return 1
     fi
-  fi
-  if ! mv "$tmp" "$path"; then
-    say "${RED}$X failed to finalize helper ${BOLD}$rel${RESET} to ${DIM}$path${RESET}"
-    rm -f "$tmp" 2>/dev/null || true
-    return 1
-  fi
-  return 0
+    return 0
+  done
+  return 1
 }
 
 ensure_helper_asset(){
