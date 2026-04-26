@@ -1780,6 +1780,29 @@ PY
   rm -rf "$dest" 2>/dev/null || true
 }
 
+# Suggest directories worth adding to .ubsignore. Defined here next to
+# apply_ignore_filters and well before the execution-section call site
+# (around line ~2305) — bash resolves function names at call time, so
+# a definition lower in the file caused `--suggest-ignore` to exit
+# 127 with "suggest_ignore_candidates: command not found" (issue #44).
+# Keep this function above any caller, even when the script gets
+# reorganized.
+suggest_ignore_candidates(){
+  local threshold=200
+  IFS=',' read -r -a defaults <<<"$DEFAULT_IGNORES"
+  say "${BLUE}${INFO}${RESET} Ignore suggestions (directories with >${threshold} files not already default-ignored):"
+  find "$PROJECT_DIR" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | while read -r d; do
+    local base=$(basename "$d")
+    local skip=0
+    for df in "${defaults[@]}"; do [[ "$base" == "$df" ]] && skip=1; done
+    [[ "$skip" -eq 1 ]] && continue
+    local count=$(find "$d" -type f 2>/dev/null | wc -l | awk '{print $1+0}')
+    if [[ "$count" -gt $threshold ]]; then
+      say "  ${GRAY}$base${RESET} (${count} files) → consider adding to .ubsignore"
+    fi
+  done
+}
+
 restore_original_paths(){
   local file="$1"
   [[ -n "$FILTERED_PROJECT_DIR" && -f "$file" ]] || return 0
@@ -2734,22 +2757,6 @@ write_jsonl_summary(){
   else
     cat "$tmp"
   fi
-}
-
-suggest_ignore_candidates(){
-  local threshold=200
-  IFS=',' read -r -a defaults <<<"$DEFAULT_IGNORES"
-  say "${BLUE}${INFO}${RESET} Ignore suggestions (directories with >${threshold} files not already default-ignored):"
-  find "$PROJECT_DIR" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | while read -r d; do
-    local base=$(basename "$d")
-    local skip=0
-    for df in "${defaults[@]}"; do [[ "$base" == "$df" ]] && skip=1; done
-    [[ "$skip" -eq 1 ]] && continue
-    local count=$(find "$d" -type f 2>/dev/null | wc -l | awk '{print $1+0}')
-    if [[ "$count" -gt $threshold ]]; then
-      say "  ${GRAY}$base${RESET} (${count} files) → consider adding to .ubsignore"
-    fi
-  done
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
