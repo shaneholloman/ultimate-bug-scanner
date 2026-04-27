@@ -1193,7 +1193,7 @@
         "exit_code": "nonzero",
         "totals": {
           "critical": {
-            "min": 3
+            "min": 4
           },
           "warning": {
             "min": 5
@@ -1202,6 +1202,7 @@
         "require_substrings": [
           "mem::transmute usage",
           "mem::zeroed usage",
+          "MaybeUninit::assume_init usage",
           "Unchecked UB-adjacent APIs used",
           "Direct indexing/slicing may panic",
           "CStr unchecked conversion used",

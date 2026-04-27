@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::ffi::CStr;
+use std::mem::{self, MaybeUninit};
 use std::slice;
 use std::str;
 
@@ -10,11 +11,20 @@ unsafe impl Send for RawHandle {}
 unsafe impl Sync for RawHandle {}
 
 fn reinterpret(bytes: [u8; 8]) -> u64 {
-    unsafe { std::mem::transmute(bytes) }
+    unsafe { mem::transmute(bytes) }
 }
 
 fn make_zeroed_reference() -> &'static u8 {
     unsafe { std::mem::zeroed::<&'static u8>() }
+}
+
+fn make_zeroed_vec() -> Vec<u8> {
+    unsafe { std::mem::zeroed() }
+}
+
+fn assume_uninit_string() -> String {
+    let slot = MaybeUninit::<String>::uninit();
+    unsafe { slot.assume_init() }
 }
 
 fn impossible_branch(flag: bool) -> usize {

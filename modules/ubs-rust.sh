@@ -2226,8 +2226,20 @@ rule:
   any:
     - pattern: std::mem::zeroed::<$T>()
     - pattern: mem::zeroed::<$T>()
+    - pattern: std::mem::zeroed()
+    - pattern: mem::zeroed()
+    - pattern: zeroed()
 severity: error
 message: "std::mem::zeroed can be UB for many types; use MaybeUninit instead"
+YAML
+
+  cat >"$AST_RULE_DIR/maybeuninit-assume-init.yml" <<'YAML'
+id: rust.maybeuninit-assume-init
+language: rust
+rule:
+  pattern: $X.assume_init()
+severity: error
+message: "MaybeUninit::assume_init requires proven initialization; uninitialized reads are UB"
 YAML
 
   cat >"$AST_RULE_DIR/forget.yml" <<'YAML'
@@ -3253,13 +3265,17 @@ else
   print_finding "good" "No unsafe blocks detected"
 fi
 
-print_subheader "transmute, uninitialized, zeroed, forget"
+print_subheader "transmute, uninitialized, zeroed, assume_init, forget"
 # shellcheck disable=SC2016
 transmute_count=$(count_ast_or_rg 'transmute\(' 'std::mem::transmute($X)' 'mem::transmute($X)' 'transmute($X)')
 # shellcheck disable=SC2016
 uninit_count=$(count_ast_or_rg 'uninitialized::<' 'std::mem::uninitialized::<$T>()' 'mem::uninitialized::<$T>()')
 # shellcheck disable=SC2016
-zeroed_count=$(count_ast_or_rg 'zeroed::<' 'std::mem::zeroed::<$T>()' 'mem::zeroed::<$T>()')
+zeroed_patterns=('std::mem::zeroed::<$T>()' 'mem::zeroed::<$T>()' 'std::mem::zeroed()' 'mem::zeroed()' 'zeroed()')
+# shellcheck disable=SC2016
+assume_init_patterns=('$X.assume_init()')
+zeroed_count=$(count_ast_or_rg '(^|[^[:alnum:]_:])((std::mem::|mem::)?zeroed(::<[^>]+>)?\()' "${zeroed_patterns[@]}")
+assume_init_count=$(count_ast_or_rg '\.assume_init\(' "${assume_init_patterns[@]}")
 # shellcheck disable=SC2016
 forget_count=$(count_ast_or_rg 'mem::forget\(' 'std::mem::forget($X)' 'mem::forget($X)')
 if [ "$transmute_count" -gt 0 ]; then
@@ -3279,9 +3295,14 @@ fi
 if [ "$zeroed_count" -gt 0 ]; then
   print_finding "critical" "$zeroed_count" "mem::zeroed usage"
   # shellcheck disable=SC2016
-  show_ast_pattern_examples 3 'std::mem::zeroed::<$T>()' 'mem::zeroed::<$T>()' || show_detailed_finding "zeroed::<" 3
+  show_ast_pattern_examples 3 "${zeroed_patterns[@]}" || show_detailed_finding '(^|[^[:alnum:]_:])((std::mem::|mem::)?zeroed(::<[^>]+>)?\()' 3
   # shellcheck disable=SC2016
-  add_finding "critical" "$zeroed_count" "mem::zeroed usage" "" "${CATEGORY_NAME[2]}" "$(collect_samples_ast_or_rg "zeroed::<" 3 'std::mem::zeroed::<$T>()' 'mem::zeroed::<$T>()')"
+  add_finding "critical" "$zeroed_count" "mem::zeroed usage" "" "${CATEGORY_NAME[2]}" "$(collect_samples_ast_or_rg '(^|[^[:alnum:]_:])((std::mem::|mem::)?zeroed(::<[^>]+>)?\()' 3 "${zeroed_patterns[@]}")"
+fi
+if [ "$assume_init_count" -gt 0 ]; then
+  print_finding "critical" "$assume_init_count" "MaybeUninit::assume_init usage" "Only call after every byte is initialized; prefer safe constructors or write() before assume_init"
+  show_ast_pattern_examples 3 "${assume_init_patterns[@]}" || show_detailed_finding "\.assume_init\(" 3
+  add_finding "critical" "$assume_init_count" "MaybeUninit::assume_init usage" "Only call after every byte is initialized; prefer safe constructors or write() before assume_init" "${CATEGORY_NAME[2]}" "$(collect_samples_ast_or_rg "\.assume_init\(" 3 "${assume_init_patterns[@]}")"
 fi
 if [ "$forget_count" -gt 0 ]; then
   print_finding "warning" "$forget_count" "mem::forget leaks memory"
