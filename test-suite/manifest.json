@@ -734,6 +734,64 @@
       }
     },
     {
+      "id": "js-typescript-dangerously-set-html-buggy",
+      "description": "TypeScript React dangerouslySetInnerHTML should require inline sanitization.",
+      "path": "test-suite/js/security/dangerously-set-html-buggy.tsx",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "tsx",
+        "security",
+        "buggy"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "dangerouslySetInnerHTML without sanitizer"
+        ]
+      }
+    },
+    {
+      "id": "js-typescript-dangerously-set-html-clean",
+      "description": "TypeScript React dangerouslySetInnerHTML with DOMPurify.sanitize should stay clean.",
+      "path": "test-suite/js/security/dangerously-set-html-clean.tsx",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "tsx",
+        "security",
+        "clean"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        }
+      }
+    },
+    {
       "id": "golang-buggy",
       "description": "Go buggy fixtures exercising goroutine/context/network pitfalls.",
       "path": "test-suite/golang/buggy",
