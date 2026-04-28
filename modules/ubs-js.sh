@@ -4753,6 +4753,130 @@ if [ "$message_origin_count" -gt 0 ]; then
   done <<<"$message_origin_samples"
 fi
 
+print_subheader "unvalidated client redirects"
+open_redirect_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+assignment_re = re.compile(
+    r'\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.*(?:'
+    r'(?:URLSearchParams|searchParams|params)\s*\.\s*get\s*\('
+    r'|(?:window\.)?location\.(?:search|hash|href)\b'
+    r'|(?:req|request)\.query\b'
+    r'|router\.query\b'
+    r'|query\.(?:next|redirect|returnTo|return_to|callbackUrl|callback_url)\b'
+    r').*)',
+    re.IGNORECASE,
+)
+sink_re = re.compile(
+    r'\b(?:router|navigation|history)\s*\.\s*(?:push|replace)\s*\('
+    r'|\b(?:redirect|permanentRedirect|navigate)\s*\('
+    r'|\b(?:window\.)?location\s*\.\s*(?:assign|replace)\s*\('
+    r'|\b(?:window\.)?location\s*\.\s*href\s*=',
+    re.IGNORECASE,
+)
+direct_source_re = re.compile(
+    r'(?:URLSearchParams|searchParams|params)\s*\.\s*get\s*\('
+    r'|(?:window\.)?location\.(?:search|hash|href)\b'
+    r'|(?:req|request)\.query\b'
+    r'|router\.query\b'
+    r'|query\.(?:next|redirect|returnTo|return_to|callbackUrl|callback_url)\b',
+    re.IGNORECASE,
+)
+safe_re = re.compile(
+    r'\b(?:isSafeRedirect[A-Za-z0-9_]*|safeRedirect[A-Za-z0-9_]*|validateRedirect[A-Za-z0-9_]*|sanitizeRedirect[A-Za-z0-9_]*|allowedRedirects?|trustedRedirects?|sameOrigin|same-origin|URL\.canParse)\b'
+    r'|\.startsWith\s*\(\s*(?:"/"|\'/\'|`/`)\s*\)'
+    r'|\bnew\s+URL\s*\(',
+    re.IGNORECASE,
+)
+
+def statement_from(lines, idx):
+    parts = []
+    paren_balance = 0
+    for line_idx in range(idx, min(len(lines), idx + 10)):
+        current = lines[line_idx].strip()
+        parts.append(current)
+        paren_balance += current.count('(') - current.count(')')
+        if line_idx > idx and paren_balance <= 0:
+            break
+        if ';' in current and paren_balance <= 0:
+            break
+    return ' '.join(parts)
+
+issues = []
+if root.is_file():
+    candidates = [root]
+    sample_root = root.parent
+else:
+    candidates = []
+    sample_root = root
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            candidates.append(Path(dirpath) / fname)
+
+for path in candidates:
+    if path.suffix.lower() not in exts:
+        continue
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        continue
+    tainted_vars = {}
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("//", "/*", "*")):
+            continue
+        assignment = assignment_re.search(line)
+        if assignment and 'ubs:ignore' not in line:
+            tainted_vars[assignment.group(1)] = idx
+        if not sink_re.search(line):
+            continue
+        statement = statement_from(lines, idx)
+        if 'ubs:ignore' in statement:
+            continue
+        context_start = max(0, idx - 8)
+        validation_context = '\n'.join(lines[context_start:idx + 1])
+        if safe_re.search(validation_context):
+            continue
+        tainted = direct_source_re.search(statement)
+        if not tainted:
+            for name, source_idx in tainted_vars.items():
+                if source_idx <= idx and re.search(rf'\b{re.escape(name)}\b', statement):
+                    tainted = True
+                    break
+        if not tainted:
+            continue
+        try:
+            rel = path.relative_to(sample_root)
+        except ValueError:
+            rel = path
+        issues.append((str(rel), idx + 1, stripped.replace('\t', ' ')))
+
+print(len(issues))
+for entry in issues[:25]:
+    print('\t'.join(str(part) for part in entry))
+PY
+)
+open_redirect_count=$(printf '%s\n' "$open_redirect_report" | head -n1 | awk 'END{print $0+0}')
+open_redirect_samples=$(printf '%s\n' "$open_redirect_report" | tail -n +2)
+if [ "$open_redirect_count" -gt 0 ]; then
+  print_finding "warning" "$open_redirect_count" "unvalidated redirect from URL/query data" "Validate redirect targets against same-origin relative paths or an explicit allowlist before navigation"
+  sample_limit=3
+  while IFS=$'\t' read -r sample_path sample_line sample_text; do
+    [ -z "$sample_path" ] && continue
+    print_code_sample "$sample_path" "$sample_line" "$sample_text"
+    sample_limit=$((sample_limit - 1))
+    [ "$sample_limit" -le 0 ] && break
+  done <<<"$open_redirect_samples"
+fi
+
 print_subheader "Hardcoded secrets/credentials"
 count=$("${GREP_RNI[@]}" -e "\b(password|api_?key|secret|token)\b[[:space:]]*[:=][[:space:]]*['\"]([^'\"]+)['\"]" "$PROJECT_DIR" 2>/dev/null |   (grep -v "process\.env" || true) | count_lines)
 if [ "$count" -gt 0 ]; then

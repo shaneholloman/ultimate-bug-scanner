@@ -20,6 +20,7 @@
 - `async_errors/use-effect-async-*.tsx` covers TypeScript/React effects that accidentally return a Promise by passing an async callback directly to `useEffect`.
 - `security/dangerously-set-html-*.tsx` covers TypeScript/React XSS risk from unsanitized `dangerouslySetInnerHTML`.
 - `security/message-event-origin-*.ts` covers TypeScript cross-origin message receivers that trust `event.data` without validating `event.origin`.
+- `security/open-redirect-*.tsx` covers TypeScript/Next.js redirects that route URL/query-derived targets without validating same-origin relative paths or an allowlist.
 - `security/post-message-*.ts` covers TypeScript cross-origin messaging leaks from wildcard `postMessage` target origins.
 - `security/target-blank-*.tsx` covers TypeScript/React reverse-tabnabbing protection for JSX `target="_blank"` links.
 - `security/window-open-*.ts` covers TypeScript reverse-tabnabbing protection for `window.open(..., "_blank")`.
