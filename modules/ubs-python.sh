@@ -899,6 +899,213 @@ PY
   fi
 }
 
+run_archive_extraction_checks() {
+  print_subheader "Archive extractall path traversal"
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Archive extraction path traversal risk" "Validate every archive member stays under the destination, or use tarfile extraction filters where available"
+        else
+          print_finding "good" "No unvalidated archive extractall() calls detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+SAFE_CONTEXT_RE = re.compile(
+    r'\b(?:safe_extract|safe_members|validate_archive|validate_member|is_safe_archive|commonpath|is_relative_to|resolve|normpath|abspath)\b'
+    r'|\.{2}',
+    re.IGNORECASE,
+)
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def strip_comments(line: str) -> str:
+    return line.split('#', 1)[0]
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    return ''
+
+def call_is_tar_open(call, tar_modules, tar_open_names):
+    name = call_name(call.func)
+    return name in tar_open_names or any(name == f"{module}.open" for module in tar_modules)
+
+def call_is_zip_open(call, zip_modules, zip_ctor_names):
+    name = call_name(call.func)
+    return name in zip_ctor_names or any(name == f"{module}.ZipFile" for module in zip_modules)
+
+def mark_archive_vars(node, archive_vars, archive_contexts, tar_modules, zip_modules, tar_open_names, zip_ctor_names):
+    if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+        kind = None
+        if call_is_tar_open(node.value, tar_modules, tar_open_names):
+            kind = 'tar'
+        elif call_is_zip_open(node.value, zip_modules, zip_ctor_names):
+            kind = 'zip'
+        if kind:
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    archive_vars[target.id] = kind
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        for item in node.items:
+            if not isinstance(item.context_expr, ast.Call) or not isinstance(item.optional_vars, ast.Name):
+                continue
+            if call_is_tar_open(item.context_expr, tar_modules, tar_open_names):
+                archive_contexts.append((item.optional_vars.id, 'tar', node.lineno, getattr(node, 'end_lineno', node.lineno)))
+            elif call_is_zip_open(item.context_expr, zip_modules, zip_ctor_names):
+                archive_contexts.append((item.optional_vars.id, 'zip', node.lineno, getattr(node, 'end_lineno', node.lineno)))
+
+def extractall_kind(call, archive_vars, archive_contexts, tar_modules, zip_modules, tar_open_names, zip_ctor_names, saw_archive_import):
+    func = call.func
+    if not isinstance(func, ast.Attribute) or func.attr != 'extractall':
+        return None
+    owner = func.value
+    if isinstance(owner, ast.Name):
+        for name, kind, start_line, end_line in reversed(archive_contexts):
+            if name == owner.id and start_line <= call.lineno <= end_line:
+                return kind
+        if owner.id in archive_vars:
+            return archive_vars[owner.id]
+    if isinstance(owner, ast.Call):
+        if call_is_tar_open(owner, tar_modules, tar_open_names):
+            return 'tar'
+        if call_is_zip_open(owner, zip_modules, zip_ctor_names):
+            return 'zip'
+    return 'unknown' if saw_archive_import else None
+
+def keyword_value(call, key):
+    for keyword in call.keywords:
+        if keyword.arg == key:
+            return keyword.value
+    return None
+
+def constant_string(node):
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+def is_safe_tar_filter(node):
+    literal = constant_string(node)
+    if literal == 'data':
+        return True
+    name = call_name(node)
+    return name in {'data_filter', 'tarfile.data_filter'}
+
+def has_safe_archive_context(kind, call, lines):
+    if kind == 'tar':
+        filter_value = keyword_value(call, 'filter')
+        if filter_value is not None and is_safe_tar_filter(filter_value):
+            return True
+    if keyword_value(call, 'members') is not None:
+        context = '\n'.join(strip_comments(line) for line in lines[max(0, call.lineno - 12):call.lineno])
+        if SAFE_CONTEXT_RE.search(context):
+            return True
+    return False
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    tar_modules = {'tarfile'}
+    zip_modules = {'zipfile'}
+    tar_open_names = set()
+    zip_ctor_names = {'ZipFile'}
+    saw_archive_import = False
+    archive_vars = {}
+    archive_contexts = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == 'tarfile':
+                    tar_modules.add(alias.asname or alias.name)
+                    saw_archive_import = True
+                elif alias.name == 'zipfile':
+                    zip_modules.add(alias.asname or alias.name)
+                    saw_archive_import = True
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == 'tarfile':
+                saw_archive_import = True
+                for alias in node.names:
+                    if alias.name == 'open':
+                        tar_open_names.add(alias.asname or alias.name)
+            elif node.module == 'zipfile':
+                saw_archive_import = True
+                for alias in node.names:
+                    if alias.name == 'ZipFile':
+                        zip_ctor_names.add(alias.asname or alias.name)
+
+    for node in ast.walk(tree):
+        mark_archive_vars(node, archive_vars, archive_contexts, tar_modules, zip_modules, tar_open_names, zip_ctor_names)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not hasattr(node, 'lineno'):
+            continue
+        if has_ignore(lines, node.lineno):
+            continue
+        kind = extractall_kind(node, archive_vars, archive_contexts, tar_modules, zip_modules, tar_open_names, zip_ctor_names, saw_archive_import)
+        if kind is None or has_safe_archive_context(kind, node, lines):
+            continue
+        try:
+            rel = path.relative_to(BASE_DIR)
+        except ValueError:
+            rel = path.name
+        issues.append((str(rel), node.lineno, source_line(lines, node.lineno)))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:25]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 show_ast_samples_from_json() {
   local blob=$1
   [[ -n "$blob" ]] || return 0
@@ -2408,6 +2615,7 @@ print_subheader "tempfile.mktemp (insecure)"
 count=$("${GREP_RN[@]}" -e "tempfile\.mktemp\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
 if [ "$count" -gt 0 ]; then print_finding "critical" "$count" "Insecure tempfile.mktemp usage" "Use NamedTemporaryFile/mkstemp"; fi
 
+run_archive_extraction_checks
 run_taint_analysis_checks
 fi
 
