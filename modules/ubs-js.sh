@@ -3560,6 +3560,87 @@ if [ "$async_listener_count" -gt 0 ]; then
   done <<<"$async_listener_samples"
 fi
 
+print_subheader "async Promise executors"
+async_promise_executor_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+start_re = re.compile(r'\bnew\s+Promise(?:\s*<[^>\n]+>)?\s*\(')
+async_executor_re = re.compile(
+    r'\bnew\s+Promise(?:\s*<[^>\n]+>)?\s*\(\s*(?:async\b|async\s+function\b)',
+    re.DOTALL,
+)
+
+issues = []
+if root.is_file():
+    candidates = [root]
+    sample_root = root.parent
+else:
+    candidates = []
+    sample_root = root
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            candidates.append(Path(dirpath) / fname)
+
+for path in candidates:
+    if path.suffix.lower() not in exts:
+        continue
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        continue
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("//", "/*", "*")):
+            continue
+        if not start_re.search(line):
+            continue
+        expression_lines = []
+        paren_balance = 0
+        saw_promise = False
+        for expr_idx in range(idx, min(len(lines), idx + 16)):
+            current = lines[expr_idx].strip()
+            expression_lines.append(current)
+            if start_re.search(current):
+                saw_promise = True
+            if saw_promise:
+                paren_balance += current.count('(') - current.count(')')
+            if saw_promise and expr_idx > idx and paren_balance <= 0:
+                break
+        expression_text = ' '.join(expression_lines)
+        if 'ubs:ignore' in expression_text or not async_executor_re.search(expression_text):
+            continue
+        try:
+            rel = path.relative_to(sample_root)
+        except ValueError:
+            rel = path
+        issues.append((str(rel), idx + 1, stripped.replace('\t', ' ')))
+
+print(len(issues))
+for entry in issues[:25]:
+    print('\t'.join(str(part) for part in entry))
+PY
+)
+async_promise_executor_count=$(printf '%s\n' "$async_promise_executor_report" | head -n1 | awk 'END{print $0+0}')
+async_promise_executor_samples=$(printf '%s\n' "$async_promise_executor_report" | tail -n +2)
+if [ "$async_promise_executor_count" -gt 0 ]; then
+  print_finding "warning" "$async_promise_executor_count" "async Promise executor drops thrown errors" "Do not pass an async function to new Promise; use a synchronous executor and handle async work with then/catch or an outer async function"
+  sample_limit=3
+  while IFS=$'\t' read -r sample_path sample_line sample_text; do
+    [ -z "$sample_path" ] && continue
+    print_code_sample "$sample_path" "$sample_line" "$sample_text"
+    sample_limit=$((sample_limit - 1))
+    [ "$sample_limit" -le 0 ] && break
+  done <<<"$async_promise_executor_samples"
+fi
+
 run_async_error_checks
 run_hooks_dependency_checks
 run_type_narrowing_checks
