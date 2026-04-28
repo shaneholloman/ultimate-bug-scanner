@@ -649,14 +649,23 @@ ARCHIVE_HINT_RE = re.compile(
 )
 ENTRY_EXPR_RE = re.compile(
     r'\b(?:archive_entry_pathname(?:_utf8)?|zip_get_name)\s*\([^;\n)]*\)'
-    r'|\b[A-Za-z_][A-Za-z0-9_]*(?:->|\.)\s*(?:name|pathname|path|filename|fileName|fullPath)\b'
+    r'|\b[A-Za-z_][A-Za-z0-9_]*(?:->|\.)\s*(?:name|pathname|path|filename|fileName|fullPath|m_filename|m_name)\b'
 )
 ALIAS_ASSIGN_RE = re.compile(
     r'\b(?:const\s+)?(?:char\s*(?:const\s*)?\*|std::string(?:_view)?|string(?:_view)?|'
     r'(?:std::)?filesystem::path|fs::path|auto(?:\s+const)?|const\s+auto)\s+'
     r'([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'
     r'(?:[^;\n]*\b(?:archive_entry_pathname(?:_utf8)?|zip_get_name)\s*\([^;\n]*\)|'
-    r'[^;\n]*\b[A-Za-z_][A-Za-z0-9_]*(?:->|\.)\s*(?:name|pathname|path|filename|fileName|fullPath)\b)'
+    r'[^;\n]*\b[A-Za-z_][A-Za-z0-9_]*(?:->|\.)\s*(?:name|pathname|path|filename|fileName|fullPath|m_filename|m_name)\b)'
+)
+OUTBUF_ARCHIVE_CALL_RE = re.compile(
+    r'\b(?:unzGetCurrentFileInfo(?:64)?|mz_zip_reader_get_filename(?:_v2)?|'
+    r'mz_zip_reader_file_stat|zip_stat(?:_index)?)\s*\('
+)
+LIKELY_ENTRY_BUFFER_RE = re.compile(
+    r'^(?:entry_?)?(?:file_?)?(?:name|path)(?:_inzip|_buf|_buffer)?$|'
+    r'^filename(?:_inzip|_buf|_buffer)?$|^pathbuf$|^path_buffer$|^stat$|^file_stat$',
+    re.IGNORECASE,
 )
 PATH_ALIAS_ASSIGN_RE = re.compile(
     r'\b(?:auto(?:\s+const)?|const\s+auto|std::string(?:_view)?|string(?:_view)?|'
@@ -796,6 +805,10 @@ def collect_entry_aliases(lines):
         match = ALIAS_ASSIGN_RE.search(line)
         if match:
             aliases.add(match.group(1))
+        if OUTBUF_ARCHIVE_CALL_RE.search(line):
+            for ident in re.findall(r'\b[A-Za-z_][A-Za-z0-9_]*\b', line):
+                if LIKELY_ENTRY_BUFFER_RE.search(ident):
+                    aliases.add(ident)
     return aliases
 
 def references_name_source(statement, entry_aliases):
