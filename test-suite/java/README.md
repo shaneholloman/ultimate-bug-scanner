@@ -6,6 +6,8 @@
 | `buggy/BuggyConcurrency.java` | ExecutorService leaks, missing shutdown |
 | `buggy/ResourceLifecycle.java` | Streams not closed |
 | `buggy/BuggySecurity.java` | SQL/command injection |
+| `security/ArchiveExtractionBuggy.java` | Archive extraction security |
+| `security/ArchiveExtractionClean.java` | normalize + startsWith destination checks |
 | Clean files | try-with-resources, prepared statements, ProcessBuilder argv |
 
 ```bash

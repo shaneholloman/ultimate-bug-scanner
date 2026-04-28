@@ -626,6 +626,195 @@ print(",".join(samples))
 PY
 }
 
+run_archive_extraction_checks() {
+  print_subheader "Archive extraction path traversal"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable archive extraction checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Archive extraction path traversal risk" "Normalize and verify archive entry paths remain under the destination before writing files"
+        else
+          print_finding "good" "No unvalidated archive extraction path construction detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.gradle', '.mvn', 'build', 'target', 'out', 'node_modules', '.cache'}
+ARCHIVE_HINT_RE = re.compile(
+    r'\b(?:ZipInputStream|ZipFile|ZipEntry|JarInputStream|JarFile|JarEntry)\b'
+    r'|java\.util\.(?:zip|jar)\.',
+)
+ENTRY_NAME_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\.getName\s*\(\s*\)')
+ALIAS_ASSIGN_RE = re.compile(
+    r'\b(?:String|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'
+    r'[A-Za-z_][A-Za-z0-9_]*\.getName\s*\(\s*\)'
+)
+PATH_BUILD_RE = re.compile(
+    r'\b(?:new\s+File|Paths\.get|Path\.of)\s*\(|'
+    r'\.resolve\s*\(|'
+    r'\bFiles\.(?:copy|move|write|writeString|newOutputStream|createDirectories)\s*\('
+)
+SAFE_NAMED_RE = re.compile(
+    r'\b(?:safeDestination|safeArchivePath|safeZipEntry|safeEntryPath|'
+    r'secureExtract|secureJoin|validateArchiveEntry|validateZipEntry|'
+    r'withinDestination|insideDestination|assertInsideDestination)\b',
+    re.IGNORECASE,
+)
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.java', '.kt', '.kts'}:
+            yield root
+        return
+    for suffix in ('*.java', '*.kt', '*.kts'):
+        for path in root.rglob(suffix):
+            if path.is_file() and not should_skip(path):
+                yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    balance = statement.count('(') - statement.count(')')
+    lookahead = idx + 1
+    while balance > 0 and lookahead < len(lines) and lookahead < idx + 8:
+        next_line = strip_line_comments(lines[lookahead])
+        statement += ' ' + next_line.strip()
+        balance += next_line.count('(') - next_line.count(')')
+        lookahead += 1
+    return statement
+
+def context_around(lines, line_no):
+    start = max(0, line_no - 8)
+    end = min(len(lines), line_no + 10)
+    return '\n'.join(strip_line_comments(line) for line in lines[start:end])
+
+def has_safe_context(context):
+    if SAFE_NAMED_RE.search(context):
+        return True
+    lower = context.lower()
+    has_containment = '.startswith(' in lower or 'getcanonicalpath(' in lower or 'getcanonicalfile(' in lower
+    has_normalization = '.normalize(' in lower or '.torealpath(' in lower or 'getcanonicalpath(' in lower or 'getcanonicalfile(' in lower
+    return has_containment and has_normalization
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def collect_aliases(lines):
+    aliases = set()
+    for raw in lines:
+        line = strip_line_comments(raw)
+        match = ALIAS_ASSIGN_RE.search(line)
+        if match:
+            aliases.add(match.group(1))
+    return aliases
+
+def has_entry_name(statement, aliases):
+    if ENTRY_NAME_RE.search(statement):
+        return True
+    for alias in aliases:
+        if re.search(rf'\b{re.escape(alias)}\b', statement):
+            return True
+    return False
+
+def path_builds_from_entry(statement, aliases):
+    if not PATH_BUILD_RE.search(statement):
+        return False
+    return has_entry_name(statement, aliases)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not ARCHIVE_HINT_RE.search(text):
+        return
+    lines = text.splitlines()
+    aliases = collect_aliases(lines)
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        statement = logical_statement(lines, idx)
+        if not path_builds_from_entry(statement, aliases):
+            continue
+        if has_safe_context(context_around(lines, idx)):
+            continue
+        issues.append((relpath(path), idx, source_line(lines, idx)))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:25]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 run_kotlin_type_narrowing_checks() {
   if [[ "$HAS_KOTLIN_FILES" -ne 1 ]]; then
     return 0
@@ -1824,7 +2013,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_run 4; then
 print_header "4. SECURITY"
-print_category "Detects: Insecure SSL, weak hashes, http://, insecure deserialization, shell command execution, Random for secrets" \
+print_category "Detects: Insecure SSL, weak hashes, http://, insecure deserialization, shell command execution, Random for secrets, unsafe archive extraction" \
   "Security misconfigurations expose users to attacks and data breaches"
 
 print_subheader "SSL verification disabled (CRITICAL)"
@@ -1872,6 +2061,8 @@ if [ "$pb_shell" -gt 0 ]; then
   print_finding "critical" "$pb_shell" "ProcessBuilder shell interpreter invoked" "Pass arguments directly as argv, or strictly validate and escape every shell fragment"
   show_detailed_finding "$pb_shell_pattern" 3
 fi
+
+run_archive_extraction_checks
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
