@@ -3890,6 +3890,67 @@
       }
     },
     {
+      "id": "csharp-archive-extraction-buggy",
+      "description": "C# archive extraction should validate zip/tar entry paths before writing files.",
+      "path": "test-suite/csharp/security/ArchiveExtractionBuggy.cs",
+      "language": "csharp",
+      "tags": [
+        "csharp",
+        "security",
+        "archive",
+        "buggy"
+      ],
+      "args": [
+        "--only=csharp",
+        "--fail-on-warning",
+        "--no-dotnet",
+        "--skip=1,2,3,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
+      "id": "csharp-archive-extraction-clean",
+      "description": "C# archive extraction with full-path destination containment checks should stay clean.",
+      "path": "test-suite/csharp/security/ArchiveExtractionClean.cs",
+      "language": "csharp",
+      "tags": [
+        "csharp",
+        "security",
+        "archive",
+        "clean"
+      ],
+      "args": [
+        "--only=csharp",
+        "--fail-on-warning",
+        "--no-dotnet",
+        "--skip=1,2,3,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
       "id": "csharp-direct-module-buggy",
       "description": "Direct ubs-csharp module contract regression (summary text + exit status).",
       "path": "test-suite/csharp/buggy",

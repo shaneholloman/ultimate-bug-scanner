@@ -1395,6 +1395,188 @@ search '\bPath\.Combine\s*\([^)]*(request|query|input|user|param|args)\b' "$tmp"
   fi
 }
 
+run_archive_extraction_checks() {
+  local cat=8
+  [[ "$HAS_PYTHON" -eq 1 ]] || return 0
+  [[ -n "$FILELIST_NUL" && -f "$FILELIST_NUL" ]] || build_file_list "$FILELIST_NUL"
+  local report="$TMP_DIR/cat8.archive-extraction.txt"
+
+  python3 - "$PROJECT_DIR" "$FILELIST_NUL" >"$report" <<'PY' 2>/dev/null || true
+import re
+import sys
+from pathlib import Path
+
+PROJECT_DIR = Path(sys.argv[1]).resolve()
+BASE_DIR = PROJECT_DIR if PROJECT_DIR.is_dir() else PROJECT_DIR.parent
+FILELIST = Path(sys.argv[2])
+
+ARCHIVE_HINT_RE = re.compile(
+    r'\b(?:ZipArchive|ZipFile|ZipArchiveEntry|ZipInputStream|ZipEntry|'
+    r'TarReader|TarEntry|TarArchive|SharpCompress|IArchiveEntry|SevenZipArchive)\b'
+)
+ENTRY_NAME_RE = re.compile(
+    r'\b[A-Za-z_][A-Za-z0-9_]*\.(?:FullName|Name|Key|FilePath)\b'
+)
+ALIAS_ASSIGN_RE = re.compile(
+    r'\b(?:var|string|String|PathString)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'
+    r'[A-Za-z_][A-Za-z0-9_]*\.(?:FullName|Name|Key|FilePath)\b'
+)
+PATH_BUILD_RE = re.compile(
+    r'\bPath\.(?:Combine|Join|GetFullPath)\s*\(|'
+    r'\bFile(?:Info|Stream)?\s*\(|'
+    r'\bFile\.(?:Open|Create|CreateText|WriteAllBytes|WriteAllText|WriteAllLines|WriteAllBytesAsync|WriteAllTextAsync)\s*\(|'
+    r'\bDirectory\.(?:CreateDirectory|Move)\s*\(|'
+    r'\.ExtractToFile\s*\(|'
+    r'\.WriteToFile\s*\(|'
+    r'\.WriteToDirectory\s*\(|'
+    r'\+\s*(?:Path\.DirectorySeparatorChar|Path\.AltDirectorySeparatorChar|["\'][^"\']*[\\/][^"\']*["\'])|'
+    r'(?:Path\.DirectorySeparatorChar|Path\.AltDirectorySeparatorChar|["\'][^"\']*[\\/][^"\']*["\'])\s*\+|'
+    r'\$\s*"[^"]*\{[^}]+\}[^"]*[\\/]|'
+    r'\$\s*"[^"]*[\\/][^"]*\{[^}]+\}'
+)
+SAFE_NAMED_RE = re.compile(
+    r'\b(?:SafeArchivePath|GetSafeArchivePath|SafeExtractionPath|GetSafeExtractionPath|'
+    r'ValidateArchiveEntry|ValidateZipEntry|ValidateTarEntry|EnsureInsideDestination|'
+    r'AssertInsideDestination|IsInsideDestination|IsSubPathOf|IsPathInside)\b',
+    re.IGNORECASE,
+)
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    paren_balance = statement.count('(') - statement.count(')')
+    lookahead = idx + 1
+    while paren_balance > 0 and lookahead < len(lines) and lookahead < idx + 10:
+        next_line = strip_line_comments(lines[lookahead]).strip()
+        statement += ' ' + next_line
+        paren_balance += next_line.count('(') - next_line.count(')')
+        lookahead += 1
+    return statement
+
+def context_around(lines, line_no):
+    start = max(0, line_no - 10)
+    end = min(len(lines), line_no + 12)
+    return '\n'.join(strip_line_comments(line) for line in lines[start:end])
+
+def has_safe_context(context):
+    if SAFE_NAMED_RE.search(context):
+        return True
+    lower = context.lower()
+    has_canonical = 'path.getfullpath' in lower or 'path.getrelativepath' in lower
+    has_anchor = '.startswith' in lower or 'stringcomparison.' in lower or 'getrelativepath' in lower
+    rejects_traversal = '..' in lower or 'throw ' in lower or 'return false' in lower
+    return has_canonical and has_anchor and rejects_traversal
+
+def collect_aliases(lines):
+    aliases = set()
+    for raw in lines:
+        line = strip_line_comments(raw)
+        match = ALIAS_ASSIGN_RE.search(line)
+        if match:
+            aliases.add(match.group(1))
+    return aliases
+
+def has_entry_name(statement, aliases):
+    if ENTRY_NAME_RE.search(statement):
+        return True
+    for alias in aliases:
+        if re.search(rf'\b{re.escape(alias)}\b', statement):
+            return True
+    return False
+
+def path_builds_from_entry(statement, aliases):
+    return bool(PATH_BUILD_RE.search(statement) and has_entry_name(statement, aliases))
+
+def relpath(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def load_paths():
+    try:
+        data = FILELIST.read_bytes().split(b'\0')
+    except OSError:
+        return []
+    return [Path(raw.decode('utf-8', 'ignore')) for raw in data if raw]
+
+def analyze(path: Path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not ARCHIVE_HINT_RE.search(text):
+        return
+    lines = text.splitlines()
+    aliases = collect_aliases(lines)
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        statement = logical_statement(lines, idx)
+        if not path_builds_from_entry(statement, aliases):
+            continue
+        if has_safe_context(context_around(lines, idx)):
+            continue
+        issues.append((relpath(path), idx, source_line(lines, idx)))
+
+issues = []
+for file_path in load_paths():
+    analyze(file_path, issues)
+for file_name, line_no, code in issues:
+    print(f"{file_name}:{line_no}:{code}")
+PY
+
+  local hits
+  hits=$(cat "$report" | count_lines)
+  if [[ $hits -gt 0 ]]; then
+    bump_counter critical "$hits"
+    [[ "$FORMAT" == "text" ]] && echo "${RED}${ICON_CRIT} Archive extraction path traversal risk ($hits) - validate archive entry paths stay under destination${RESET}"
+    [[ "$FORMAT" == "text" ]] && head -n "$DETAIL_LIMIT" "$report" | print_matches "Archive extraction path traversal risk" "archive extraction" "critical" "$cat" || true
+  fi
+}
+
 category_8_security() {
   local cat=8
   category_enabled "$cat" || return 0
@@ -1456,6 +1638,8 @@ search '\b(api[_-]?key|secret|password|token)\b\s*=\s*"[^"]{8,}"' "$tmp"
     [[ "$FORMAT" == "text" ]] && echo "${RED}${ICON_CRIT} Possible hardcoded secrets ($hits) - rotate + move to secret store${RESET}"
     [[ "$FORMAT" == "text" ]] && head -n "$DETAIL_LIMIT" "$tmp" | print_matches "Hardcoded secret" "secret" "critical" "$cat" || true
   fi
+
+  run_archive_extraction_checks
 }
 
 category_9_quality_markers() {
