@@ -534,18 +534,23 @@ BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
 SKIP_DIRS = {'.git', '.bundle', 'vendor', 'node_modules', 'tmp', 'log', 'coverage', '.cache', 'dist', 'build'}
 EXTS = {'.rb', '.rake', '.ru', '.gemspec', '.erb', '.haml', '.slim', '.rbi', '.rbs', '.jbuilder'}
 ARCHIVE_HINT_RE = re.compile(
-    r'\b(?:Zip::File|Zip::InputStream|Gem::Package::TarReader|Archive::Tar|Zlib::GzipReader)\b'
+    r'\b(?:Zip::File|Zip::InputStream|Gem::Package::TarReader|'
+    r'Minitar::Reader|Archive::Tar|Archive::Reader|Zlib::GzipReader)\b'
 )
-ENTRY_NAME_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\.(?:name|full_name)\b')
+ENTRY_NAME_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\.(?:name|full_name|path)\b')
 ALIAS_ASSIGN_RE = re.compile(
     r'\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'
-    r'[A-Za-z_][A-Za-z0-9_]*\.(?:name|full_name)\b'
+    r'[A-Za-z_][A-Za-z0-9_]*\.(?:name|full_name|path)\b'
 )
 PATH_BUILD_RE = re.compile(
     r'\bFile\.(?:join|expand_path|write|open|binwrite)\s*\(|'
+    r'\bPathname\.new\s*\(|'
     r'\bFileUtils\.(?:mkdir_p|cp|mv|touch)\s*\(|'
     r'\.extract\s*\(|'
-    r'\.join\s*\('
+    r'\.join\s*\(|'
+    r'\+\s*(?:File::SEPARATOR|["\'][^"\']*/[^"\']*["\'])|'
+    r'(?:File::SEPARATOR|["\'][^"\']*/[^"\']*["\'])\s*\+|'
+    r'#\{[^}]+\}[^"\']*/|/[^"\']*#\{[^}]+\}'
 )
 SAFE_NAMED_RE = re.compile(
     r'\b(?:safe_destination|safe_archive_path|safe_zip_entry|safe_entry_path|'

@@ -1,4 +1,5 @@
 require "fileutils"
+require "pathname"
 require "zip"
 require "rubygems/package"
 
@@ -30,5 +31,27 @@ def untar_safely(io, destination)
     end
     FileUtils.mkdir_p(File.dirname(target))
     File.binwrite(target, entry.read)
+  end
+end
+
+def untar_with_pathname_safely(io, destination)
+  base = Pathname.new(destination).realpath
+  Minitar::Reader.open(io).each do |entry|
+    target = (Pathname.new(base.to_s) + entry.full_name).cleanpath
+    unless target.to_s.start_with?(base.to_s + File::SEPARATOR) || target == base
+      raise ArgumentError, "archive entry escapes destination"
+    end
+    FileUtils.mkdir_p(target.dirname)
+    File.binwrite(target.to_s, entry.read)
+  end
+end
+
+def unzip_with_safe_interpolation(archive_path, destination)
+  Zip::InputStream.open(archive_path) do |zip_stream|
+    while (entry = zip_stream.get_next_entry)
+      target = safe_archive_path(destination, entry.path)
+      FileUtils.mkdir_p(File.dirname(target))
+      File.binwrite(target, zip_stream.read)
+    end
   end
 end
