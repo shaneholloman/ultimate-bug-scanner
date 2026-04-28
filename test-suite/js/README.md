@@ -10,6 +10,7 @@
 - `async_errors/async-map-ignored-*.ts` covers TypeScript `map(async ...)` loops whose returned promises are ignored instead of awaited or returned.
 - `async_errors/async-predicate-*.ts` covers TypeScript async predicates passed to `filter`/`some`/`every`/`find`, where the Promise is treated as truthy.
 - `async_errors/async-promise-executor-*.ts` covers TypeScript `new Promise(async ...)` executors that drop thrown errors.
+- `async_errors/async-reduce-*.ts` covers TypeScript `reduce(async ...)` callbacks, where the accumulator becomes a Promise instead of the expected value.
 - `async_errors/async-sort-comparator-*.ts` covers TypeScript `sort(async ...)` / `toSorted(async ...)` comparators, where the Promise result is not a numeric comparator value.
 - `async_errors/async-timer-*.ts` covers TypeScript timer callbacks that accidentally pass an `async` callback to `setTimeout`/`setInterval`, leaving rejections unhandled.
 - `async_errors/promise-all-map-*.ts` covers TypeScript `Promise.all(ids.map(...))` calls where a block-bodied `map` callback forgets to return the promise.

@@ -708,6 +708,62 @@
       }
     },
     {
+      "id": "js-typescript-async-reduce-buggy",
+      "description": "TypeScript reduce(async ...) callbacks should be reported because reduce does not await the accumulator callback.",
+      "path": "test-suite/js/async_errors/async-reduce-buggy.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "async",
+        "buggy"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,6,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "async reduce callback returns a Promise accumulator"
+        ]
+      }
+    },
+    {
+      "id": "js-typescript-async-reduce-clean",
+      "description": "TypeScript code that resolves async values before reduce should stay clean.",
+      "path": "test-suite/js/async_errors/async-reduce-clean.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "async",
+        "clean"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,6,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        }
+      }
+    },
+    {
       "id": "js-typescript-async-predicate-buggy",
       "description": "TypeScript async predicates passed to filter/some/every/find should be reported because array predicates do not await promises.",
       "path": "test-suite/js/async_errors/async-predicate-buggy.ts",
