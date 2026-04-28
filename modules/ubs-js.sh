@@ -3574,6 +3574,85 @@ if [ "$async_reduce_count" -gt 0 ]; then
   done <<<"$async_reduce_samples"
 fi
 
+print_subheader "Promise.all over forEach results"
+promise_all_foreach_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+promise_all_re = re.compile(r'\bPromise\.(?:all|allSettled)\s*\(')
+foreach_re = re.compile(r'\.\s*forEach\s*\(')
+
+issues = []
+if root.is_file():
+    candidates = [root]
+    sample_root = root.parent
+else:
+    candidates = []
+    sample_root = root
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            candidates.append(Path(dirpath) / fname)
+
+for path in candidates:
+    if path.suffix.lower() not in exts:
+        continue
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        continue
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("//", "/*", "*")):
+            continue
+        if not promise_all_re.search(line):
+            continue
+        expression_lines = []
+        paren_balance = 0
+        for expr_idx in range(idx, min(len(lines), idx + 35)):
+            current = lines[expr_idx].strip()
+            expression_lines.append(current)
+            paren_balance += current.count('(') - current.count(')')
+            if expr_idx > idx and paren_balance <= 0:
+                break
+        expression = '\n'.join(expression_lines)
+        if 'ubs:ignore' in expression:
+            continue
+        match = foreach_re.search(expression)
+        if not match:
+            continue
+        sample_line = idx + expression[:match.start()].count('\n') + 1
+        try:
+            rel = path.relative_to(sample_root)
+        except ValueError:
+            rel = path
+        sample_text = lines[sample_line - 1].strip().replace('\t', ' ')
+        issues.append((str(rel), sample_line, sample_text))
+
+print(len(issues))
+for entry in issues[:25]:
+    print('\t'.join(str(part) for part in entry))
+PY
+)
+promise_all_foreach_count=$(printf '%s\n' "$promise_all_foreach_report" | head -n1 | awk 'END{print $0+0}')
+promise_all_foreach_samples=$(printf '%s\n' "$promise_all_foreach_report" | tail -n +2)
+if [ "$promise_all_foreach_count" -gt 0 ]; then
+  print_finding "warning" "$promise_all_foreach_count" "Promise.all receives forEach result" "Use map to produce promises, or collect tasks explicitly before Promise.all/allSettled"
+  sample_limit=3
+  while IFS=$'\t' read -r sample_path sample_line sample_text; do
+    [ -z "$sample_path" ] && continue
+    print_code_sample "$sample_path" "$sample_line" "$sample_text"
+    sample_limit=$((sample_limit - 1))
+    [ "$sample_limit" -le 0 ] && break
+  done <<<"$promise_all_foreach_samples"
+fi
+
 print_subheader "Promise.all map callbacks without return"
 promise_all_map_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
 import os

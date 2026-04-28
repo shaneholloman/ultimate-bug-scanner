@@ -1102,6 +1102,62 @@
       }
     },
     {
+      "id": "js-typescript-promise-all-foreach-buggy",
+      "description": "TypeScript Promise.all should not receive the result of forEach because forEach returns undefined instead of promises.",
+      "path": "test-suite/js/async_errors/promise-all-foreach-buggy.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "async",
+        "buggy"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,6,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Promise.all receives forEach result"
+        ]
+      }
+    },
+    {
+      "id": "js-typescript-promise-all-foreach-clean",
+      "description": "TypeScript code that maps work to promises and awaits the tasks explicitly should stay clean.",
+      "path": "test-suite/js/async_errors/promise-all-foreach-clean.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "async",
+        "clean"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,6,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        }
+      }
+    },
+    {
       "id": "js-react-hooks-buggy",
       "description": "React hooks dependency regression (missing deps, unstable dependencies).",
       "path": "test-suite/js/buggy/react_hooks.js",

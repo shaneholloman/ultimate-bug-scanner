@@ -14,6 +14,7 @@
 - `async_errors/async-reduce-*.ts` covers TypeScript `reduce(async ...)` callbacks, where the accumulator becomes a Promise instead of the expected value.
 - `async_errors/async-sort-comparator-*.ts` covers TypeScript `sort(async ...)` / `toSorted(async ...)` comparators, where the Promise result is not a numeric comparator value.
 - `async_errors/async-timer-*.ts` covers TypeScript timer callbacks that accidentally pass an `async` callback to `setTimeout`/`setInterval`, leaving rejections unhandled.
+- `async_errors/promise-all-foreach-*.ts` covers TypeScript `Promise.all(ids.forEach(...))` calls where `forEach` returns `undefined` instead of a promise list.
 - `async_errors/promise-all-map-*.ts` covers TypeScript `Promise.all(ids.map(...))` calls where a block-bodied `map` callback forgets to return the promise.
 - `async_errors/use-effect-async-*.tsx` covers TypeScript/React effects that accidentally return a Promise by passing an async callback directly to `useEffect`.
 - `security/dangerously-set-html-*.tsx` covers TypeScript/React XSS risk from unsanitized `dangerouslySetInnerHTML`.
