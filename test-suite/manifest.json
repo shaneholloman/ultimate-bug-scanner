@@ -652,6 +652,62 @@
       }
     },
     {
+      "id": "js-typescript-async-flatmap-buggy",
+      "description": "TypeScript flatMap(async ...) callbacks should be reported because flatMap does not await or flatten resolved arrays.",
+      "path": "test-suite/js/async_errors/async-flatmap-buggy.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "async",
+        "buggy"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,6,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "async flatMap callback is not awaited"
+        ]
+      }
+    },
+    {
+      "id": "js-typescript-async-flatmap-clean",
+      "description": "TypeScript code that resolves async expansions before flatMap should stay clean.",
+      "path": "test-suite/js/async_errors/async-flatmap-clean.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "async",
+        "clean"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,6,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        }
+      }
+    },
+    {
       "id": "js-typescript-async-predicate-buggy",
       "description": "TypeScript async predicates passed to filter/some/every/find should be reported because array predicates do not await promises.",
       "path": "test-suite/js/async_errors/async-predicate-buggy.ts",

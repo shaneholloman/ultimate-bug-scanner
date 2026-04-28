@@ -3321,6 +3321,84 @@ if [ "$async_map_ignored_count" -gt 0 ]; then
   done <<<"$async_map_ignored_samples"
 fi
 
+print_subheader "async callbacks passed to flatMap"
+async_flatmap_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+start_re = re.compile(r'\.\s*flatMap\s*\(')
+async_flatmap_re = re.compile(r'\.\s*flatMap\s*\(\s*(?:async\b|async\s+function\b)', re.DOTALL)
+
+issues = []
+if root.is_file():
+    candidates = [root]
+    sample_root = root.parent
+else:
+    candidates = []
+    sample_root = root
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            candidates.append(Path(dirpath) / fname)
+
+for path in candidates:
+    if path.suffix.lower() not in exts:
+        continue
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        continue
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("//", "/*", "*")):
+            continue
+        if not start_re.search(line):
+            continue
+        callback_lines = []
+        paren_balance = 0
+        saw_flatmap = False
+        for callback_idx in range(idx, min(len(lines), idx + 16)):
+            current = lines[callback_idx].strip()
+            callback_lines.append(current)
+            if start_re.search(current):
+                saw_flatmap = True
+            if saw_flatmap:
+                paren_balance += current.count('(') - current.count(')')
+            if saw_flatmap and callback_idx > idx and paren_balance <= 0:
+                break
+        callback_text = ' '.join(callback_lines)
+        if 'ubs:ignore' in callback_text or not async_flatmap_re.search(callback_text):
+            continue
+        try:
+            rel = path.relative_to(sample_root)
+        except ValueError:
+            rel = path
+        issues.append((str(rel), idx + 1, stripped.replace('\t', ' ')))
+
+print(len(issues))
+for entry in issues[:25]:
+    print('\t'.join(str(part) for part in entry))
+PY
+)
+async_flatmap_count=$(printf '%s\n' "$async_flatmap_report" | head -n1 | awk 'END{print $0+0}')
+async_flatmap_samples=$(printf '%s\n' "$async_flatmap_report" | tail -n +2)
+if [ "$async_flatmap_count" -gt 0 ]; then
+  print_finding "warning" "$async_flatmap_count" "async flatMap callback is not awaited" "Resolve async expansions before flatMap, then flatten with a synchronous callback"
+  sample_limit=3
+  while IFS=$'\t' read -r sample_path sample_line sample_text; do
+    [ -z "$sample_path" ] && continue
+    print_code_sample "$sample_path" "$sample_line" "$sample_text"
+    sample_limit=$((sample_limit - 1))
+    [ "$sample_limit" -le 0 ] && break
+  done <<<"$async_flatmap_samples"
+fi
+
 print_subheader "Promise.all map callbacks without return"
 promise_all_map_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
 import os
