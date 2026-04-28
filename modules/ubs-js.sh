@@ -3218,6 +3218,97 @@ if [ "$async_foreach_count" -gt 0 ]; then
   done <<<"$async_foreach_samples"
 fi
 
+print_subheader "awaited async map callback results"
+async_map_awaited_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+start_re = re.compile(r'\.\s*map\s*(?:<[^()\n]+>)?\s*\(')
+async_map_re = re.compile(r'\.\s*map\s*(?:<[^()\n]+>)?\s*\(\s*(?:async\b|async\s+function\b)', re.DOTALL)
+await_re = re.compile(r'\bawait\b')
+promise_all_re = re.compile(r'\bPromise\.(?:all|allSettled)\s*\(')
+
+def statement_prefix(lines, idx, line_prefix):
+    prefix_lines = []
+    for prev_idx in range(max(0, idx - 6), idx):
+        current = lines[prev_idx].strip()
+        if not current or current.startswith(("//", "/*", "*")):
+            prefix_lines = []
+            continue
+        prefix_lines.append(current)
+    prefix = ' '.join(prefix_lines + [line_prefix.strip()])
+    return re.split(r'[;{}]', prefix)[-1].strip()
+
+issues = []
+if root.is_file():
+    candidates = [root]
+    sample_root = root.parent
+else:
+    candidates = []
+    sample_root = root
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            candidates.append(Path(dirpath) / fname)
+
+for path in candidates:
+    if path.suffix.lower() not in exts:
+        continue
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        continue
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("//", "/*", "*")):
+            continue
+        match = start_re.search(line)
+        if not match:
+            continue
+        expression_lines = []
+        paren_balance = 0
+        for expr_idx in range(idx, min(len(lines), idx + 16)):
+            current = lines[expr_idx].strip()
+            expression_lines.append(current)
+            paren_balance += current.count('(') - current.count(')')
+            if expr_idx > idx and paren_balance <= 0:
+                break
+        expression_text = ' '.join(expression_lines)
+        if 'ubs:ignore' in expression_text or not async_map_re.search(expression_text):
+            continue
+        prefix = statement_prefix(lines, idx, line[:match.start()])
+        if not await_re.search(prefix) or promise_all_re.search(prefix):
+            continue
+        try:
+            rel = path.relative_to(sample_root)
+        except ValueError:
+            rel = path
+        issues.append((str(rel), idx + 1, stripped.replace('\t', ' ')))
+
+print(len(issues))
+for entry in issues[:25]:
+    print('\t'.join(str(part) for part in entry))
+PY
+)
+async_map_awaited_count=$(printf '%s\n' "$async_map_awaited_report" | head -n1 | awk 'END{print $0+0}')
+async_map_awaited_samples=$(printf '%s\n' "$async_map_awaited_report" | tail -n +2)
+if [ "$async_map_awaited_count" -gt 0 ]; then
+  print_finding "warning" "$async_map_awaited_count" "awaiting map(async ...) does not await the mapped promises" "Wrap the async map in Promise.all/allSettled or await each promise explicitly"
+  sample_limit=3
+  while IFS=$'\t' read -r sample_path sample_line sample_text; do
+    [ -z "$sample_path" ] && continue
+    print_code_sample "$sample_path" "$sample_line" "$sample_text"
+    sample_limit=$((sample_limit - 1))
+    [ "$sample_limit" -le 0 ] && break
+  done <<<"$async_map_awaited_samples"
+fi
+
 print_subheader "ignored async map callback results"
 async_map_ignored_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
 import os

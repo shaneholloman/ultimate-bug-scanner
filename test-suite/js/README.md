@@ -7,6 +7,7 @@
 - `async_errors/async-event-listener-*.ts` covers TypeScript event listeners that accidentally pass an `async` callback to `addEventListener`, leaving rejections unhandled.
 - `async_errors/async-flatmap-*.ts` covers TypeScript `flatMap(async ...)` callbacks, where the returned Promise is not awaited or flattened after resolution.
 - `async_errors/async-foreach-*.ts` covers TypeScript async loops that accidentally pass an `async` callback to `forEach`, which cannot be awaited by the caller.
+- `async_errors/async-map-awaited-*.ts` covers TypeScript `await array.map(async ...)`, where `await` observes the array instead of the mapped promises.
 - `async_errors/async-map-ignored-*.ts` covers TypeScript `map(async ...)` loops whose returned promises are ignored instead of awaited or returned.
 - `async_errors/async-predicate-*.ts` covers TypeScript async predicates passed to `filter`/`some`/`every`/`find`, where the Promise is treated as truthy.
 - `async_errors/async-promise-executor-*.ts` covers TypeScript `new Promise(async ...)` executors that drop thrown errors.
