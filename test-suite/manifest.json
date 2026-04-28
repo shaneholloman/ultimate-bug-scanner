@@ -2009,6 +2009,65 @@
       }
     },
     {
+      "id": "golang-archive-extraction-buggy",
+      "description": "Go archive extraction should validate tar/zip entry paths before writing files.",
+      "path": "test-suite/golang/security/archive_extraction_buggy.go",
+      "language": "golang",
+      "tags": [
+        "golang",
+        "security",
+        "archive",
+        "buggy"
+      ],
+      "args": [
+        "--only=golang",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,7,8,10,11,12,13,14,15,16,17,18,19,20,21,22"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
+      "id": "golang-archive-extraction-clean",
+      "description": "Go archive extraction with destination containment checks should stay clean.",
+      "path": "test-suite/golang/security/archive_extraction_clean.go",
+      "language": "golang",
+      "tags": [
+        "golang",
+        "security",
+        "archive",
+        "clean"
+      ],
+      "args": [
+        "--only=golang",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,7,8,10,11,12,13,14,15,16,17,18,19,20,21,22"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
       "id": "js-type-narrowing-buggy",
       "description": "TypeScript guard clauses that continue execution and later dereference unsafe values.",
       "path": "test-suite/js/type_narrowing/buggy",

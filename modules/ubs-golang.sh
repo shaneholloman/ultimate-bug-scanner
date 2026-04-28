@@ -959,6 +959,167 @@ PY
   fi
 }
 
+run_archive_extraction_checks() {
+  print_subheader "Archive extraction path traversal"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable archive extraction checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Archive extraction path traversal risk" "Validate archive entry names with filepath.Rel/IsLocal and ensure writes stay under the destination"
+        else
+          print_finding "good" "No unvalidated archive extraction writes detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', 'vendor', 'node_modules', '.cache', 'bin', 'build', 'dist'}
+
+ARCHIVE_HINT_RE = re.compile(r'"archive/(?:tar|zip)"|\b(?:tar\.NewReader|zip\.OpenReader|zip\.NewReader)\b')
+ENTRY_NAME_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\.Name\b')
+JOIN_ENTRY_RE = re.compile(r'\b(?:filepath|path)\.Join\s*\([^;\n]*\b[A-Za-z_][A-Za-z0-9_]*\.Name\b[^;\n]*\)')
+CONCAT_ENTRY_RE = re.compile(r'(?:\+[^;\n]*\b[A-Za-z_][A-Za-z0-9_]*\.Name\b|\b[A-Za-z_][A-Za-z0-9_]*\.Name\b[^;\n]*\+)')
+SPRINTF_ENTRY_RE = re.compile(r'\bfmt\.Sprintf\s*\([^;\n]*(?:%s|%v)[^;\n]*\b[A-Za-z_][A-Za-z0-9_]*\.Name\b[^;\n]*\)')
+PATH_BUILD_RE = re.compile(r'(?::=|=|\b(?:os\.(?:Create|OpenFile|WriteFile|MkdirAll)|ioutil\.WriteFile)\s*\()')
+SAFE_CONTEXT_RE = re.compile(
+    r'\b(?:safeDestination|safeArchivePath|safeExtract|secureExtract|secureJoin|'
+    r'validateArchive|validateArchiveMember|validateArchiveEntry|validateEntry|'
+    r'withinDestination|insideDestination)\b'
+    r'|filepath\.(?:Rel|IsLocal)\b'
+    r'|fs\.ValidPath\b',
+    re.IGNORECASE,
+)
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() == '.go':
+            yield root
+        return
+    for path in root.rglob('*.go'):
+        if path.is_file() and not should_skip(path):
+            yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'", '`'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def has_safe_context(lines, line_no):
+    start = max(0, line_no - 12)
+    context = '\n'.join(strip_line_comments(line) for line in lines[start:line_no])
+    return bool(SAFE_CONTEXT_RE.search(context))
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    balance = statement.count('(') - statement.count(')')
+    lookahead = idx + 1
+    while balance > 0 and lookahead < len(lines) and lookahead < idx + 6:
+        next_line = strip_line_comments(lines[lookahead])
+        statement += ' ' + next_line.strip()
+        balance += next_line.count('(') - next_line.count(')')
+        lookahead += 1
+    return statement
+
+def path_builds_from_entry(line):
+    if not ENTRY_NAME_RE.search(line):
+        return False
+    if not PATH_BUILD_RE.search(line):
+        return False
+    return bool(
+        JOIN_ENTRY_RE.search(line)
+        or CONCAT_ENTRY_RE.search(line)
+        or SPRINTF_ENTRY_RE.search(line)
+    )
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not ARCHIVE_HINT_RE.search(text):
+        return
+    lines = text.splitlines()
+    for idx, raw in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        line = logical_statement(lines, idx)
+        if not path_builds_from_entry(line):
+            continue
+        if has_safe_context(lines, idx):
+            continue
+        try:
+            rel = path.relative_to(BASE_DIR)
+        except ValueError:
+            rel = path.name
+        issues.append((str(rel), idx, source_line(lines, idx)))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:25]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 # Temporarily relax pipefail for grep-heavy scans
 begin_scan_section(){
   if [[ "$DISABLE_PIPEFAIL_DURING_SCAN" -eq 1 ]]; then set +o pipefail; fi
@@ -3518,7 +3679,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_skip 9; then
 print_header "9. CRYPTOGRAPHY & SECURITY"
-print_category "Detects: weak hashes, math/rand for security, InsecureSkipVerify, shell exec, dynamic SQL strings" \
+print_category "Detects: weak hashes, math/rand for security, InsecureSkipVerify, shell exec, dynamic SQL strings, unsafe archive extraction" \
   "Security footguns are easy to miss and costly to fix"
 
 print_subheader "Weak hashes (md5/sha1) and RC4"
@@ -3556,6 +3717,7 @@ print_subheader "Dynamic SQL string construction at Exec/Query sinks (AST heuris
 count=$([[ "$HAS_AST_GREP" -eq 1 && -f "$AST_JSON" ]] && ast_count "go.sql-dynamic-string" || echo 0)
 if [ "$count" -gt 0 ]; then print_finding "warning" "$count" "Potential dynamic SQL strings reaching Exec/Query"; fi
 
+run_archive_extraction_checks
 run_taint_analysis_checks
 fi
 
