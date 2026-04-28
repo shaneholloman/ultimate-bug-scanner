@@ -3603,6 +3603,65 @@
       }
     },
     {
+      "id": "ruby-archive-extraction-buggy",
+      "description": "Ruby archive extraction should validate zip/tar entry paths before writing files.",
+      "path": "test-suite/ruby/archive_extraction_buggy",
+      "language": "ruby",
+      "tags": [
+        "ruby",
+        "security",
+        "archive",
+        "buggy"
+      ],
+      "args": [
+        "--only=ruby",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
+      "id": "ruby-archive-extraction-clean",
+      "description": "Ruby archive extraction with expanded destination containment checks should stay clean.",
+      "path": "test-suite/ruby/archive_extraction_clean",
+      "language": "ruby",
+      "tags": [
+        "ruby",
+        "security",
+        "archive",
+        "clean"
+      ],
+      "args": [
+        "--only=ruby",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
       "id": "ruby-async-errors-buggy",
       "description": "Ruby Thread.new blocks lacking rescue/exception handling.",
       "path": "test-suite/ruby/async_errors/buggy",

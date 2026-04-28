@@ -6,6 +6,8 @@
 | `buggy/resource_lifecycle.rb` | File/thread cleanup |
 | `buggy/buggy_scripts.rb` | Shelling out, missing rescue |
 | `buggy/performance.rb` | Thread leaks, backticks |
+| `archive_extraction_buggy/zip_slip.rb` | RubyZip/TarReader path traversal |
+| `archive_extraction_clean/zip_slip_safe.rb` | `File.expand_path` + `start_with?` containment checks |
 | Clean files | Managed threads, Open3 argv |
 
 ```bash

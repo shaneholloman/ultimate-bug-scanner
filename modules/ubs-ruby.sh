@@ -500,6 +500,200 @@ PYHELP
   rm -f "$tmp_chains"
   printf '%s' "$result"
 }
+
+run_archive_extraction_checks() {
+  print_subheader "Archive extraction path traversal"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable archive extraction checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Archive extraction path traversal risk" "Expand and verify archive entry paths remain under the destination before writing files"
+        else
+          print_finding "good" "No unvalidated archive extraction path construction detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.bundle', 'vendor', 'node_modules', 'tmp', 'log', 'coverage', '.cache', 'dist', 'build'}
+EXTS = {'.rb', '.rake', '.ru', '.gemspec', '.erb', '.haml', '.slim', '.rbi', '.rbs', '.jbuilder'}
+ARCHIVE_HINT_RE = re.compile(
+    r'\b(?:Zip::File|Zip::InputStream|Gem::Package::TarReader|Archive::Tar|Zlib::GzipReader)\b'
+)
+ENTRY_NAME_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\.(?:name|full_name)\b')
+ALIAS_ASSIGN_RE = re.compile(
+    r'\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'
+    r'[A-Za-z_][A-Za-z0-9_]*\.(?:name|full_name)\b'
+)
+PATH_BUILD_RE = re.compile(
+    r'\bFile\.(?:join|expand_path|write|open|binwrite)\s*\(|'
+    r'\bFileUtils\.(?:mkdir_p|cp|mv|touch)\s*\(|'
+    r'\.extract\s*\(|'
+    r'\.join\s*\('
+)
+SAFE_NAMED_RE = re.compile(
+    r'\b(?:safe_destination|safe_archive_path|safe_zip_entry|safe_entry_path|'
+    r'secure_extract|secure_join|validate_archive_entry|validate_zip_entry|'
+    r'within_destination\?|inside_destination\?|assert_inside_destination)\b',
+    re.IGNORECASE,
+)
+
+def should_skip(path: Path) -> bool:
+    try:
+        parts = path.relative_to(BASE_DIR).parts
+    except ValueError:
+        parts = path.parts
+    return any(part in SKIP_DIRS for part in parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in EXTS:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in EXTS and not should_skip(path):
+            yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '#':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    balance = statement.count('(') - statement.count(')')
+    lookahead = idx + 1
+    while balance > 0 and lookahead < len(lines) and lookahead < idx + 8:
+        next_line = strip_line_comments(lines[lookahead])
+        statement += ' ' + next_line.strip()
+        balance += next_line.count('(') - next_line.count(')')
+        lookahead += 1
+    return statement
+
+def context_around(lines, line_no):
+    start = max(0, line_no - 8)
+    end = min(len(lines), line_no + 10)
+    return '\n'.join(strip_line_comments(line) for line in lines[start:end])
+
+def has_safe_context(context):
+    if SAFE_NAMED_RE.search(context):
+        return True
+    lower = context.lower()
+    has_anchor = 'start_with?' in lower or 'relative_path_from' in lower
+    has_canonical = 'expand_path' in lower or 'realpath' in lower or 'cleanpath' in lower
+    return has_anchor and has_canonical
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def collect_aliases(lines):
+    aliases = set()
+    for raw in lines:
+        line = strip_line_comments(raw)
+        match = ALIAS_ASSIGN_RE.search(line)
+        if match:
+            aliases.add(match.group(1))
+    return aliases
+
+def has_entry_name(statement, aliases):
+    if ENTRY_NAME_RE.search(statement):
+        return True
+    for alias in aliases:
+        if re.search(rf'\b{re.escape(alias)}\b', statement):
+            return True
+    return False
+
+def path_builds_from_entry(statement, aliases):
+    if not PATH_BUILD_RE.search(statement):
+        return False
+    return has_entry_name(statement, aliases)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not ARCHIVE_HINT_RE.search(text):
+        return
+    lines = text.splitlines()
+    aliases = collect_aliases(lines)
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        statement = logical_statement(lines, idx)
+        if not path_builds_from_entry(statement, aliases):
+            continue
+        if has_safe_context(context_around(lines, idx)):
+            continue
+        issues.append((relpath(path), idx, source_line(lines, idx)))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:25]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 write_ast_rules() {
   [[ "$HAS_AST_GREP" -eq 1 ]] || return 0
   trap '[[ -n "${AST_RULE_DIR:-}" && "${AST_RULE_DIR:-}" != "/" && "${AST_RULE_DIR:-}" != "." ]] && rm -rf -- "$AST_RULE_DIR" 2>/dev/null || true; [[ -n "${AST_CONFIG_FILE:-}" ]] && rm -f "$AST_CONFIG_FILE" 2>/dev/null || true' EXIT
@@ -1203,7 +1397,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if run_category 6; then
 print_header "6. SECURITY VULNERABILITIES"
-print_category "Detects: code injection, unsafe deserialization, TLS off, weak crypto" \
+print_category "Detects: code injection, unsafe deserialization, TLS off, weak crypto, unsafe archive extraction" \
   "Security bugs expose users to attacks and data breaches."
 
 print_subheader "eval/instance_eval/class_eval"
@@ -1283,6 +1477,8 @@ count=$("${GREP_RN[@]}" -e "token|secret|nonce|password" "$PROJECT_DIR" 2>/dev/n
 if [ "$count" -gt 20 ]; then
   print_finding "info" "$count" "Potential token generation sites" "Ensure SecureRandom is used"
 fi
+
+run_archive_extraction_checks
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
