@@ -1158,6 +1158,67 @@
       }
     },
     {
+      "id": "js-typescript-jsx-async-handler-buggy",
+      "description": "TypeScript JSX event props should not receive async callbacks directly because React ignores returned Promise rejections.",
+      "path": "test-suite/js/async_errors/jsx-async-handler-buggy.tsx",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "react",
+        "async",
+        "buggy"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,6,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "async JSX event handler callback is not awaited"
+        ]
+      }
+    },
+    {
+      "id": "js-typescript-jsx-async-handler-clean",
+      "description": "TypeScript JSX event props that call async work from a synchronous handler and catch failures should stay clean.",
+      "path": "test-suite/js/async_errors/jsx-async-handler-clean.tsx",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "react",
+        "async",
+        "clean"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,6,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "async JSX event handler callback is not awaited"
+        ]
+      }
+    },
+    {
       "id": "js-react-hooks-buggy",
       "description": "React hooks dependency regression (missing deps, unstable dependencies).",
       "path": "test-suite/js/buggy/react_hooks.js",
