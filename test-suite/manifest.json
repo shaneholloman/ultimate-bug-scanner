@@ -4354,6 +4354,65 @@
       }
     },
     {
+      "id": "elixir-archive-extraction-buggy",
+      "description": "Elixir zip/tar extraction should validate archive entry paths before writing files.",
+      "path": "test-suite/elixir/buggy/archive_extraction.ex",
+      "language": "elixir",
+      "tags": [
+        "elixir",
+        "security",
+        "archive",
+        "buggy"
+      ],
+      "args": [
+        "--only=elixir",
+        "--fail-on-warning",
+        "--skip=1,2,3,5,6,7,8,9,10,11,12,13,14"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
+      "id": "elixir-archive-extraction-clean",
+      "description": "Elixir archive extraction with Path.expand containment checks should stay clean.",
+      "path": "test-suite/elixir/clean/archive_extraction.ex",
+      "language": "elixir",
+      "tags": [
+        "elixir",
+        "security",
+        "archive",
+        "clean"
+      ],
+      "args": [
+        "--only=elixir",
+        "--fail-on-warning",
+        "--skip=1,2,3,5,6,7,8,9,10,11,12,13,14"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
       "id": "toon-format-js-buggy",
       "description": "TOON format output for JS buggy fixtures (validates TOON encoding works).",
       "path": "test-suite/buggy",

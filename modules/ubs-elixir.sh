@@ -283,6 +283,245 @@ show_detailed_finding() {
   done < <("${GREP_RN[@]}" -e "$pattern" "$PROJECT_DIR" 2>/dev/null | head -n "$limit" || true) || true
 }
 
+run_archive_extraction_checks() {
+  print_subheader "Archive extraction path traversal"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable archive extraction checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Archive extraction path traversal risk" "Validate archive entry names with Path.expand/2 and reject paths outside the extraction root before writing files"
+        else
+          print_finding "good" "No unvalidated archive extraction path construction detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.hg', '.svn', '_build', 'deps', '.elixir_ls', '.hex', '.fetch', 'node_modules', 'dist', 'build', 'cover', 'doc', 'priv/static', '.cache', 'tmp', 'log'}
+EXTS = {'.ex', '.exs', '.eex', '.heex', '.leex', '.sface'}
+ARCHIVE_HINT_RE = re.compile(
+    r'(?<![A-Za-z0-9_]):(?:zip|erl_tar)\.(?:extract|unzip|zip_get|foldl|open|table)\b|'
+    r'\b(?:Unzip|Zstream|ExArchive|Archive)\b',
+    re.IGNORECASE,
+)
+DIRECT_CWD_EXTRACT_RE = re.compile(
+    r'(?<![A-Za-z0-9_]):(?:zip|erl_tar)\.(?:extract|unzip)\s*\([^#\n]*(?:\bcwd\s*:|\{:cwd\s*,)',
+    re.IGNORECASE,
+)
+MEMORY_EXTRACT_RE = re.compile(r'(?<![A-Za-z0-9_]):(?:zip|erl_tar)\.(?:extract|unzip)\s*\([^#\n]*(?::memory|\[:memory)', re.IGNORECASE)
+ENTRY_FN_RE = re.compile(
+    r'\bfn\s+(?:\{\s*)?([A-Za-z_][A-Za-z0-9_?!]*)(?:\s*,|\s*\}|(?:\s+->))'
+)
+ENTRY_ALIAS_RE = re.compile(
+    r'^\s*([A-Za-z_][A-Za-z0-9_?!]*)\s*=\s*'
+    r'(?:List\.to_string|to_string|IO\.iodata_to_binary|Path\.basename)?\s*\(?\s*'
+    r'([A-Za-z_][A-Za-z0-9_?!]*)'
+)
+PATH_ALIAS_RE = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_?!]*)\s*=\s*')
+PATH_BUILD_RE = re.compile(
+    r'\bPath\.(?:join|expand|relative_to)\s*\(|'
+    r'\bFile\.(?:write!?|open!?|mkdir!?|mkdir_p!?|cp!?|rename!?|rm!?|touch!?)\s*\('
+)
+SINK_RE = re.compile(
+    r'\bFile\.(?:write!?|open!?|mkdir!?|mkdir_p!?|cp!?|rename!?|rm!?|touch!?)\s*\('
+)
+ENTRY_NAME_HINT_RE = re.compile(
+    r'^(?:entry_?)?(?:file_?)?(?:name|path|filename|member|entry|tar_entry|zip_entry)$',
+    re.IGNORECASE,
+)
+SAFE_NAMED_RE = re.compile(
+    r'\b(?:safe_archive_path|safeArchivePath|safe_extract_path|safeExtractPath|'
+    r'validate_archive_entry|validateArchiveEntry|validate_zip_entry|validateZipEntry|'
+    r'ensure_inside_destination|ensureInsideDestination|inside_destination\?|insideDestination\?|'
+    r'assert_inside_destination|assertInsideDestination|safe_join|secure_join|secure_extract)\b',
+    re.IGNORECASE,
+)
+
+def should_skip(path: Path) -> bool:
+    try:
+        parts = path.relative_to(BASE_DIR).parts
+    except ValueError:
+        parts = path.parts
+    return any(part in SKIP_DIRS for part in parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in EXTS:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in EXTS and not should_skip(path):
+            yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '#':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    balance = statement.count('(') + statement.count('[') + statement.count('{')
+    balance -= statement.count(')') + statement.count(']') + statement.count('}')
+    has_end = ' do' in statement or '->' in statement or balance <= 0
+    lookahead = idx + 1
+    while (balance > 0 or not has_end) and lookahead < len(lines) and lookahead < idx + 8:
+        next_line = strip_line_comments(lines[lookahead]).strip()
+        statement += ' ' + next_line
+        balance += next_line.count('(') + next_line.count('[') + next_line.count('{')
+        balance -= next_line.count(')') + next_line.count(']') + next_line.count('}')
+        has_end = has_end or ' do' in next_line or '->' in next_line
+        lookahead += 1
+    return statement
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def context_around(lines, line_no):
+    start = max(0, line_no - 8)
+    end = min(len(lines), line_no + 10)
+    return '\n'.join(strip_line_comments(line) for line in lines[start:end])
+
+def has_safe_context(statement, context):
+    if SAFE_NAMED_RE.search(statement) or SAFE_NAMED_RE.search(context):
+        return True
+    lower = context.lower()
+    has_canonical = 'path.expand' in lower or 'path.relative_to' in lower
+    has_anchor = 'string.starts_with?' in lower or 'path.relative_to' in lower
+    has_reject = 'raise ' in lower or '{:error' in lower or 'throw(' in lower or 'return false' in lower
+    return has_canonical and has_anchor and has_reject
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip().replace('\t', ' ')
+    return ''
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def references_any(statement, names):
+    return any(re.search(rf'\b{re.escape(name)}\b', statement) for name in names)
+
+def collect_entry_aliases(lines):
+    aliases = set()
+    text = '\n'.join(strip_line_comments(line) for line in lines)
+    if not (':memory' in text or 'zip_get' in text or 'foldl' in text or 'table' in text):
+        return aliases
+    for raw in lines:
+        line = strip_line_comments(raw)
+        match = ENTRY_FN_RE.search(line)
+        if match:
+            name = match.group(1)
+            if ENTRY_NAME_HINT_RE.search(name):
+                aliases.add(name)
+        match = ENTRY_ALIAS_RE.search(line)
+        if match and (match.group(2) in aliases or ENTRY_NAME_HINT_RE.search(match.group(1))):
+            aliases.add(match.group(1))
+    return aliases
+
+def collect_path_aliases(lines, entry_aliases):
+    aliases = set()
+    for idx, _ in enumerate(lines, start=1):
+        statement = logical_statement(lines, idx)
+        if not PATH_BUILD_RE.search(statement):
+            continue
+        if not references_any(statement, entry_aliases):
+            continue
+        if has_safe_context(statement, context_around(lines, idx)):
+            continue
+        match = PATH_ALIAS_RE.search(statement)
+        if match:
+            aliases.add(match.group(1))
+    return aliases
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not ARCHIVE_HINT_RE.search(text):
+        return
+    lines = text.splitlines()
+    entry_aliases = collect_entry_aliases(lines)
+    path_aliases = collect_path_aliases(lines, entry_aliases)
+    seen = set()
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        statement = logical_statement(lines, idx)
+        direct_cwd_extract = bool(DIRECT_CWD_EXTRACT_RE.search(statement))
+        unsafe_path_build = bool(PATH_BUILD_RE.search(statement)) and references_any(statement, entry_aliases)
+        unsafe_sink = bool(SINK_RE.search(statement)) and references_any(statement, path_aliases)
+        memory_extract_write_context = bool(MEMORY_EXTRACT_RE.search(text)) and unsafe_path_build
+        if not (direct_cwd_extract or unsafe_path_build or unsafe_sink or memory_extract_write_context):
+            continue
+        if has_safe_context(statement, context_around(lines, idx)):
+            continue
+        key = (relpath(path), idx)
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append((relpath(path), idx, source_line(lines, idx)))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:5]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 persist_metric_json() {
   local key=$1; local payload=$2
   [[ -n "$key" && -n "$payload" ]] || return 0
@@ -588,7 +827,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if run_category 4; then
 print_header "4. SECURITY VULNERABILITIES"
-print_category "Detects: code injection, SQL injection, crypto misuse, hardcoded secrets" \
+print_category "Detects: code injection, archive traversal, SQL injection, crypto misuse, hardcoded secrets" \
   "Security issues in Elixir/Phoenix applications."
 
 print_subheader "Code execution via Code.eval_string / Code.eval_quoted"
@@ -621,6 +860,8 @@ if [ "$review_count" -gt 0 ]; then
 elif [ "$critical_count" -eq 0 ] && [ "$variable_count" -eq 0 ]; then
   print_finding "good" "No System command execution detected"
 fi
+
+run_archive_extraction_checks
 
 print_subheader "SQL injection: raw/fragment with interpolation in Ecto"
 count=$("${GREP_RN[@]}" -e 'fragment\(".*#\{' "$PROJECT_DIR" 2>/dev/null | count_lines || true)
