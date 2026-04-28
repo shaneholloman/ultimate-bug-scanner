@@ -4790,9 +4790,7 @@ direct_source_re = re.compile(
     re.IGNORECASE,
 )
 safe_re = re.compile(
-    r'\b(?:isSafeRedirect[A-Za-z0-9_]*|safeRedirect[A-Za-z0-9_]*|validateRedirect[A-Za-z0-9_]*|sanitizeRedirect[A-Za-z0-9_]*|allowedRedirects?|trustedRedirects?|sameOrigin|same-origin|URL\.canParse)\b'
-    r'|\.startsWith\s*\(\s*(?:"/"|\'/\'|`/`)\s*\)'
-    r'|\bnew\s+URL\s*\(',
+    r'\b(?:isSafeRedirect[A-Za-z0-9_]*|safeRedirect[A-Za-z0-9_]*|validateRedirect[A-Za-z0-9_]*|sanitizeRedirect[A-Za-z0-9_]*|allowedRedirects?|trustedRedirects?|sameOrigin|same-origin)\b',
     re.IGNORECASE,
 )
 
@@ -4808,6 +4806,13 @@ def statement_from(lines, idx):
         if ';' in current and paren_balance <= 0:
             break
     return ' '.join(parts)
+
+def validation_code_line(source_line):
+    stripped = source_line.strip()
+    if not stripped or stripped.startswith(("//", "/*", "*")):
+        return ""
+    without_block_comments = re.sub(r'/\*.*?\*/', '', source_line)
+    return re.sub(r'//.*', '', without_block_comments)
 
 issues = []
 if root.is_file():
@@ -4842,7 +4847,13 @@ for path in candidates:
         if 'ubs:ignore' in statement:
             continue
         context_start = max(0, idx - 8)
-        validation_context = '\n'.join(lines[context_start:idx + 1])
+        context_lines = [
+            code_line
+            for source_line in lines[context_start:idx + 1]
+            for code_line in [validation_code_line(source_line)]
+            if code_line.strip()
+        ]
+        validation_context = '\n'.join(context_lines)
         if safe_re.search(validation_context):
             continue
         tainted = direct_source_re.search(statement)

@@ -1816,6 +1816,35 @@
       }
     },
     {
+      "id": "js-typescript-open-redirect-startswith-buggy",
+      "description": "TypeScript/Next.js redirects that only check startsWith('/') should still be flagged because scheme-relative URLs also pass, even when comments mention future validation.",
+      "path": "test-suite/js/security/open-redirect-startswith-buggy.tsx",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "tsx",
+        "security",
+        "buggy"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "unvalidated redirect from URL/query data"
+        ]
+      }
+    },
+    {
       "id": "golang-buggy",
       "description": "Go buggy fixtures exercising goroutine/context/network pitfalls.",
       "path": "test-suite/golang/buggy",
