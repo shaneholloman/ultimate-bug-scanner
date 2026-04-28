@@ -2193,7 +2193,7 @@ fi
 if should_run_category 6; then
 set_category 6
 print_header "6. SECURITY"
- print_category "Detects: trust-all URLSession delegate, hardcoded secrets, insecure unarchiving, Process misuse" \
+ print_category "Detects: trust-all URLSession delegate, hardcoded secrets, insecure unarchiving, unsafe archive extraction, Process misuse" \
   "Security bugs expose users and violate policies."
 tick
 
@@ -2210,6 +2210,187 @@ tick
  print_subheader "Insecure unarchiving (NSKeyedUnarchiver)"
  count=$("${GREP_RN[@]}" -e "NSKeyedUnarchiver\\.unarchiveObject\\(with:|unarchiveTopLevelObjectWithData\\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
  if [[ "${count:-0}" -gt 0 ]]; then print_finding "warning" "$count" "Potentially unsafe deserialization"; show_detailed_finding "NSKeyedUnarchiver\\.unarchiveObject\\(with:|unarchiveTopLevelObjectWithData\\(" 5; else print_finding "good" "No obvious insecure unarchiving"; fi
+tick
+
+print_subheader "Archive extraction path traversal"
+archive_report=$(
+python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+base = root if root.is_dir() else root.parent
+skip_dirs = {'.git', '.hg', '.svn', '.venv', 'DerivedData', 'build', 'dist', 'vendor', '.build', '.swiftpm'}
+archive_hint = re.compile(
+    r'\b(?:Archive|ZipArchive|ZIPFoundation|ZipEntry|ArchiveEntry|Compression|Data\.decompress)\b'
+)
+entry_name = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\.(?:path|name|fileName|fullPath|relativePath)\b')
+alias_assign = re.compile(
+    r'\b(?:let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'
+    r'[A-Za-z_][A-Za-z0-9_]*\.(?:path|name|fileName|fullPath|relativePath)\b'
+)
+path_build = re.compile(
+    r'\.appendingPathComponent\s*\(|'
+    r'\bURL\s*\(\s*fileURLWithPath\s*:|'
+    r'\bFileManager\.default\.(?:createFile|createDirectory|moveItem|copyItem)\s*\(|'
+    r'\bData\s*\([^)]*\)\.write\s*\(|'
+    r'\.write\s*\(\s*to\s*:|'
+    r'\.extract\s*\(|'
+    r'\+\s*["\'][^"\']*/[^"\']*["\']|'
+    r'["\'][^"\']*/[^"\']*["\']\s*\+|'
+    r'\\\([^)]*\)[^"\']*/|/[^"\']*\\\([^)]*\)'
+)
+safe_named = re.compile(
+    r'\b(?:safeArchiveURL|safeArchivePath|safeExtractionURL|validateArchiveEntry|'
+    r'validateZipEntry|ensureInsideDestination|assertInsideDestination|isInsideDestination|'
+    r'isSubpath|isDescendant)\b',
+    re.IGNORECASE,
+)
+
+def should_skip(path: Path) -> bool:
+    try:
+        parts = path.relative_to(base).parts
+    except ValueError:
+        parts = path.parts
+    return any(part in skip_dirs for part in parts)
+
+def iter_swift_files(path: Path):
+    if path.is_file():
+        if path.suffix == '.swift':
+            yield path
+        return
+    for candidate in path.rglob('*.swift'):
+        if candidate.is_file() and not should_skip(candidate):
+            yield candidate
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    balance = statement.count('(') - statement.count(')')
+    lookahead = idx + 1
+    while balance > 0 and lookahead < len(lines) and lookahead < idx + 8:
+        next_line = strip_line_comments(lines[lookahead]).strip()
+        statement += ' ' + next_line
+        balance += next_line.count('(') - next_line.count(')')
+        lookahead += 1
+    return statement
+
+def context_around(lines, line_no):
+    start = max(0, line_no - 10)
+    end = min(len(lines), line_no + 12)
+    return '\n'.join(strip_line_comments(line) for line in lines[start:end])
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def has_safe_context(context: str) -> bool:
+    if safe_named.search(context):
+        return True
+    lower = context.lower()
+    has_canonical = (
+        'standardizedfileurl' in lower or
+        'resolvingsymlinksinpath' in lower or
+        'standardizedpath' in lower
+    )
+    has_anchor = 'hasprefix' in lower or 'relativepath' in lower
+    rejects = 'throw ' in lower or 'return false' in lower or 'guard ' in lower
+    return has_canonical and has_anchor and rejects
+
+def rel(path: Path) -> str:
+    try:
+        return str(path.relative_to(base))
+    except ValueError:
+        return path.name
+
+def collect_aliases(lines):
+    aliases = set()
+    for raw in lines:
+        match = alias_assign.search(strip_line_comments(raw))
+        if match:
+            aliases.add(match.group(1))
+    return aliases
+
+def has_entry_name(statement, aliases):
+    if entry_name.search(statement):
+        return True
+    for alias in aliases:
+        if re.search(rf'\b{re.escape(alias)}\b', statement):
+            return True
+    return False
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    return lines[idx].strip() if 0 <= idx < len(lines) else ''
+
+findings = []
+for path in iter_swift_files(root):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        continue
+    if not archive_hint.search(text):
+        continue
+    lines = text.splitlines()
+    aliases = collect_aliases(lines)
+    for line_no, _ in enumerate(lines, start=1):
+        if has_ignore(lines, line_no):
+            continue
+        statement = logical_statement(lines, line_no)
+        if not path_build.search(statement):
+            continue
+        if not has_entry_name(statement, aliases):
+            continue
+        if has_safe_context(context_around(lines, line_no)):
+            continue
+        findings.append((rel(path), line_no, source_line(lines, line_no)))
+
+samples = '; '.join(f'{file}:{line}:{code}' for file, line, code in findings[:3])
+print(f"{len(findings)}\t{samples}")
+PY
+)
+IFS=$'\t' read -r archive_critical archive_samples <<<"$archive_report"
+archive_critical=${archive_critical:-0}
+if [[ "${archive_critical:-0}" -gt 0 ]]; then
+  desc="Expand/canonicalize archive entry destinations and reject paths outside the extraction root."
+  [[ -n "${archive_samples:-}" ]] && desc+=" Examples: $archive_samples"
+  print_finding "critical" "$archive_critical" "Archive extraction path traversal risk" "$desc"
+else
+  print_finding "good" "No unvalidated archive extraction path construction detected"
+fi
 tick
 
 print_subheader "Process/posix shell usage"

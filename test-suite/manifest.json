@@ -3312,6 +3312,65 @@
       }
     },
     {
+      "id": "swift-archive-extraction-buggy",
+      "description": "Swift archive extraction should validate zip entry paths before writing files.",
+      "path": "test-suite/swift/archive_extraction_buggy",
+      "language": "swift",
+      "tags": [
+        "swift",
+        "security",
+        "archive",
+        "buggy"
+      ],
+      "args": [
+        "--only=swift",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
+      "id": "swift-archive-extraction-clean",
+      "description": "Swift archive extraction with standardized destination containment checks should stay clean.",
+      "path": "test-suite/swift/archive_extraction_clean",
+      "language": "swift",
+      "tags": [
+        "swift",
+        "security",
+        "archive",
+        "clean"
+      ],
+      "args": [
+        "--only=swift",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
       "id": "swift-type-narrowing-buggy",
       "description": "Swift guard let clauses that log but continue execution, leading to unsafe optional usage.",
       "path": "test-suite/swift/type_narrowing/buggy",
