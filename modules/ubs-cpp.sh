@@ -608,6 +608,267 @@ run_async_error_checks() {
   fi
 }
 
+run_archive_extraction_checks() {
+  print_subheader "Archive extraction path traversal"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable archive extraction checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Archive extraction path traversal risk" "Normalize archive entry names and verify every destination remains under the extraction root"
+        else
+          print_finding "good" "No unvalidated archive extraction path construction detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.hg', '.svn', 'vendor', 'node_modules', '.cache', 'build', 'cmake-build-debug', 'cmake-build-release', 'dist', 'out'}
+EXTS = {'.c', '.cc', '.cpp', '.cxx', '.c++', '.h', '.hh', '.hpp', '.hxx', '.ipp', '.tpp', '.ixx', '.cppm', '.mpp'}
+ARCHIVE_HINT_RE = re.compile(
+    r'\b(?:archive_read|archive_entry|archive_entry_pathname|zip_(?:open|fopen|fread|get_name|stat|file)|'
+    r'unz(?:Open|GoToFirstFile|GetCurrentFileInfo|OpenCurrentFile|ReadCurrentFile)|'
+    r'mz_zip_|ZipArchive|QuaZip|libarchive|libzip|minizip)\b'
+    r'|#\s*include\s*[<"](?:archive|archive_entry|zip|unzip|minizip|mz_zip)[^>"]*[>"]',
+    re.IGNORECASE,
+)
+ENTRY_EXPR_RE = re.compile(
+    r'\b(?:archive_entry_pathname(?:_utf8)?|zip_get_name)\s*\([^;\n)]*\)'
+    r'|\b[A-Za-z_][A-Za-z0-9_]*(?:->|\.)\s*(?:name|pathname|path|filename|fileName|fullPath)\b'
+)
+ALIAS_ASSIGN_RE = re.compile(
+    r'\b(?:const\s+)?(?:char\s*(?:const\s*)?\*|std::string(?:_view)?|string(?:_view)?|'
+    r'(?:std::)?filesystem::path|fs::path|auto(?:\s+const)?|const\s+auto)\s+'
+    r'([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'
+    r'(?:[^;\n]*\b(?:archive_entry_pathname(?:_utf8)?|zip_get_name)\s*\([^;\n]*\)|'
+    r'[^;\n]*\b[A-Za-z_][A-Za-z0-9_]*(?:->|\.)\s*(?:name|pathname|path|filename|fileName|fullPath)\b)'
+)
+PATH_ALIAS_ASSIGN_RE = re.compile(
+    r'\b(?:auto(?:\s+const)?|const\s+auto|std::string(?:_view)?|string(?:_view)?|'
+    r'(?:std::)?filesystem::path|fs::path)\s+([A-Za-z_][A-Za-z0-9_]*)\s*='
+)
+PATH_BUILD_RE = re.compile(
+    r'\b(?:std::)?filesystem::path\b|'
+    r'\bfs::path\b|'
+    r'\b(?:std::)?(?:ofstream|fstream)\s+[A-Za-z_][A-Za-z0-9_]*\s*\(|'
+    r'\b(?:fopen|freopen|open|openat|creat|mkdir|mkdirat)\s*\(|'
+    r'\b(?:std::filesystem::|filesystem::|fs::)(?:create_directories|copy_file|rename|permissions|path)\b|'
+    r'\barchive_read_extract(?:2)?\s*\(|'
+    r'\b(?:zip_fread|unzReadCurrentFile|mz_zip_reader_extract_to_file)\s*\(|'
+    r'\s/\s|'
+    r'\+\s*(?:["\'][^"\']*/[^"\']*["\']|[A-Za-z_][A-Za-z0-9_]*)|'
+    r'(?:["\'][^"\']*/[^"\']*["\']|[A-Za-z_][A-Za-z0-9_]*)\s*\+'
+)
+SINK_RE = re.compile(
+    r'\b(?:std::)?(?:ofstream|fstream)\s+[A-Za-z_][A-Za-z0-9_]*\s*\(|'
+    r'\b(?:fopen|freopen|open|openat|creat|mkdir|mkdirat)\s*\(|'
+    r'\b(?:std::filesystem::|filesystem::|fs::)(?:create_directories|copy_file|rename|permissions)\b|'
+    r'\barchive_read_extract(?:2)?\s*\(|'
+    r'\b(?:zip_fread|unzReadCurrentFile|mz_zip_reader_extract_to_file)\s*\('
+)
+SAFE_NAMED_RE = re.compile(
+    r'\b(?:safeArchivePath|safe_archive_path|safeExtractionPath|safe_extract_path|safeDestination|'
+    r'secureExtract|secure_extract|secureJoin|secure_join|validateArchiveEntry|validate_archive_entry|'
+    r'validateZipEntry|validate_zip_entry|ensureInsideDestination|ensure_inside_destination|'
+    r'assertInsideDestination|assert_inside_destination|insideDestination|inside_destination|'
+    r'isSubpath|is_subpath|isDescendant|is_descendant)\b',
+    re.IGNORECASE,
+)
+
+def should_skip(path: Path) -> bool:
+    try:
+        parts = path.relative_to(BASE_DIR).parts
+    except ValueError:
+        parts = path.parts
+    return any(part in SKIP_DIRS for part in parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in EXTS:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in EXTS and not should_skip(path):
+            yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    balance = statement.count('(') - statement.count(')')
+    has_end = ';' in statement or '{' in statement or '}' in statement
+    lookahead = idx + 1
+    while (balance > 0 or not has_end) and lookahead < len(lines) and lookahead < idx + 8:
+        next_line = strip_line_comments(lines[lookahead]).strip()
+        statement += ' ' + next_line
+        balance += next_line.count('(') - next_line.count(')')
+        has_end = has_end or ';' in next_line or '{' in next_line or '}' in next_line
+        lookahead += 1
+    return statement
+
+def context_around(lines, line_no):
+    start = max(0, line_no - 8)
+    end = min(len(lines), line_no + 10)
+    return '\n'.join(strip_line_comments(line) for line in lines[start:end])
+
+def has_safe_context(statement, context):
+    if SAFE_NAMED_RE.search(statement) or SAFE_NAMED_RE.search(context):
+        return True
+    lower = context.lower()
+    has_canonical = (
+        'weakly_canonical' in lower or 'canonical(' in lower or 'lexically_normal' in lower
+        or 'realpath(' in lower or 'std::filesystem::relative' in lower or 'fs::relative' in lower
+    )
+    has_anchor = (
+        'starts_with' in lower or '.compare(' in lower or 'lexically_relative' in lower
+        or 'std::filesystem::relative' in lower or 'fs::relative' in lower
+        or 'relative(' in lower or 'is_subpath' in lower or 'inside_destination' in lower
+    )
+    has_reject = 'throw ' in lower or 'return false' in lower or 'continue;' in lower or 'return {}' in lower
+    return has_canonical and has_anchor and has_reject
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip().replace('\t', ' ')
+    return ''
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def collect_entry_aliases(lines):
+    aliases = set()
+    for raw in lines:
+        line = strip_line_comments(raw)
+        match = ALIAS_ASSIGN_RE.search(line)
+        if match:
+            aliases.add(match.group(1))
+    return aliases
+
+def references_name_source(statement, entry_aliases):
+    if ENTRY_EXPR_RE.search(statement):
+        return True
+    for alias in entry_aliases:
+        if re.search(rf'\b{re.escape(alias)}\b', statement):
+            return True
+    return False
+
+def references_path_alias(statement, path_aliases):
+    for alias in path_aliases:
+        if re.search(rf'\b{re.escape(alias)}\b', statement):
+            return True
+    return False
+
+def path_builds_from_entry(statement, entry_aliases):
+    if not PATH_BUILD_RE.search(statement):
+        return False
+    return references_name_source(statement, entry_aliases)
+
+def collect_path_aliases(lines, entry_aliases):
+    aliases = set()
+    for idx, _ in enumerate(lines, start=1):
+        statement = logical_statement(lines, idx)
+        if not path_builds_from_entry(statement, entry_aliases):
+            continue
+        if has_safe_context(statement, context_around(lines, idx)):
+            continue
+        match = PATH_ALIAS_ASSIGN_RE.search(statement)
+        if match:
+            aliases.add(match.group(1))
+    return aliases
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not ARCHIVE_HINT_RE.search(text):
+        return
+    lines = text.splitlines()
+    entry_aliases = collect_entry_aliases(lines)
+    path_aliases = collect_path_aliases(lines, entry_aliases)
+    seen = set()
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        statement = logical_statement(lines, idx)
+        unsafe_path_build = path_builds_from_entry(statement, entry_aliases)
+        unsafe_path_sink = bool(SINK_RE.search(statement)) and references_path_alias(statement, path_aliases)
+        unsafe_extract = bool(re.search(r'\barchive_read_extract(?:2)?\s*\(', statement))
+        if not (unsafe_path_build or unsafe_path_sink or unsafe_extract):
+            continue
+        if has_safe_context(statement, context_around(lines, idx)):
+            continue
+        key = (relpath(path), idx)
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append((relpath(path), idx, source_line(lines, idx)))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:5]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 # Temporarily relax pipefail for grep-heavy scans
 begin_scan_section(){
   if [[ "$DISABLE_PIPEFAIL_DURING_SCAN" -eq 1 ]]; then set +o pipefail; fi
@@ -1443,7 +1704,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_skip 7; then
 print_header "7. UNDEFINED BEHAVIOR RISK ZONE"
-print_category "Detects: dangerous casts, unsafe C APIs, dangling, delete mismatch" \
+print_category "Detects: dangerous casts, unsafe C APIs, archive traversal, delete mismatch" \
   "UB can pass tests and still crash in production"
 
 print_subheader "Dangerous functions (strcpy/gets/scanf/sprintf)"
@@ -1460,6 +1721,8 @@ if [ "$count" -gt 0 ]; then
   print_finding "critical" "$count" "Shell command execution API used" "Avoid shell invocation; pass argv directly through execve/posix_spawn or a platform API with strict input validation"
   show_detailed_finding "$shell_exec_pattern" 5
 fi
+
+run_archive_extraction_checks
 
 print_subheader "reinterpret_cast/const_cast occurrences"
 count=$(search_count "reinterpret_cast<|const_cast<")

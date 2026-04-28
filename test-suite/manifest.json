@@ -2427,6 +2427,65 @@
       }
     },
     {
+      "id": "cpp-archive-extraction-buggy",
+      "description": "C++ archive extraction fixture with unvalidated entry-name path joins.",
+      "path": "test-suite/cpp/archive_extraction_buggy",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "security",
+        "archive",
+        "buggy"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
+      "id": "cpp-archive-extraction-clean",
+      "description": "C++ archive extraction fixture with canonical destination containment checks.",
+      "path": "test-suite/cpp/archive_extraction_clean",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "security",
+        "archive",
+        "clean"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
       "id": "cpp-async-errors-buggy",
       "description": "C++ std::async futures without try/catch or get().",
       "path": "test-suite/cpp/async_errors/buggy",
