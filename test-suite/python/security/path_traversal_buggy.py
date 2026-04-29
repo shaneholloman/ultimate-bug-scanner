@@ -11,6 +11,26 @@ def flask_download():
     return send_file(UPLOAD_ROOT / name)
 
 
+def flask_upload_save():
+    uploaded = request.files["avatar"]
+    target = UPLOAD_ROOT / uploaded.filename
+    uploaded.save(target)
+    return {"saved": uploaded.filename}
+
+
+def flask_upload_save_direct():
+    request.files["report"].save(
+        UPLOAD_ROOT / request.files["report"].filename
+    )
+    return {"saved": True}
+
+
+def flask_upload_save_keyword():
+    uploaded = request.files["invoice"]
+    uploaded.save(dst=UPLOAD_ROOT / uploaded.filename)
+    return {"saved": uploaded.filename}
+
+
 def raw_open_download():
     target = request.values.get("path")
     return open(target, "rb").read()

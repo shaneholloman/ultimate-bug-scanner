@@ -2319,7 +2319,7 @@ run_path_traversal_checks() {
     case "$tag" in
       __COUNT__)
         if [[ "$a" -gt 0 ]]; then
-          print_finding "critical" "$a" "Request-derived path reaches file read/download sink" "Validate paths with safe_join or a resolved-base containment check before opening or sending files"
+          print_finding "critical" "$a" "Request-derived path reaches file read/download/write sink" "Validate paths with safe_join, secure_filename, or a resolved-base containment check before opening, sending, or saving files"
         else
           print_finding "good" "No request-derived filesystem paths detected"
         fi
@@ -2343,6 +2343,11 @@ SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.py
 REQUEST_SOURCE_RE = re.compile(
     r'\b(?:flask\.)?request\.(?:args|values|form|GET|POST|query_params|path_params|match_info|cookies|files|FILES)\b'
     r'|\b(?:self\.)?request\.(?:GET|POST|query_params|path_params|match_info|FILES)\b',
+    re.IGNORECASE,
+)
+UPLOAD_SOURCE_RE = re.compile(
+    r'\b(?:flask\.)?request\.(?:files|FILES)\b'
+    r'|\b(?:self\.)?request\.FILES\b',
     re.IGNORECASE,
 )
 SAFE_VALIDATOR_RE = re.compile(
@@ -2404,6 +2409,7 @@ class PathTraversalAnalyzer(ast.NodeVisitor):
         self.text = text
         self.lines = lines
         self.tainted = {}
+        self.upload_file_vars = set()
         self.issues = []
 
     def segment(self, node):
@@ -2411,6 +2417,9 @@ class PathTraversalAnalyzer(ast.NodeVisitor):
 
     def is_request_source(self, node):
         return bool(REQUEST_SOURCE_RE.search(self.segment(node)))
+
+    def is_upload_source(self, node):
+        return bool(UPLOAD_SOURCE_RE.search(self.segment(node)))
 
     def has_safe_expression(self, node):
         return bool(SAFE_VALIDATOR_RE.search(self.segment(node)))
@@ -2420,6 +2429,9 @@ class PathTraversalAnalyzer(ast.NodeVisitor):
 
     def tainted_names_in(self, node):
         return sorted(name for name in self.names_in(node) if name in self.tainted)
+
+    def upload_file_names_in(self, node):
+        return sorted(name for name in self.names_in(node) if name in self.upload_file_vars)
 
     def target_names(self, targets):
         names = []
@@ -2443,10 +2455,19 @@ class PathTraversalAnalyzer(ast.NodeVisitor):
         if self.has_safe_expression(value):
             for name in names:
                 self.tainted.pop(name, None)
+                self.upload_file_vars.discard(name)
             return
         if self.is_request_source(value):
             for name in names:
                 self.tainted[name] = 'request'
+                if self.is_upload_source(value):
+                    self.upload_file_vars.add(name)
+            return
+        upload_refs = self.upload_file_names_in(value)
+        if upload_refs:
+            for name in names:
+                self.tainted[name] = upload_refs[0]
+                self.upload_file_vars.add(name)
             return
         refs = self.tainted_names_in(value)
         if refs:
@@ -2455,6 +2476,7 @@ class PathTraversalAnalyzer(ast.NodeVisitor):
             return
         for name in names:
             self.tainted.pop(name, None)
+            self.upload_file_vars.discard(name)
 
     def visit_Assign(self, node):
         names = self.target_names(node.targets)
@@ -2480,6 +2502,16 @@ class PathTraversalAnalyzer(ast.NodeVisitor):
                 return node.args[0]
         if isinstance(node.func, ast.Attribute) and short_name in PATH_METHODS:
             return node.func.value
+        if isinstance(node.func, ast.Attribute) and short_name == 'save' and node.args:
+            owner = node.func.value
+            if self.is_upload_source(owner) or self.upload_file_names_in(owner):
+                return node.args[0]
+        if isinstance(node.func, ast.Attribute) and short_name == 'save':
+            owner = node.func.value
+            if self.is_upload_source(owner) or self.upload_file_names_in(owner):
+                for keyword in node.keywords:
+                    if keyword.arg in {'dst', 'destination', 'file', 'filename', 'path'}:
+                        return keyword.value
         return None
 
     def call_is_open(self, node):

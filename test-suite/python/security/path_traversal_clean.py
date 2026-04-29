@@ -25,6 +25,28 @@ def sanitized_filename_download():
     return target.read_bytes()
 
 
+def sanitized_upload_save():
+    uploaded = request.files["avatar"]
+    name = secure_filename(uploaded.filename)
+    target = UPLOAD_ROOT / name
+    uploaded.save(target)
+    return {"saved": name}
+
+
+def containment_checked_upload_save():
+    uploaded = request.files["document"]
+    target = validate_path(uploaded.filename)
+    uploaded.save(target)
+    return {"saved": target.name}
+
+
+def sanitized_upload_save_keyword():
+    uploaded = request.files["invoice"]
+    name = secure_filename(uploaded.filename)
+    uploaded.save(dst=UPLOAD_ROOT / name)
+    return {"saved": name}
+
+
 def containment_checked_download():
     target = validate_path(request.args.get("document"))
     return target.read_bytes()
