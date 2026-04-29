@@ -1120,6 +1120,287 @@ PY
 )
 }
 
+run_nosql_injection_checks() {
+  print_subheader "NoSQL query injection"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable NoSQL injection checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Request-controlled NoSQL filter reaches database sink" "Build Mongo/PyMongo filters from explicit allow-listed fields and reject operator keys such as \$where, \$ne, \$regex, \$or, and \$expr"
+        else
+          print_finding "good" "No request-controlled NoSQL filters detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+FILTER_METHODS = {
+    'find', 'find_one', 'find_raw_batches', 'delete_one', 'delete_many',
+    'count_documents',
+}
+UPDATE_METHODS = {
+    'update_one', 'update_many', 'replace_one', 'find_one_and_update',
+    'find_one_and_replace', 'find_one_and_delete',
+}
+PIPELINE_METHODS = {'aggregate', 'watch'}
+COMMAND_METHODS = {'command'}
+DANGEROUS_OPERATORS = {
+    '$where', '$regex', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin',
+    '$or', '$and', '$nor', '$expr', '$function', '$accumulator',
+}
+REQUEST_NAMES = {'request'}
+UNTRUSTED_ATTRS = {'args', 'form', 'values', 'json', 'data', 'body', 'GET', 'POST'}
+UNTRUSTED_CALLS = {'get_json', 'json', 'dict', 'to_dict'}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Subscript):
+        return call_name(node.value)
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def const_string(node):
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = []
+        for elt in target.elts:
+            names.extend(target_names(elt))
+        return names
+    return []
+
+def rooted_at_request(node):
+    if isinstance(node, ast.Name):
+        return node.id in REQUEST_NAMES
+    if isinstance(node, ast.Attribute):
+        return rooted_at_request(node.value)
+    if isinstance(node, ast.Call):
+        return rooted_at_request(node.func)
+    if isinstance(node, ast.Subscript):
+        return rooted_at_request(node.value)
+    return False
+
+class NoSQLInjectionAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, text, lines):
+        self.path = path
+        self.text = text
+        self.lines = lines
+        self.untrusted_objects = set()
+        self.unsafe_queries = set()
+        self.request_values = set()
+        self.issues = []
+        self.seen_lines = set()
+
+    def relative_path(self):
+        try:
+            return str(self.path.relative_to(BASE_DIR))
+        except ValueError:
+            return self.path.name
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        self.issues.append((self.relative_path(), line_no, source_line(self.lines, line_no)))
+
+    def expr_is_untrusted_object(self, node):
+        if isinstance(node, ast.Name):
+            return node.id in self.untrusted_objects or node.id in self.unsafe_queries
+        if isinstance(node, ast.Attribute):
+            return rooted_at_request(node) and node.attr in UNTRUSTED_ATTRS
+        if isinstance(node, ast.Call):
+            name = call_name(node.func)
+            short = name.rsplit('.', 1)[-1]
+            if rooted_at_request(node.func) and short in UNTRUSTED_CALLS:
+                return True
+            if short == 'dict' and any(self.expr_is_untrusted_object(arg) for arg in node.args):
+                return True
+            if isinstance(node.func, ast.Attribute) and node.func.attr in {'copy', 'dict'}:
+                return self.expr_is_untrusted_object(node.func.value)
+        if isinstance(node, ast.Subscript):
+            root = call_name(node.value)
+            return root in {'request.json', 'request.data', 'request.body'} or (
+                isinstance(node.value, ast.Name) and node.value.id in self.untrusted_objects
+            )
+        return False
+
+    def expr_has_request_source(self, node):
+        if rooted_at_request(node):
+            return True
+        return any(self.expr_has_request_source(child) for child in ast.iter_child_nodes(node))
+
+    def expr_contains_request_data(self, node):
+        if isinstance(node, ast.Name) and node.id in self.request_values:
+            return True
+        if self.expr_is_untrusted_object(node):
+            return True
+        if rooted_at_request(node):
+            return True
+        return any(self.expr_contains_request_data(child) for child in ast.iter_child_nodes(node))
+
+    def value_contains_untrusted_object(self, node):
+        if self.expr_is_untrusted_object(node):
+            return True
+        return any(self.value_contains_untrusted_object(child) for child in ast.iter_child_nodes(node))
+
+    def dict_expr_is_unsafe(self, node):
+        for key, value in zip(node.keys, node.values):
+            if key is None:
+                if self.expr_contains_request_data(value):
+                    return True
+                continue
+            key_text = const_string(key)
+            if key_text is None:
+                if self.expr_contains_request_data(key) or self.expr_contains_request_data(value):
+                    return True
+                continue
+            if key_text.startswith('$'):
+                if key_text in {'$where', '$function', '$accumulator'}:
+                    return True
+                if key_text in DANGEROUS_OPERATORS and self.expr_contains_request_data(value):
+                    return True
+                if self.value_contains_untrusted_object(value):
+                    return True
+            elif self.value_contains_untrusted_object(value):
+                return True
+        return False
+
+    def query_expr_is_unsafe(self, node):
+        if isinstance(node, ast.Name):
+            return node.id in self.untrusted_objects or node.id in self.unsafe_queries
+        if isinstance(node, ast.Dict):
+            return self.dict_expr_is_unsafe(node)
+        if isinstance(node, (ast.List, ast.Tuple)):
+            return any(self.query_expr_is_unsafe(elt) for elt in node.elts)
+        if isinstance(node, ast.Call) and call_name(node.func).rsplit('.', 1)[-1] == 'dict':
+            return any(self.query_expr_is_unsafe(arg) for arg in node.args)
+        return self.expr_is_untrusted_object(node)
+
+    def mark_assignment(self, names, value):
+        is_untrusted = self.expr_is_untrusted_object(value)
+        is_unsafe_query = self.query_expr_is_unsafe(value)
+        has_request_value = self.expr_has_request_source(value)
+        for name in names:
+            if is_untrusted:
+                self.untrusted_objects.add(name)
+            else:
+                self.untrusted_objects.discard(name)
+            if is_unsafe_query:
+                self.unsafe_queries.add(name)
+            else:
+                self.unsafe_queries.discard(name)
+            if has_request_value:
+                self.request_values.add(name)
+            else:
+                self.request_values.discard(name)
+
+    def visit_Assign(self, node):
+        names = [name for target in node.targets for name in target_names(target)]
+        if names:
+            self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            names = target_names(node.target)
+            if names:
+                self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def sink_args(self, node, short):
+        args = []
+        if short in FILTER_METHODS:
+            if node.args:
+                args.append(node.args[0])
+        elif short in UPDATE_METHODS:
+            args.extend(node.args[:2])
+        elif short in PIPELINE_METHODS:
+            if node.args:
+                args.append(node.args[0])
+        elif short in COMMAND_METHODS:
+            args.extend(node.args)
+        for keyword in node.keywords:
+            if keyword.arg in {'filter', 'query', 'pipeline', 'command', 'spec', 'where', 'update'}:
+                args.append(keyword.value)
+        return args
+
+    def visit_Call(self, node):
+        short = call_name(node.func).rsplit('.', 1)[-1]
+        if short in (FILTER_METHODS | UPDATE_METHODS | PIPELINE_METHODS | COMMAND_METHODS):
+            if any(self.query_expr_is_unsafe(arg) for arg in self.sink_args(node, short)):
+                self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = NoSQLInjectionAnalyzer(path, text, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_command_injection_checks() {
   print_subheader "Command injection dataflow"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -6877,6 +7158,7 @@ fi
 
 run_command_injection_checks
 run_sql_injection_checks
+run_nosql_injection_checks
 
 print_subheader "requests verify=False (TLS disabled)"
 count=$("${GREP_RN[@]}" -e "requests\.[a-z]+\([^)]*verify\s*=\s*False" "$PROJECT_DIR" 2>/dev/null | count_lines || true)

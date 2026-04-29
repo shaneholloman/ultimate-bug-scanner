@@ -7,6 +7,7 @@
 | `buggy/security_injection.py` | Code & command injection, yaml.load, eval | eval/exec, yaml.load without Loader, shell=True |
 | `security/command_injection_buggy.py` | Command execution security | request/stdin data reaching `shell=True`, shell `-c`, `os.system`, aliased subprocess calls, or executable selection |
 | `security/sql_injection_buggy.py` | SQL injection security | f-string, `%`, `.format()`, and concatenated SQL reaching execute/raw/extra/read_sql sinks |
+| `security/nosql_injection_buggy.py` | NoSQL injection security | request dictionaries, operator payloads, dynamic keys, `$where`, aggregation pipelines, and MongoDB commands reaching PyMongo-style sinks |
 | `security/archive_extraction_buggy.py` | Archive extraction security | tarfile/zipfile `extractall()` without member path validation |
 | `security/open_redirect_buggy.py` | Web redirect security | request-derived Flask/Django/Starlette redirect targets without allow-list validation |
 | `security/ssrf_buggy.py` | Outbound HTTP security | request-derived URLs reaching requests/httpx/aiohttp/urllib clients without host allow-list validation |
