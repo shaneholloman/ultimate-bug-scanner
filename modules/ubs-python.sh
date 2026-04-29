@@ -4534,7 +4534,7 @@ PY
 }
 
 run_archive_extraction_checks() {
-  print_subheader "Archive extractall path traversal"
+  print_subheader "Archive extraction path traversal"
   local printed=0
   while IFS=$'\t' read -r tag a b c; do
     case "$tag" in
@@ -4542,7 +4542,7 @@ run_archive_extraction_checks() {
         if [[ "$a" -gt 0 ]]; then
           print_finding "critical" "$a" "Archive extraction path traversal risk" "Validate every archive member stays under the destination, or use tarfile extraction filters where available"
         else
-          print_finding "good" "No unvalidated archive extractall() calls detected"
+          print_finding "good" "No unvalidated archive extract()/extractall() calls detected"
         fi
         ;;
       __SAMPLE__)
@@ -4632,9 +4632,9 @@ def mark_archive_vars(node, archive_vars, archive_contexts, tar_modules, zip_mod
             elif call_is_zip_open(item.context_expr, zip_modules, zip_ctor_names):
                 archive_contexts.append((item.optional_vars.id, 'zip', node.lineno, getattr(node, 'end_lineno', node.lineno)))
 
-def extractall_kind(call, archive_vars, archive_contexts, tar_modules, zip_modules, tar_open_names, zip_ctor_names, saw_archive_import):
+def extraction_kind(call, archive_vars, archive_contexts, tar_modules, zip_modules, tar_open_names, zip_ctor_names, saw_archive_import):
     func = call.func
-    if not isinstance(func, ast.Attribute) or func.attr != 'extractall':
+    if not isinstance(func, ast.Attribute) or func.attr not in {'extract', 'extractall'}:
         return None
     owner = func.value
     if isinstance(owner, ast.Name):
@@ -4648,7 +4648,9 @@ def extractall_kind(call, archive_vars, archive_contexts, tar_modules, zip_modul
             return 'tar'
         if call_is_zip_open(owner, zip_modules, zip_ctor_names):
             return 'zip'
-    return 'unknown' if saw_archive_import else None
+    if func.attr == 'extractall':
+        return 'unknown' if saw_archive_import else None
+    return None
 
 def keyword_value(call, key):
     for keyword in call.keywords:
@@ -4667,12 +4669,13 @@ def is_safe_tar_filter(node):
     return name in {'data_filter', 'tarfile.data_filter'}
 
 def has_safe_archive_context(kind, call, lines):
-    if kind == 'tar':
+    method = call.func.attr if isinstance(call.func, ast.Attribute) else ''
+    if kind == 'tar' and method == 'extractall':
         filter_value = keyword_value(call, 'filter')
         if filter_value is not None and is_safe_tar_filter(filter_value):
             return True
-    if keyword_value(call, 'members') is not None:
-        context = '\n'.join(strip_comments(line) for line in lines[max(0, call.lineno - 12):call.lineno])
+    if method == 'extract' or keyword_value(call, 'members') is not None:
+        context = '\n'.join(strip_comments(line) for line in lines[max(0, call.lineno - 16):call.lineno])
         if SAFE_CONTEXT_RE.search(context):
             return True
     return False
@@ -4721,7 +4724,7 @@ def analyze(path, issues):
             continue
         if has_ignore(lines, node.lineno):
             continue
-        kind = extractall_kind(node, archive_vars, archive_contexts, tar_modules, zip_modules, tar_open_names, zip_ctor_names, saw_archive_import)
+        kind = extraction_kind(node, archive_vars, archive_contexts, tar_modules, zip_modules, tar_open_names, zip_ctor_names, saw_archive_import)
         if kind is None or has_safe_archive_context(kind, node, lines):
             continue
         try:

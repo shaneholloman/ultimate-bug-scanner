@@ -1901,7 +1901,7 @@
     },
     {
       "id": "python-archive-extraction-buggy",
-      "description": "Python tarfile/zipfile extractall should validate archive member paths before extraction.",
+      "description": "Python tarfile/zipfile extract/extractall should validate archive member paths before extraction.",
       "path": "test-suite/python/security/archive_extraction_buggy.py",
       "language": "python",
       "tags": [

@@ -16,6 +16,18 @@ def unpack_tar_direct(archive_path: str, destination: str) -> None:
     tarfile.open(archive_path).extractall(destination)
 
 
+def unpack_tar_member(archive_path: str, destination: str) -> None:
+    with tarfile.open(archive_path) as archive:
+        member = archive.getmembers()[0]
+        archive.extract(member, destination)
+
+
+def unpack_zip_member(archive_path: str, destination: str) -> None:
+    with zipfile.ZipFile(archive_path) as archive:
+        member = archive.infolist()[0]
+        archive.extract(member, destination)
+
+
 def unpack_tar_fully_trusted(archive_path: str, destination: str) -> None:
     with tarfile.open(archive_path) as archive:
         archive.extractall(destination, filter=tarfile.fully_trusted_filter)
