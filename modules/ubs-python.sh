@@ -899,6 +899,227 @@ PY
   fi
 }
 
+run_sql_injection_checks() {
+  print_subheader "Interpolated SQL execution"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable SQL injection checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Interpolated SQL reaches execution sink" "Use parameterized queries, SQLAlchemy bind parameters, or ORM bindings instead of f-strings, format(), %, or string concatenation"
+        else
+          print_finding "good" "No interpolated SQL execution detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+SQL_RE = re.compile(r'\b(?:select|insert|update|delete|with|merge|call|exec|create|drop|alter|truncate)\b', re.IGNORECASE)
+EXECUTE_METHODS = {'execute', 'executemany', 'executescript', 'raw', 'read_sql', 'read_sql_query', 'scalar', 'scalars'}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def string_parts(node):
+    parts = []
+    for child in ast.walk(node):
+        if isinstance(child, ast.Constant) and isinstance(child.value, str):
+            parts.append(child.value)
+    return parts
+
+def literal_sql_text(node, text):
+    parts = string_parts(node)
+    segment = ast.get_source_segment(text, node) or ''
+    return ' '.join(parts + [segment])
+
+def looks_like_sql(node, text):
+    return bool(SQL_RE.search(literal_sql_text(node, text)))
+
+def all_static_strings(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return all_static_strings(node.left) and all_static_strings(node.right)
+    return False
+
+class SQLInjectionAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, text, lines):
+        self.path = path
+        self.text = text
+        self.lines = lines
+        self.unsafe_sql_vars = set()
+        self.issues = []
+
+    def relative_path(self):
+        try:
+            return str(self.path.relative_to(BASE_DIR))
+        except ValueError:
+            return self.path.name
+
+    def names_in(self, node):
+        return {child.id for child in ast.walk(node) if isinstance(child, ast.Name)}
+
+    def unsafe_names_in(self, node):
+        return sorted(name for name in self.names_in(node) if name in self.unsafe_sql_vars)
+
+    def is_text_call(self, node):
+        if not isinstance(node, ast.Call):
+            return False
+        name = call_name(node.func)
+        return name == 'text' or name.endswith('.text')
+
+    def is_interpolated_sql(self, node):
+        if isinstance(node, ast.JoinedStr):
+            return looks_like_sql(node, self.text) and any(isinstance(part, ast.FormattedValue) for part in node.values)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Mod, ast.Add)):
+            return looks_like_sql(node, self.text) and not all_static_strings(node)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'format':
+            return looks_like_sql(node.func.value, self.text)
+        return False
+
+    def contains_interpolation(self, node):
+        if isinstance(node, ast.JoinedStr) and any(isinstance(part, ast.FormattedValue) for part in node.values):
+            return True
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Mod, ast.Add)) and not all_static_strings(node):
+            return True
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'format':
+            return True
+        return any(self.contains_interpolation(child) for child in ast.iter_child_nodes(node))
+
+    def contains_unsafe_sql(self, node):
+        if self.is_interpolated_sql(node) or self.unsafe_names_in(node):
+            return True
+        if self.is_text_call(node) and node.args:
+            return self.contains_unsafe_sql(node.args[0])
+        return any(self.is_interpolated_sql(child) for child in ast.walk(node))
+
+    def target_names(self, targets):
+        names = []
+        for target in targets:
+            if isinstance(target, ast.Name):
+                names.append(target.id)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                names.extend(elt.id for elt in target.elts if isinstance(elt, ast.Name))
+        return names
+
+    def mark_assignment(self, names, value):
+        if self.contains_unsafe_sql(value):
+            self.unsafe_sql_vars.update(names)
+        else:
+            for name in names:
+                self.unsafe_sql_vars.discard(name)
+
+    def visit_Assign(self, node):
+        names = self.target_names(node.targets)
+        if names:
+            self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if isinstance(node.target, ast.Name) and node.value is not None:
+            self.mark_assignment([node.target.id], node.value)
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node):
+        if isinstance(node.target, ast.Name):
+            if node.target.id in self.unsafe_sql_vars or self.contains_unsafe_sql(node.value):
+                self.unsafe_sql_vars.add(node.target.id)
+        self.generic_visit(node)
+
+    def sql_argument(self, node):
+        name = call_name(node.func)
+        short = name.rsplit('.', 1)[-1]
+        if short in EXECUTE_METHODS:
+            return node.args[0] if node.args else None
+        if short == 'extra':
+            for keyword in node.keywords:
+                if keyword.arg == 'where':
+                    return keyword.value
+        return None
+
+    def visit_Call(self, node):
+        if has_ignore(self.lines, node.lineno):
+            self.generic_visit(node)
+            return
+        arg = self.sql_argument(node)
+        if arg is not None and self.contains_unsafe_sql(arg):
+            self.issues.append((self.relative_path(), node.lineno, source_line(self.lines, node.lineno)))
+        elif call_name(node.func).rsplit('.', 1)[-1] == 'extra':
+            for keyword in node.keywords:
+                if keyword.arg == 'where' and self.contains_interpolation(keyword.value):
+                    self.issues.append((self.relative_path(), node.lineno, source_line(self.lines, node.lineno)))
+                    break
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = SQLInjectionAnalyzer(path, text, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_unsafe_deserialization_checks() {
   print_subheader "Unsafe deserialization loaders"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -6331,6 +6552,8 @@ if [ "$total" -gt 0 ]; then
 else
   print_finding "good" "No shell=True / os.system detected"
 fi
+
+run_sql_injection_checks
 
 print_subheader "requests verify=False (TLS disabled)"
 count=$("${GREP_RN[@]}" -e "requests\.[a-z]+\([^)]*verify\s*=\s*False" "$PROJECT_DIR" 2>/dev/null | count_lines || true)

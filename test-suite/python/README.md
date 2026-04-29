@@ -5,6 +5,7 @@
 | `buggy/buggy_async_security.py` | Async/await pitfalls + insecure requests | unguarded awaits, missing try/except, `verify=False` |
 | `buggy/resource_lifecycle.py` | File/task cleanup | missing `close()`/`cancel()` |
 | `buggy/security_injection.py` | Code & command injection, yaml.load, eval | eval/exec, yaml.load without Loader, shell=True |
+| `security/sql_injection_buggy.py` | SQL injection security | f-string, `%`, `.format()`, and concatenated SQL reaching execute/raw/extra/read_sql sinks |
 | `security/archive_extraction_buggy.py` | Archive extraction security | tarfile/zipfile `extractall()` without member path validation |
 | `security/open_redirect_buggy.py` | Web redirect security | request-derived Flask/Django/Starlette redirect targets without allow-list validation |
 | `security/ssrf_buggy.py` | Outbound HTTP security | request-derived URLs reaching requests/httpx/aiohttp/urllib clients without host allow-list validation |
