@@ -44,7 +44,7 @@ async def async_helper_proxy():
 
 
 def event_proxy(event):
-    return urlopen(validate_fetch_url(event["queryStringParameters"]["feed"])).read()
+    return urlopen(validate_fetch_url(event["queryStringParameters"]["feed"]), timeout=3).read()
 
 
 def constant_url_fetch():

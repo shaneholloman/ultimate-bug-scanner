@@ -1603,6 +1603,65 @@
       }
     },
     {
+      "id": "python-http-timeout-buggy",
+      "description": "Python outbound HTTP calls should use explicit bounded timeouts.",
+      "path": "test-suite/python/security/http_timeout_buggy.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "timeout",
+        "buggy"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Outbound HTTP call has no explicit timeout"
+        ]
+      }
+    },
+    {
+      "id": "python-http-timeout-clean",
+      "description": "Python outbound HTTP calls with explicit per-call or client timeouts should stay clean.",
+      "path": "test-suite/python/security/http_timeout_clean.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "timeout",
+        "clean"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Outbound HTTP call has no explicit timeout"
+        ]
+      }
+    },
+    {
       "id": "python-path-traversal-buggy",
       "description": "Python file read/download sinks should not consume request-derived paths without containment validation.",
       "path": "test-suite/python/security/path_traversal_buggy.py",

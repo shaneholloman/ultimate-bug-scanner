@@ -8,6 +8,7 @@
 | `security/archive_extraction_buggy.py` | Archive extraction security | tarfile/zipfile `extractall()` without member path validation |
 | `security/open_redirect_buggy.py` | Web redirect security | request-derived Flask/Django/Starlette redirect targets without allow-list validation |
 | `security/ssrf_buggy.py` | Outbound HTTP security | request-derived URLs reaching requests/httpx/aiohttp/urllib clients without host allow-list validation |
+| `security/http_timeout_buggy.py` | Outbound HTTP reliability | requests/httpx/aiohttp/urllib/urllib3 calls or clients without explicit bounded timeouts |
 | `security/path_traversal_buggy.py` | File download security | request-derived paths reaching `open`, `send_file`, `FileResponse`, or `Path.read_*` without containment validation |
 | `security/jwt_verification_buggy.py` | JWT verification security | `jwt.decode` calls that disable signature/claim checks or allow `algorithms=["none"]` |
 | `security/cors_misconfig_buggy.py` | CORS configuration security | credentialed Flask-CORS, Starlette/FastAPI, or Django CORS configs that allow wildcard origins |
