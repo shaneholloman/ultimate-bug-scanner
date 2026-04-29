@@ -1120,6 +1120,328 @@ PY
 )
 }
 
+run_command_injection_checks() {
+  print_subheader "Command injection dataflow"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable command injection checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "User-controlled command reaches shell or executable selection" "Use a fixed executable with argv arrays, validate command allow-lists before dispatch, and avoid shell=True or shell -c"
+        else
+          print_finding "good" "No command injection dataflow detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import os
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+SUBPROCESS_CALLS = {'run', 'call', 'check_call', 'check_output', 'Popen', 'getoutput', 'getstatusoutput'}
+OS_COMMAND_CALLS = {'system', 'popen'}
+OS_EXEC_CALLS = {'execv', 'execve', 'execvp', 'execvpe', 'execl', 'execle', 'execlp', 'execlpe'}
+OS_SPAWN_CALLS = {'spawnv', 'spawnve', 'spawnvp', 'spawnvpe', 'spawnl', 'spawnle', 'spawnlp', 'spawnlpe'}
+SHELL_NAMES = {'sh', 'bash', 'dash', 'zsh', 'ksh', 'cmd', 'powershell', 'pwsh'}
+SHELL_FLAGS = {'-c', '-lc', '/c', '-command', '-encodedcommand'}
+SOURCE_RE = re.compile(
+    r"(?:request\.(?:args|form|values|json|data|body|GET|POST|get_json)|"
+    r"flask\.request|django\.http\.request|sys\.argv|os\.environ|"
+    r"event\s*\[|params\s*\[|input\s*\(|raw_input\s*\()",
+    re.IGNORECASE,
+)
+SANITIZER_RE = re.compile(r"\b(?:shlex\.quote|pipes\.quote)\s*\(", re.IGNORECASE)
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Subscript):
+        return call_name(node.value)
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def keyword_value(call, name):
+    for keyword in call.keywords:
+        if keyword.arg == name:
+            return keyword.value
+    return None
+
+def is_true(node):
+    return isinstance(node, ast.Constant) and node.value is True
+
+def const_string(node):
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+def all_static_strings(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return True
+    if isinstance(node, ast.JoinedStr):
+        return not any(isinstance(part, ast.FormattedValue) for part in node.values)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return all_static_strings(node.left) and all_static_strings(node.right)
+    return False
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = []
+        for elt in target.elts:
+            names.extend(target_names(elt))
+        return names
+    return []
+
+def shell_name(value):
+    if not value:
+        return ''
+    return os.path.basename(value).lower()
+
+class CommandInjectionAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, text, lines):
+        self.path = path
+        self.text = text
+        self.lines = lines
+        self.subprocess_modules = {'subprocess'}
+        self.os_modules = {'os'}
+        self.direct_calls = {}
+        self.tainted_names = set()
+        self.shell_command_vars = set()
+        self.executable_vars = set()
+        self.issues = []
+        self.seen_lines = set()
+
+    def relative_path(self):
+        try:
+            return str(self.path.relative_to(BASE_DIR))
+        except ValueError:
+            return self.path.name
+
+    def segment(self, node):
+        return ast.get_source_segment(self.text, node) or ''
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        self.issues.append((self.relative_path(), line_no, source_line(self.lines, line_no)))
+
+    def expr_is_sanitized(self, node):
+        return bool(SANITIZER_RE.search(self.segment(node)))
+
+    def expr_has_source(self, node):
+        return bool(SOURCE_RE.search(self.segment(node)))
+
+    def names_in(self, node):
+        return {child.id for child in ast.walk(node) if isinstance(child, ast.Name)}
+
+    def expr_is_tainted(self, node):
+        if self.expr_is_sanitized(node):
+            return False
+        return self.expr_has_source(node) or bool(self.names_in(node) & self.tainted_names)
+
+    def expr_is_dynamic_string(self, node):
+        if self.expr_is_tainted(node):
+            return True
+        if isinstance(node, ast.JoinedStr):
+            return any(isinstance(part, ast.FormattedValue) for part in node.values)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+            return not all_static_strings(node)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'format':
+            return True
+        return False
+
+    def arg_is_shell_command(self, node):
+        if isinstance(node, ast.Name) and node.id in self.shell_command_vars:
+            return True
+        return self.expr_is_dynamic_string(node)
+
+    def executable_is_dynamic(self, node):
+        if isinstance(node, ast.Name):
+            return node.id in self.executable_vars or node.id in self.tainted_names
+        return self.expr_is_dynamic_string(node)
+
+    def shell_c_payload(self, node):
+        if not isinstance(node, (ast.List, ast.Tuple)) or len(node.elts) < 3:
+            return None
+        executable = const_string(node.elts[0])
+        flag = const_string(node.elts[1])
+        if shell_name(executable) in SHELL_NAMES and flag and flag.lower() in SHELL_FLAGS:
+            return node.elts[2]
+        return None
+
+    def list_executable_is_dynamic(self, node):
+        if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
+            return self.executable_is_dynamic(node.elts[0])
+        return False
+
+    def canonical_call(self, node):
+        name = call_name(node.func)
+        if name in self.direct_calls:
+            return self.direct_calls[name]
+        for module in self.subprocess_modules:
+            for func in SUBPROCESS_CALLS:
+                if name == f'{module}.{func}':
+                    return f'subprocess.{func}'
+        for module in self.os_modules:
+            for func in OS_COMMAND_CALLS | OS_EXEC_CALLS | OS_SPAWN_CALLS:
+                if name == f'{module}.{func}':
+                    return f'os.{func}'
+        return ''
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if alias.name == 'subprocess':
+                self.subprocess_modules.add(local)
+            elif alias.name == 'os':
+                self.os_modules.add(local)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        module = node.module or ''
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if module == 'subprocess' and alias.name in SUBPROCESS_CALLS:
+                self.direct_calls[local] = f'subprocess.{alias.name}'
+            elif module == 'os' and alias.name in (OS_COMMAND_CALLS | OS_EXEC_CALLS | OS_SPAWN_CALLS):
+                self.direct_calls[local] = f'os.{alias.name}'
+        self.generic_visit(node)
+
+    def mark_assignment(self, names, value):
+        tainted = self.expr_is_tainted(value)
+        shell_command = self.expr_is_dynamic_string(value)
+        dynamic_executable = self.list_executable_is_dynamic(value)
+        for name in names:
+            if tainted:
+                self.tainted_names.add(name)
+            else:
+                self.tainted_names.discard(name)
+            if shell_command:
+                self.shell_command_vars.add(name)
+            else:
+                self.shell_command_vars.discard(name)
+            if dynamic_executable:
+                self.executable_vars.add(name)
+            else:
+                self.executable_vars.discard(name)
+
+    def visit_Assign(self, node):
+        names = [name for target in node.targets for name in target_names(target)]
+        if names:
+            self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            names = target_names(node.target)
+            if names:
+                self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def subprocess_arg_is_unsafe(self, node):
+        if not node.args:
+            return False
+        command = node.args[0]
+        shell_payload = self.shell_c_payload(command)
+        if shell_payload is not None:
+            return self.arg_is_shell_command(shell_payload)
+        if is_true(keyword_value(node, 'shell')):
+            return self.arg_is_shell_command(command)
+        return self.list_executable_is_dynamic(command) or (
+            isinstance(command, ast.Name) and command.id in self.executable_vars
+        )
+
+    def os_exec_arg_is_unsafe(self, node, func):
+        if func in OS_SPAWN_CALLS:
+            executable_index = 1
+        else:
+            executable_index = 0
+        if len(node.args) <= executable_index:
+            return False
+        return self.executable_is_dynamic(node.args[executable_index])
+
+    def visit_Call(self, node):
+        canonical = self.canonical_call(node)
+        if canonical:
+            module, func = canonical.rsplit('.', 1)
+            unsafe = False
+            if module == 'subprocess':
+                if func in {'getoutput', 'getstatusoutput'}:
+                    unsafe = bool(node.args and self.arg_is_shell_command(node.args[0]))
+                else:
+                    unsafe = self.subprocess_arg_is_unsafe(node)
+            elif module == 'os' and func in OS_COMMAND_CALLS:
+                unsafe = bool(node.args and self.arg_is_shell_command(node.args[0]))
+            elif module == 'os' and func in (OS_EXEC_CALLS | OS_SPAWN_CALLS):
+                unsafe = self.os_exec_arg_is_unsafe(node, func)
+            if unsafe:
+                self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = CommandInjectionAnalyzer(path, text, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_unsafe_deserialization_checks() {
   print_subheader "Unsafe deserialization loaders"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -6553,6 +6875,7 @@ else
   print_finding "good" "No shell=True / os.system detected"
 fi
 
+run_command_injection_checks
 run_sql_injection_checks
 
 print_subheader "requests verify=False (TLS disabled)"
