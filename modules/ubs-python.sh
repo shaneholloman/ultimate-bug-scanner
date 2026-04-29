@@ -899,6 +899,217 @@ PY
   fi
 }
 
+run_unsafe_deserialization_checks() {
+  print_subheader "Unsafe deserialization loaders"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable unsafe deserialization checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Unsafe Python deserialization loader" "Avoid pickle-compatible loaders for untrusted data; use JSON/schema formats or explicitly safe artifact loading"
+        else
+          print_finding "good" "No unsafe Python deserialization loaders detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+
+MODULE_CALLS = {
+    'marshal': {'load', 'loads'},
+    'dill': {'load', 'loads'},
+    'cloudpickle': {'load', 'loads'},
+    'joblib': {'load'},
+    'jsonpickle': {'decode', 'loads'},
+    'shelve': {'open'},
+    'pandas': {'read_pickle'},
+    'yaml': {'unsafe_load', 'unsafe_load_all'},
+}
+SPECIAL_CALLS = {
+    'numpy': {'load'},
+    'torch': {'load'},
+}
+MODULE_ALIASES = {
+    'marshal': {'marshal'},
+    'dill': {'dill'},
+    'cloudpickle': {'cloudpickle'},
+    'joblib': {'joblib', 'sklearn.externals.joblib'},
+    'jsonpickle': {'jsonpickle'},
+    'shelve': {'shelve'},
+    'pandas': {'pandas'},
+    'yaml': {'yaml'},
+    'numpy': {'numpy'},
+    'torch': {'torch'},
+}
+FROM_MODULES = {
+    'marshal': 'marshal',
+    'dill': 'dill',
+    'cloudpickle': 'cloudpickle',
+    'joblib': 'joblib',
+    'sklearn.externals.joblib': 'joblib',
+    'jsonpickle': 'jsonpickle',
+    'shelve': 'shelve',
+    'pandas': 'pandas',
+    'yaml': 'yaml',
+    'numpy': 'numpy',
+    'torch': 'torch',
+}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Subscript):
+        return call_name(node.value)
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def is_true(node):
+    return isinstance(node, ast.Constant) and node.value is True
+
+def keyword_value(call, name):
+    for keyword in call.keywords:
+        if keyword.arg == name:
+            return keyword.value
+    return None
+
+class UnsafeDeserializerAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, lines):
+        self.path = path
+        self.lines = lines
+        self.modules = {key: set(value) for key, value in MODULE_ALIASES.items()}
+        self.direct_calls = {}
+        self.issues = []
+        self.seen_lines = set()
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        try:
+            rel = self.path.relative_to(BASE_DIR)
+        except ValueError:
+            rel = self.path.name
+        self.issues.append((str(rel), line_no, source_line(self.lines, line_no)))
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            canonical = FROM_MODULES.get(alias.name)
+            if canonical:
+                self.modules[canonical].add(alias.asname or alias.name)
+            elif alias.name.endswith('.joblib'):
+                self.modules['joblib'].add(alias.asname or alias.name)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        module = node.module or ''
+        if module == 'sklearn.externals':
+            for alias in node.names:
+                if alias.name == 'joblib':
+                    self.modules['joblib'].add(alias.asname or alias.name)
+            self.generic_visit(node)
+            return
+        canonical = FROM_MODULES.get(module)
+        if canonical:
+            allowed = MODULE_CALLS.get(canonical, set()) | SPECIAL_CALLS.get(canonical, set())
+            for alias in node.names:
+                if alias.name in allowed:
+                    self.direct_calls[alias.asname or alias.name] = f'{canonical}.{alias.name}'
+        self.generic_visit(node)
+
+    def canonical_call(self, node):
+        name = call_name(node.func)
+        if name in self.direct_calls:
+            return self.direct_calls[name]
+        for canonical, funcs in {**MODULE_CALLS, **SPECIAL_CALLS}.items():
+            for alias in self.modules.get(canonical, set()):
+                for func in funcs:
+                    if name == f'{alias}.{func}':
+                        return f'{canonical}.{func}'
+        if name.endswith('.joblib.load'):
+            return 'joblib.load'
+        return ''
+
+    def is_unsafe_call(self, node):
+        canonical = self.canonical_call(node)
+        if not canonical:
+            return False
+        module, func = canonical.rsplit('.', 1)
+        if module == 'numpy' and func == 'load':
+            return is_true(keyword_value(node, 'allow_pickle'))
+        if module == 'torch' and func == 'load':
+            return not is_true(keyword_value(node, 'weights_only'))
+        return True
+
+    def visit_Call(self, node):
+        if self.is_unsafe_call(node):
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = UnsafeDeserializerAnalyzer(path, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_archive_extraction_checks() {
   print_subheader "Archive extractall path traversal"
   local printed=0
@@ -5562,10 +5773,11 @@ else
 fi
 
 print_subheader "pickle.load/loads"
-count=$("${GREP_RN[@]}" -e "pickle\.(load|loads)\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
+pickle_pattern="(^|[^A-Za-z0-9_])pickle\.(load|loads)\("
+count=$("${GREP_RN[@]}" -e "$pickle_pattern" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
 if [ "$count" -gt 0 ]; then
   print_finding "critical" "$count" "Insecure pickle usage" "Avoid unpickling untrusted data"
-  show_detailed_finding "pickle\.(load|loads)\(" 3
+  show_detailed_finding "$pickle_pattern" 3
 fi
 
 print_subheader "yaml.load without Loader"
@@ -5575,6 +5787,8 @@ if [ "$count" -gt 0 ]; then
   print_finding "critical" "$count" "yaml.load without SafeLoader" "Use yaml.safe_load or specify Loader=SafeLoader"
   show_detailed_finding "yaml\.load\(" 3
 fi
+
+run_unsafe_deserialization_checks
 
 print_subheader "subprocess shell=True / os.system"
 shell_true_pattern="^[^#]*\b[A-Za-z_][A-Za-z0-9_\.]*\([^#]*shell\s*=\s*True"
