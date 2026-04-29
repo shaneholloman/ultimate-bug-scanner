@@ -4075,6 +4075,173 @@ PY
 )
 }
 
+run_security_assert_checks() {
+  print_subheader "Security-sensitive assert statements"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable security-sensitive assert checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Security-sensitive assert stripped by -O" "Use explicit if/raise checks for authorization, ownership, CSRF, token, and permission validation"
+        else
+          print_finding "good" "No security-sensitive assert statements detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+SECURITY_RE = re.compile(
+    r'(auth|authori[sz]e|permission|perm|privilege|role|admin|staff|superuser|owner|tenant|account|session|csrf|xsrf|token|secret|api_?key|signature|password|passwd|jwt|bearer|credential|scope|acl|access|login|authenticated|has_?perm|can_)',
+    re.IGNORECASE,
+)
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Call):
+        return call_name(node.func)
+    if isinstance(node, ast.Subscript):
+        return call_name(node.value)
+    return ''
+
+def const_string(node):
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def name_is_security_sensitive(name):
+    return bool(name and SECURITY_RE.search(name))
+
+def expr_is_security_sensitive(node):
+    if isinstance(node, ast.Name):
+        return name_is_security_sensitive(node.id)
+    if isinstance(node, ast.Attribute):
+        return name_is_security_sensitive(node.attr) or name_is_security_sensitive(call_name(node))
+    if isinstance(node, ast.Subscript):
+        key = const_string(node.slice)
+        return name_is_security_sensitive(key or '') or expr_is_security_sensitive(node.value)
+    if isinstance(node, ast.Call):
+        return (
+            name_is_security_sensitive(call_name(node.func))
+            or any(expr_is_security_sensitive(arg) for arg in node.args)
+            or any(name_is_security_sensitive(keyword.arg or '') or expr_is_security_sensitive(keyword.value) for keyword in node.keywords)
+        )
+    if isinstance(node, ast.Compare):
+        return expr_is_security_sensitive(node.left) or any(expr_is_security_sensitive(value) for value in node.comparators)
+    if isinstance(node, ast.BoolOp):
+        return any(expr_is_security_sensitive(value) for value in node.values)
+    if isinstance(node, ast.UnaryOp):
+        return expr_is_security_sensitive(node.operand)
+    if isinstance(node, ast.BinOp):
+        return expr_is_security_sensitive(node.left) or expr_is_security_sensitive(node.right)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return name_is_security_sensitive(node.value)
+    return False
+
+class SecurityAssertAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, lines):
+        self.path = path
+        self.lines = lines
+        self.context_names = []
+        self.issues = []
+
+    def relative_path(self):
+        try:
+            return str(self.path.relative_to(BASE_DIR))
+        except ValueError:
+            return self.path.name
+
+    def context_is_security_sensitive(self):
+        return any(name_is_security_sensitive(name) for name in self.context_names)
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no):
+            return
+        self.issues.append((self.relative_path(), line_no, source_line(self.lines, line_no)))
+
+    def visit_ClassDef(self, node):
+        self.context_names.append(node.name)
+        self.generic_visit(node)
+        self.context_names.pop()
+
+    def visit_FunctionDef(self, node):
+        self.context_names.append(node.name)
+        self.generic_visit(node)
+        self.context_names.pop()
+
+    def visit_AsyncFunctionDef(self, node):
+        self.visit_FunctionDef(node)
+
+    def visit_Assert(self, node):
+        if expr_is_security_sensitive(node.test) or self.context_is_security_sensitive():
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = SecurityAssertAnalyzer(path, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_file_permission_checks() {
   print_subheader "Unsafe filesystem permission modes"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -9863,6 +10030,7 @@ fi
 run_password_hashing_checks
 run_crypto_misuse_checks
 run_constant_time_compare_checks
+run_security_assert_checks
 run_file_permission_checks
 
 print_subheader "Hardcoded secrets"

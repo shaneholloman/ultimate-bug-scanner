@@ -30,6 +30,7 @@
 | `security/password_hashing_buggy.py` | Password hashing security | plaintext, MD5, SHA1, unsalted, or legacy Django/Werkzeug/Passlib password hashers |
 | `security/crypto_misuse_buggy.py` | Cryptography misuse security | ECB mode, DES/ARC4-style legacy ciphers, and static IV/nonces in PyCryptodome or `cryptography` APIs |
 | `security/constant_time_compare_buggy.py` | Constant-time comparison security | HMACs, signatures, API keys, CSRF tokens, bearer tokens, or reset tokens compared with `==` or `!=` instead of `compare_digest` |
+| `security/assert_security_buggy.py` | Security-sensitive asserts | authorization, ownership, CSRF, token, API key, or permission checks implemented with `assert` |
 | `security/file_permissions_buggy.py` | Filesystem permission security | world-writable `chmod`/`mkdir`/`os.open` modes and `umask(0)` |
 | `security/debug_host_config_buggy.py` | Debug/host configuration security | production debug flags, debugger-enabled app runs, and wildcard host allow-lists |
 | `security/xml_parser_buggy.py` | XML parser security | request/upload XML parsed by stdlib/lxml parsers or lxml parsers with DTD/entity-expansion flags |
