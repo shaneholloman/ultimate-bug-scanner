@@ -15,6 +15,7 @@
 | `security/debug_host_config_buggy.py` | Debug/host configuration security | production debug flags, debugger-enabled app runs, and wildcard host allow-lists |
 | `security/xml_parser_buggy.py` | XML parser security | request/upload XML parsed by stdlib/lxml parsers or lxml parsers with DTD/entity-expansion flags |
 | `security/random_security_buggy.py` | Security randomness | tokens, sessions, OTPs, salts, and keys generated with the non-cryptographic `random` module |
+| `security/tls_verification_buggy.py` | TLS verification security | `httpx`, `aiohttp`, `urllib3`, and `ssl` configurations that disable certificate or hostname checks |
 | `buggy/mutable_defaults.py` | Function scope issues | mutable defaults, swallowed exceptions, weak hash |
 | `clean/*.py` mirrors | Defensive patterns | safe YAML, parameterized SQL, integer cents |
 

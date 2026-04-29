@@ -2016,6 +2016,65 @@
       }
     },
     {
+      "id": "python-tls-verification-buggy",
+      "description": "Python HTTP/TLS clients should not disable certificate or hostname verification.",
+      "path": "test-suite/python/security/tls_verification_buggy.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "tls",
+        "buggy"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "HTTP/TLS client disables certificate verification"
+        ]
+      }
+    },
+    {
+      "id": "python-tls-verification-clean",
+      "description": "Python HTTP/TLS clients that keep certificate and hostname verification enabled should stay clean.",
+      "path": "test-suite/python/security/tls_verification_clean.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "tls",
+        "clean"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "HTTP/TLS client disables certificate verification"
+        ]
+      }
+    },
+    {
       "id": "python-async-errors-buggy",
       "description": "Python async error path regression (await outside try and fire-and-forget tasks).",
       "path": "test-suite/python/async_errors/buggy",
