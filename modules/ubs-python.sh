@@ -4282,6 +4282,314 @@ PY
 )
 }
 
+run_host_header_poisoning_checks() {
+  print_subheader "Host header trusted for absolute URLs"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable host header poisoning checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Request Host header used to build absolute URL" "Use a configured canonical base URL or validate the host against an allow-list before generating password reset, email, redirect, or callback links"
+        else
+          print_finding "good" "No Host-header-derived absolute URLs detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+REQUEST_NAMES = {'request'}
+URLISH_NAMES = {
+    'url', 'uri', 'link', 'callback', 'redirect', 'next', 'return_to',
+    'reset', 'confirm', 'verify', 'invite', 'activation', 'absolute',
+}
+HOST_SINKS = {
+    'send_mail', 'django.core.mail.send_mail',
+    'EmailMessage', 'django.core.mail.EmailMessage',
+    'EmailMultiAlternatives', 'django.core.mail.EmailMultiAlternatives',
+    'Message', 'flask_mail.Message',
+    'render', 'django.shortcuts.render',
+    'render_template', 'flask.render_template',
+    'render_template_string', 'flask.render_template_string',
+    'jsonify', 'flask.jsonify',
+    'JsonResponse', 'django.http.JsonResponse',
+    'Response', 'flask.Response',
+    'redirect', 'flask.redirect',
+    'HttpResponseRedirect', 'django.http.HttpResponseRedirect',
+    'HttpResponsePermanentRedirect', 'django.http.HttpResponsePermanentRedirect',
+    'RedirectResponse', 'starlette.responses.RedirectResponse',
+}
+SAFE_HOST_FUNCS = {
+    'validate_host', 'validate_allowed_host', 'allowed_host', 'allowlisted_host',
+    'trusted_host', 'is_allowed_host', 'is_trusted_host', 'get_canonical_host',
+    'canonical_host', 'canonical_base_url', 'public_base_url', 'site_base_url',
+    'absolute_url_from_settings', 'build_absolute_url_from_settings',
+    'url_has_allowed_host_and_scheme',
+}
+SAFE_CONFIG_NAMES = {
+    'SITE_URL', 'PUBLIC_BASE_URL', 'BASE_URL', 'CANONICAL_URL',
+    'CANONICAL_BASE_URL', 'CANONICAL_HOST', 'SERVER_NAME',
+    'settings.SITE_URL', 'settings.PUBLIC_BASE_URL', 'settings.BASE_URL',
+    'settings.CANONICAL_URL', 'settings.CANONICAL_BASE_URL',
+    'settings.CANONICAL_HOST', 'settings.SERVER_NAME',
+}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Call):
+        return call_name(node.func)
+    if isinstance(node, ast.Subscript):
+        return call_name(node.value)
+    return ''
+
+def const_string(node):
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = []
+        for elt in target.elts:
+            names.extend(target_names(elt))
+        return names
+    return []
+
+def rooted_at_request(node):
+    if isinstance(node, ast.Name):
+        return node.id in REQUEST_NAMES or node.id.endswith('_request')
+    if isinstance(node, ast.Attribute):
+        return rooted_at_request(node.value)
+    if isinstance(node, ast.Call):
+        return rooted_at_request(node.func)
+    if isinstance(node, ast.Subscript):
+        return rooted_at_request(node.value)
+    return False
+
+def subscript_key(node):
+    if not isinstance(node, ast.Subscript):
+        return None
+    return const_string(node.slice)
+
+def keyword_value(call, key):
+    for keyword in call.keywords:
+        if keyword.arg == key:
+            return keyword.value
+    return None
+
+def truthy_constant(node):
+    return isinstance(node, ast.Constant) and bool(node.value) is True
+
+def name_is_urlish(name):
+    lowered = name.lower()
+    return any(token in lowered for token in URLISH_NAMES)
+
+class HostHeaderPoisoningAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, text, lines):
+        self.path = path
+        self.text = text
+        self.lines = lines
+        self.host_tainted = set()
+        self.safe_values = set()
+        self.issues = []
+        self.seen_lines = set()
+
+    def relative_path(self):
+        try:
+            return str(self.path.relative_to(BASE_DIR))
+        except ValueError:
+            return self.path.name
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        self.issues.append((self.relative_path(), line_no, source_line(self.lines, line_no)))
+
+    def expr_uses_safe_config(self, node):
+        for child in ast.walk(node):
+            name = call_name(child)
+            if name in SAFE_CONFIG_NAMES:
+                return True
+            if isinstance(child, ast.Subscript):
+                owner = call_name(child.value)
+                key = subscript_key(child)
+                if owner.endswith('.config') and key in SAFE_CONFIG_NAMES:
+                    return True
+                if owner in {'os.environ', 'environ'} and key in SAFE_CONFIG_NAMES:
+                    return True
+        return False
+
+    def expr_is_safe(self, node):
+        if isinstance(node, ast.Constant):
+            return True
+        if isinstance(node, ast.Name):
+            return node.id in self.safe_values
+        if self.expr_uses_safe_config(node):
+            return True
+        if isinstance(node, ast.Call):
+            name = call_name(node.func)
+            short = name.rsplit('.', 1)[-1]
+            if name in SAFE_HOST_FUNCS or short in SAFE_HOST_FUNCS:
+                return True
+            if short in {'urljoin', 'urlunsplit', 'urlunparse'} and self.expr_uses_safe_config(node):
+                return True
+        return False
+
+    def expr_is_host_source(self, node):
+        name = call_name(node)
+        if isinstance(node, ast.Call) and rooted_at_request(node.func):
+            short = name.rsplit('.', 1)[-1]
+            return short in {'get_host', 'build_absolute_uri'}
+        if isinstance(node, ast.Attribute) and rooted_at_request(node.value):
+            return node.attr in {'host', 'host_url', 'url_root', 'base_url', 'url'}
+        if isinstance(node, ast.Subscript):
+            key = subscript_key(node)
+            owner = call_name(node.value)
+            if key and key.lower() in {'host', 'http_host', 'x-forwarded-host', 'x_host'}:
+                return rooted_at_request(node.value) or owner.endswith('.headers') or owner.endswith('.META') or owner.endswith('.environ')
+        return False
+
+    def expr_contains_host_taint(self, node):
+        if self.expr_is_safe(node):
+            return False
+        if isinstance(node, ast.Name):
+            return node.id in self.host_tainted
+        if self.expr_is_host_source(node):
+            return True
+        return any(self.expr_contains_host_taint(child) for child in ast.iter_child_nodes(node))
+
+    def mark_assignment(self, names, value, line_no):
+        is_safe = self.expr_is_safe(value)
+        is_tainted = (not is_safe) and self.expr_contains_host_taint(value)
+        for name in names:
+            if is_safe:
+                self.safe_values.add(name)
+                self.host_tainted.discard(name)
+            elif is_tainted:
+                self.host_tainted.add(name)
+                self.safe_values.discard(name)
+                if name_is_urlish(name):
+                    self.remember_issue(line_no)
+            else:
+                self.host_tainted.discard(name)
+                self.safe_values.discard(name)
+
+    def visit_FunctionDef(self, node):
+        old_safe = set(self.safe_values)
+        old_tainted = set(self.host_tainted)
+        self.safe_values.clear()
+        self.host_tainted.clear()
+        for stmt in node.body:
+            self.visit(stmt)
+        self.safe_values = old_safe
+        self.host_tainted = old_tainted
+
+    def visit_AsyncFunctionDef(self, node):
+        self.visit_FunctionDef(node)
+
+    def visit_Assign(self, node):
+        names = [name for target in node.targets for name in target_names(target)]
+        if names:
+            self.mark_assignment(names, node.value, node.lineno)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            names = target_names(node.target)
+            if names:
+                self.mark_assignment(names, node.value, node.lineno)
+        self.generic_visit(node)
+
+    def call_uses_implicit_host(self, node):
+        name = call_name(node.func)
+        short = name.rsplit('.', 1)[-1]
+        if short == 'build_absolute_uri' and rooted_at_request(node.func):
+            return True
+        if short == 'url_for' and truthy_constant(keyword_value(node, '_external')):
+            return not self.expr_uses_safe_config(node)
+        return False
+
+    def call_is_host_sensitive_sink(self, node):
+        name = call_name(node.func)
+        short = name.rsplit('.', 1)[-1]
+        return name in HOST_SINKS or short in HOST_SINKS
+
+    def visit_Call(self, node):
+        if self.call_uses_implicit_host(node):
+            self.remember_issue(node.lineno)
+        elif self.call_is_host_sensitive_sink(node):
+            values = list(node.args) + [keyword.value for keyword in node.keywords]
+            if any(self.expr_contains_host_taint(value) for value in values):
+                self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = HostHeaderPoisoningAnalyzer(path, text, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_ssrf_checks() {
   print_subheader "SSRF-prone outbound HTTP targets"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -8903,6 +9211,7 @@ if [ "$count" -gt 0 ]; then print_finding "critical" "$count" "Insecure tempfile
 
 run_archive_extraction_checks
 run_open_redirect_checks
+run_host_header_poisoning_checks
 run_ssrf_checks
 run_http_timeout_checks
 run_path_traversal_checks

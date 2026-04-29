@@ -15,6 +15,7 @@
 | `security/ldap_injection_buggy.py` | LDAP injection security | request-controlled values reaching LDAP search filters, filter keywords, bind DNs, or modification DNs without LDAP escaping |
 | `security/archive_extraction_buggy.py` | Archive extraction security | tarfile/zipfile `extractall()` without member path validation |
 | `security/open_redirect_buggy.py` | Web redirect security | request-derived Flask/Django/Starlette redirect targets without allow-list validation |
+| `security/host_header_poisoning_buggy.py` | Host header poisoning security | request Host, `get_host()`, `build_absolute_uri()`, or external `url_for()` used to generate absolute links without a configured canonical base URL or host allow-list |
 | `security/ssrf_buggy.py` | Outbound HTTP security | request-derived URLs reaching requests/httpx/aiohttp/urllib clients without host allow-list validation |
 | `security/http_timeout_buggy.py` | Outbound HTTP reliability | requests/httpx/aiohttp/urllib/urllib3 calls or clients without explicit bounded timeouts |
 | `security/path_traversal_buggy.py` | File download/upload security | request-derived paths reaching `open`, `send_file`, `FileResponse`, `Path.read_*`, or uploaded-file `save()` without containment validation |
