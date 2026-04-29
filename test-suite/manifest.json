@@ -3273,6 +3273,59 @@
       }
     },
     {
+      "id": "kotlin-archive-extraction-buggy",
+      "description": "Kotlin zip extraction should validate archive entry paths before writing files.",
+      "path": "test-suite/kotlin/archive_extraction_buggy",
+      "language": "java",
+      "tags": [
+        "kotlin",
+        "security",
+        "archive",
+        "buggy"
+      ],
+      "args": [
+        "--only=java",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
+      "id": "kotlin-archive-extraction-clean",
+      "description": "Kotlin zip extraction with normalized destination containment checks should stay clean.",
+      "path": "test-suite/kotlin/archive_extraction_clean",
+      "language": "java",
+      "tags": [
+        "kotlin",
+        "security",
+        "archive",
+        "clean"
+      ],
+      "args": [
+        "--only=java"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
       "id": "kotlin-type-narrowing-buggy",
       "description": "Kotlin null guards that do not exit before using the guarded value with '!!'.",
       "path": "test-suite/kotlin/type_narrowing/buggy",

@@ -658,16 +658,21 @@ ROOT = Path(sys.argv[1]).resolve()
 BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
 SKIP_DIRS = {'.git', '.gradle', '.mvn', 'build', 'target', 'out', 'node_modules', '.cache'}
 ARCHIVE_HINT_RE = re.compile(
-    r'\b(?:ZipInputStream|ZipFile|ZipEntry|JarInputStream|JarFile|JarEntry)\b'
-    r'|java\.util\.(?:zip|jar)\.',
+    r'\b(?:ZipInputStream|ZipFile|ZipEntry|JarInputStream|JarFile|JarEntry|'
+    r'ZipArchiveInputStream|ZipArchiveEntry|TarArchiveInputStream|TarArchiveEntry|ArchiveEntry)\b'
+    r'|java\.util\.(?:zip|jar)\.|org\.apache\.commons\.compress\.archivers',
 )
-ENTRY_NAME_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\.getName\s*\(\s*\)')
+ENTRY_NAME_EXPR = (
+    r'(?:\b[A-Za-z_][A-Za-z0-9_]*\.(?:getName|getPath)\s*\(\s*\)'
+    r'|\b[A-Za-z_][A-Za-z0-9_]*\.(?:name|path)\b)'
+)
+ENTRY_NAME_RE = re.compile(ENTRY_NAME_EXPR)
 ALIAS_ASSIGN_RE = re.compile(
-    r'\b(?:String|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'
-    r'[A-Za-z_][A-Za-z0-9_]*\.getName\s*\(\s*\)'
+    r'\b(?:String|var|val)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*'
+    r'(?::\s*[^=]+)?=\s*' + ENTRY_NAME_EXPR
 )
 PATH_BUILD_RE = re.compile(
-    r'\b(?:new\s+File|Paths\.get|Path\.of)\s*\(|'
+    r'\b(?:new\s+File|File|Paths\.get|Path\.of)\s*\(|'
     r'\.resolve\s*\(|'
     r'\bFiles\.(?:copy|move|write|writeString|newOutputStream|createDirectories)\s*\('
 )
@@ -748,7 +753,13 @@ def has_safe_context(context):
     if SAFE_NAMED_RE.search(context):
         return True
     lower = context.lower()
-    has_containment = '.startswith(' in lower or 'getcanonicalpath(' in lower or 'getcanonicalfile(' in lower
+    has_containment = (
+        '.startswith(' in lower
+        or 'getcanonicalpath(' in lower
+        or 'getcanonicalfile(' in lower
+        or '.relativize(' in lower
+        or '.relativeto' in lower
+    )
     has_normalization = '.normalize(' in lower or '.torealpath(' in lower or 'getcanonicalpath(' in lower or 'getcanonicalfile(' in lower
     return has_containment and has_normalization
 

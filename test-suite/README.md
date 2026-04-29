@@ -105,6 +105,7 @@ This keeps the JS module maintainable and ensures future contributors extend str
 | C/C++ | `test-suite/cpp/buggy/` | `test-suite/cpp/clean/` | RAII vs leaks, unsafe `strcpy`, overflow/memory hygiene |
 | Rust | `test-suite/rust/buggy/` | `test-suite/rust/clean/` | `unwrap()` panics, async tasks, command injection, float precision, type-narrowing demo |
 | Java | `test-suite/java/buggy/` | `test-suite/java/clean/` | Executor leaks, blocking I/O, SQL and command injection |
+| Kotlin (Java-family scanner) | `test-suite/kotlin/security_buggy/`, `test-suite/kotlin/archive_extraction_buggy/`, `test-suite/kotlin/type_narrowing/buggy/` | `test-suite/kotlin/security_clean/`, `test-suite/kotlin/archive_extraction_clean/`, `test-suite/kotlin/type_narrowing/clean/` | ProcessBuilder shell injection, archive extraction path traversal, nullable guard fallthrough |
 | Ruby | `test-suite/ruby/buggy/` | `test-suite/ruby/clean/` | eval/YAML problems, thread leaks, file cleanup |
 | C# | `test-suite/csharp/buggy/` | `test-suite/csharp/clean/` | Task blocking, weak crypto, `throw ex`, `TryParse` vs `Parse`, null/type narrowing fallthrough, helper-backed resource lifecycle, unobserved `Task.Run`/`StartNew` handles |
 
@@ -245,6 +246,8 @@ Each file contains **intentional bugs** that the scanner should detect:
 | `rust-type-narrowing-clean` | `test-suite/rust/clean/type_narrowing.rs` | Counterexamples that exit early or propagate via `?`, ensuring the heuristic does not report on safe code paths. |
 | `kotlin-type-narrowing-buggy` | `test-suite/kotlin/type_narrowing/buggy` | Kotlin guards that log/continue instead of exiting, then dereference the nullable value with `!!`, ensuring the JVM module spots unsafe usage outside the guard. |
 | `kotlin-type-narrowing-clean` | `test-suite/kotlin/type_narrowing/clean` | Kotlin fixtures that return/throw or use Elvis early so the analyzer proves it suppresses safe flows. |
+| `kotlin-archive-extraction-buggy` | `test-suite/kotlin/archive_extraction_buggy` | Kotlin `ZipFile`/`ZipInputStream` flows that join `entry.name` into destination paths without validating containment. |
+| `kotlin-archive-extraction-clean` | `test-suite/kotlin/archive_extraction_clean` | Kotlin zip extraction that normalizes the destination and verifies `target.startsWith(base)` before writing. |
 | `swift-type-narrowing-buggy` | `test-suite/swift/type_narrowing/buggy` | Swift guard lets, Objective-C bridging casts, and optional-chain bridges that log/continue instead of returning before force-unwrapping, so the helper flags unsafe paths. |
 | `swift-type-narrowing-clean` | `test-suite/swift/type_narrowing/clean` | Swift counterexamples that return/throw or fully bind optionals before use so the analyzer stays quiet on correct patterns. |
 
