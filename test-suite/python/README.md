@@ -6,6 +6,7 @@
 | `buggy/resource_lifecycle.py` | File/task cleanup | missing `close()`/`cancel()` |
 | `buggy/security_injection.py` | Code & command injection, yaml.load, eval | eval/exec, yaml.load without Loader, shell=True |
 | `security/archive_extraction_buggy.py` | Archive extraction security | tarfile/zipfile `extractall()` without member path validation |
+| `security/open_redirect_buggy.py` | Web redirect security | request-derived Flask/Django/Starlette redirect targets without allow-list validation |
 | `buggy/mutable_defaults.py` | Function scope issues | mutable defaults, swallowed exceptions, weak hash |
 | `clean/*.py` mirrors | Defensive patterns | safe YAML, parameterized SQL, integer cents |
 

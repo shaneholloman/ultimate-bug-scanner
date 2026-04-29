@@ -1106,6 +1106,210 @@ PY
 )
 }
 
+run_open_redirect_checks() {
+  print_subheader "Open redirect sinks"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable open redirect checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Unvalidated redirect from request data" "Validate redirect targets with an allow-list or same-origin check before redirecting"
+        else
+          print_finding "good" "No request-derived open redirect sinks detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+REQUEST_SOURCE_RE = re.compile(
+    r'\b(?:flask\.)?request\.(?:args|values|form|GET|POST|query_params|cookies|url|full_path)\b'
+    r'|\b(?:self\.)?request\.(?:GET|POST|query_params|cookies)\b',
+    re.IGNORECASE,
+)
+SAFE_VALIDATOR_RE = re.compile(
+    r'\b(?:url_has_allowed_host_and_scheme|is_safe_url|is_safe_redirect|validate_redirect|'
+    r'validate_next|safe_redirect_target|safe_next_url|same_origin|allowed_redirect|'
+    r'sanitize_redirect|url_for|reverse)\b'
+    r'|\.netloc\b|\.scheme\b',
+    re.IGNORECASE,
+)
+REDIRECT_SINKS = {
+    'redirect',
+    'flask.redirect',
+    'django.shortcuts.redirect',
+    'HttpResponseRedirect',
+    'HttpResponsePermanentRedirect',
+    'RedirectResponse',
+    'starlette.responses.RedirectResponse',
+    'fastapi.responses.RedirectResponse',
+}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+class RedirectAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, text, lines):
+        self.path = path
+        self.text = text
+        self.lines = lines
+        self.tainted = {}
+        self.issues = []
+
+    def segment(self, node):
+        return ast.get_source_segment(self.text, node) or ''
+
+    def is_request_source(self, node):
+        return bool(REQUEST_SOURCE_RE.search(self.segment(node)))
+
+    def has_safe_expression(self, node):
+        return bool(SAFE_VALIDATOR_RE.search(self.segment(node)))
+
+    def names_in(self, node):
+        return {child.id for child in ast.walk(node) if isinstance(child, ast.Name)}
+
+    def tainted_names_in(self, node):
+        return sorted(name for name in self.names_in(node) if name in self.tainted)
+
+    def safe_validation_context(self, names, line_no):
+        start = max(0, line_no - 10)
+        context = '\n'.join(self.lines[start:line_no])
+        if not SAFE_VALIDATOR_RE.search(context):
+            return False
+        if not names:
+            return True
+        return any(re.search(rf'\b{re.escape(name)}\b', context) for name in names)
+
+    def target_names(self, targets):
+        names = []
+        for target in targets:
+            if isinstance(target, ast.Name):
+                names.append(target.id)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                names.extend(elt.id for elt in target.elts if isinstance(elt, ast.Name))
+        return names
+
+    def redirect_argument(self, node):
+        if node.args:
+            return node.args[0]
+        for keyword in node.keywords:
+            if keyword.arg in {'url', 'location', 'redirect_to'}:
+                return keyword.value
+        return None
+
+    def visit_Assign(self, node):
+        names = self.target_names(node.targets)
+        if names:
+            value = node.value
+            if self.has_safe_expression(value):
+                for name in names:
+                    self.tainted.pop(name, None)
+            elif self.is_request_source(value):
+                for name in names:
+                    self.tainted[name] = 'request'
+            else:
+                refs = self.tainted_names_in(value)
+                if refs:
+                    for name in names:
+                        self.tainted[name] = refs[0]
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if isinstance(node.target, ast.Name) and node.value is not None:
+            if self.has_safe_expression(node.value):
+                self.tainted.pop(node.target.id, None)
+            elif self.is_request_source(node.value):
+                self.tainted[node.target.id] = 'request'
+            else:
+                refs = self.tainted_names_in(node.value)
+                if refs:
+                    self.tainted[node.target.id] = refs[0]
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        name = call_name(node.func)
+        short_name = name.rsplit('.', 1)[-1]
+        if name in REDIRECT_SINKS or short_name in REDIRECT_SINKS:
+            arg = self.redirect_argument(node)
+            if arg is not None and not has_ignore(self.lines, node.lineno):
+                direct = self.is_request_source(arg)
+                refs = self.tainted_names_in(arg)
+                if (direct or refs) and not self.has_safe_expression(arg) and not self.safe_validation_context(refs, node.lineno):
+                    try:
+                        rel = self.path.relative_to(BASE_DIR)
+                    except ValueError:
+                        rel = self.path.name
+                    self.issues.append((str(rel), node.lineno, source_line(self.lines, node.lineno)))
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = RedirectAnalyzer(path, text, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 show_ast_samples_from_json() {
   local blob=$1
   [[ -n "$blob" ]] || return 0
@@ -2616,6 +2820,7 @@ count=$("${GREP_RN[@]}" -e "tempfile\.mktemp\(" "$PROJECT_DIR" 2>/dev/null | cou
 if [ "$count" -gt 0 ]; then print_finding "critical" "$count" "Insecure tempfile.mktemp usage" "Use NamedTemporaryFile/mkstemp"; fi
 
 run_archive_extraction_checks
+run_open_redirect_checks
 run_taint_analysis_checks
 fi
 

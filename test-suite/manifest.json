@@ -1485,6 +1485,65 @@
       }
     },
     {
+      "id": "python-open-redirect-buggy",
+      "description": "Python Flask/Django/Starlette redirects should not route request-derived targets without validation.",
+      "path": "test-suite/python/security/open_redirect_buggy.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "redirect",
+        "buggy"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Unvalidated redirect from request data"
+        ]
+      }
+    },
+    {
+      "id": "python-open-redirect-clean",
+      "description": "Python redirects that validate same-origin or route through safe helpers should stay clean.",
+      "path": "test-suite/python/security/open_redirect_clean.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "redirect",
+        "clean"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Unvalidated redirect from request data"
+        ]
+      }
+    },
+    {
       "id": "python-async-errors-buggy",
       "description": "Python async error path regression (await outside try and fire-and-forget tasks).",
       "path": "test-suite/python/async_errors/buggy",
