@@ -1401,6 +1401,267 @@ PY
 )
 }
 
+run_regex_dos_checks() {
+  print_subheader "Request-controlled regex patterns"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable request-controlled regex checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Request-controlled regex pattern reaches regex engine" "Use fixed allow-listed regexes or escape user input with re.escape before building patterns"
+        else
+          print_finding "good" "No request-controlled regex patterns detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+REGEX_SINKS = {'compile', 'match', 'fullmatch', 'search', 'findall', 'finditer', 'split', 'sub', 'subn'}
+PANDAS_REGEX_SINKS = {'contains', 'match', 'fullmatch', 'replace', 'extract', 'extractall', 'split'}
+REQUEST_NAMES = {'request'}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Call):
+        return call_name(node.func)
+    if isinstance(node, ast.Subscript):
+        return call_name(node.value)
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = []
+        for elt in target.elts:
+            names.extend(target_names(elt))
+        return names
+    return []
+
+def keyword_value(node, name):
+    for keyword in getattr(node, 'keywords', []):
+        if keyword.arg == name:
+            return keyword.value
+    return None
+
+def is_false(node):
+    return isinstance(node, ast.Constant) and node.value is False
+
+def rooted_at_request(node):
+    if isinstance(node, ast.Name):
+        return node.id in REQUEST_NAMES
+    if isinstance(node, ast.Attribute):
+        return rooted_at_request(node.value)
+    if isinstance(node, ast.Call):
+        return rooted_at_request(node.func)
+    if isinstance(node, ast.Subscript):
+        return rooted_at_request(node.value)
+    return False
+
+def direct_untrusted_source(node):
+    name = call_name(node)
+    if rooted_at_request(node):
+        return True
+    if isinstance(node, ast.Call) and name in {'input', 'sys.stdin.read', 'sys.stdin.readline'}:
+        return True
+    if isinstance(node, ast.Subscript) and call_name(node.value) in {'sys.argv', 'os.environ'}:
+        return True
+    return False
+
+class RegexPatternAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, text, lines):
+        self.path = path
+        self.text = text
+        self.lines = lines
+        self.regex_modules = {'re', 'regex'}
+        self.regex_functions = {}
+        self.escape_functions = set()
+        self.tainted_patterns = set()
+        self.safe_patterns = set()
+        self.issues = []
+        self.seen_lines = set()
+
+    def relative_path(self):
+        try:
+            return str(self.path.relative_to(BASE_DIR))
+        except ValueError:
+            return self.path.name
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        self.issues.append((self.relative_path(), line_no, source_line(self.lines, line_no)))
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            if alias.name in {'re', 'regex'}:
+                self.regex_modules.add(alias.asname or alias.name)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        if node.module in {'re', 'regex'}:
+            for alias in node.names:
+                local = alias.asname or alias.name
+                if alias.name in REGEX_SINKS:
+                    self.regex_functions[local] = alias.name
+                elif alias.name == 'escape':
+                    self.escape_functions.add(local)
+        self.generic_visit(node)
+
+    def is_regex_escape_call(self, node):
+        if not isinstance(node, ast.Call):
+            return False
+        name = call_name(node.func)
+        if name in self.escape_functions:
+            return True
+        parts = name.split('.')
+        return len(parts) >= 2 and parts[-1] == 'escape' and parts[-2] in self.regex_modules
+
+    def expr_is_sanitized_regex(self, node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return True
+        if isinstance(node, ast.Name):
+            return node.id in self.safe_patterns
+        if self.is_regex_escape_call(node):
+            return True
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return self.expr_is_sanitized_regex(node.left) and self.expr_is_sanitized_regex(node.right)
+        if isinstance(node, ast.JoinedStr):
+            for value in node.values:
+                if isinstance(value, ast.Constant):
+                    continue
+                if isinstance(value, ast.FormattedValue) and self.expr_is_sanitized_regex(value.value):
+                    continue
+                return False
+            return True
+        if isinstance(node, ast.Call) and call_name(node.func) in {'str', 'bytes'} and node.args:
+            return self.expr_is_sanitized_regex(node.args[0])
+        return False
+
+    def expr_contains_untrusted_pattern(self, node):
+        if self.expr_is_sanitized_regex(node):
+            return False
+        if isinstance(node, ast.Name):
+            return node.id in self.tainted_patterns
+        if direct_untrusted_source(node):
+            return True
+        return any(self.expr_contains_untrusted_pattern(child) for child in ast.iter_child_nodes(node))
+
+    def mark_assignment(self, names, value):
+        is_safe = self.expr_is_sanitized_regex(value)
+        is_tainted = (not is_safe) and self.expr_contains_untrusted_pattern(value)
+        for name in names:
+            if is_safe:
+                self.safe_patterns.add(name)
+            else:
+                self.safe_patterns.discard(name)
+            if is_tainted:
+                self.tainted_patterns.add(name)
+            else:
+                self.tainted_patterns.discard(name)
+
+    def visit_Assign(self, node):
+        names = [name for target in node.targets for name in target_names(target)]
+        if names:
+            self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            names = target_names(node.target)
+            if names:
+                self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def regex_pattern_arg(self, node):
+        name = call_name(node.func)
+        short = name.rsplit('.', 1)[-1]
+        parts = name.split('.')
+        if isinstance(node.func, ast.Name) and node.func.id in self.regex_functions:
+            return node.args[0] if node.args else keyword_value(node, 'pattern')
+        if len(parts) >= 2 and parts[-1] in REGEX_SINKS and parts[-2] in self.regex_modules:
+            return node.args[0] if node.args else keyword_value(node, 'pattern')
+        if short in PANDAS_REGEX_SINKS and '.str.' in f'.{name}.':
+            regex_keyword = keyword_value(node, 'regex')
+            if regex_keyword is not None and is_false(regex_keyword):
+                return None
+            return node.args[0] if node.args else keyword_value(node, 'pat')
+        return None
+
+    def visit_Call(self, node):
+        pattern = self.regex_pattern_arg(node)
+        if pattern is not None and self.expr_contains_untrusted_pattern(pattern):
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = RegexPatternAnalyzer(path, text, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_command_injection_checks() {
   print_subheader "Command injection dataflow"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -7159,6 +7420,7 @@ fi
 run_command_injection_checks
 run_sql_injection_checks
 run_nosql_injection_checks
+run_regex_dos_checks
 
 print_subheader "requests verify=False (TLS disabled)"
 count=$("${GREP_RN[@]}" -e "requests\.[a-z]+\([^)]*verify\s*=\s*False" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
