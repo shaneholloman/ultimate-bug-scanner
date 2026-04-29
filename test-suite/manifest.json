@@ -2905,6 +2905,67 @@
       }
     },
     {
+      "id": "python-file-permissions-buggy",
+      "description": "Python code should not create world-writable files/directories or clear the process umask.",
+      "path": "test-suite/python/security/file_permissions_buggy.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "filesystem",
+        "permissions",
+        "buggy"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "World-writable file mode or permissive umask"
+        ]
+      }
+    },
+    {
+      "id": "python-file-permissions-clean",
+      "description": "Python code using private file and directory modes should stay clean.",
+      "path": "test-suite/python/security/file_permissions_clean.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "filesystem",
+        "permissions",
+        "clean"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "World-writable file mode or permissive umask"
+        ]
+      }
+    },
+    {
       "id": "python-debug-host-config-buggy",
       "description": "Python web apps should not ship production debug flags or wildcard host allow-lists.",
       "path": "test-suite/python/security/debug_host_config_buggy.py",
