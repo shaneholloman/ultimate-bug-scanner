@@ -1817,6 +1817,176 @@ PY
 )
 }
 
+run_jwt_verification_checks() {
+  print_subheader "JWT verification bypass"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable JWT verification checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "JWT decode disables signature or claim verification" "Require explicit algorithms and keep signature/expiration/audience/issuer verification enabled"
+        else
+          print_finding "good" "No JWT verification bypass patterns detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+VERIFY_OPTION_KEYS = {'verify_signature', 'verify_exp', 'verify_aud', 'verify_iss', 'verify_iat', 'verify_nbf'}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def const_value(node):
+    return node.value if isinstance(node, ast.Constant) else None
+
+def key_name(node):
+    value = const_value(node)
+    return value if isinstance(value, str) else None
+
+def is_false(node):
+    return const_value(node) is False
+
+def contains_none_algorithm(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value.lower() == 'none'
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return any(contains_none_algorithm(elt) for elt in node.elts)
+    return False
+
+def disables_verify_option(node):
+    if not isinstance(node, ast.Dict):
+        return False
+    for key, value in zip(node.keys, node.values):
+        name = key_name(key)
+        if name in VERIFY_OPTION_KEYS and is_false(value):
+            return True
+    return False
+
+class JWTAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, text, lines):
+        self.path = path
+        self.text = text
+        self.lines = lines
+        self.jwt_modules = {'jwt'}
+        self.decode_names = set()
+        self.issues = []
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if alias.name in {'jwt', 'jose.jwt'}:
+                self.jwt_modules.add(local)
+                self.jwt_modules.add(alias.name)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        module = node.module or ''
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if module in {'jwt', 'jose.jwt'} and alias.name == 'decode':
+                self.decode_names.add(local)
+            elif module == 'jose' and alias.name == 'jwt':
+                self.jwt_modules.add(local)
+        self.generic_visit(node)
+
+    def is_jwt_decode(self, node):
+        name = call_name(node.func)
+        if isinstance(node.func, ast.Name):
+            return node.func.id in self.decode_names
+        return any(name == f'{module}.decode' for module in self.jwt_modules) or name in {'jwt.decode', 'jose.jwt.decode'}
+
+    def call_is_unsafe(self, node):
+        for keyword in node.keywords:
+            if keyword.arg == 'verify' and is_false(keyword.value):
+                return True
+            if keyword.arg == 'options' and disables_verify_option(keyword.value):
+                return True
+            if keyword.arg == 'algorithms' and contains_none_algorithm(keyword.value):
+                return True
+        if len(node.args) > 2 and contains_none_algorithm(node.args[2]):
+            return True
+        if len(node.args) > 3 and disables_verify_option(node.args[3]):
+            return True
+        return False
+
+    def visit_Call(self, node):
+        if not has_ignore(self.lines, node.lineno) and self.is_jwt_decode(node) and self.call_is_unsafe(node):
+            try:
+                rel = self.path.relative_to(BASE_DIR)
+            except ValueError:
+                rel = self.path.name
+            self.issues.append((str(rel), node.lineno, source_line(self.lines, node.lineno)))
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = JWTAnalyzer(path, text, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 show_ast_samples_from_json() {
   local blob=$1
   [[ -n "$blob" ]] || return 0
@@ -3330,6 +3500,7 @@ run_archive_extraction_checks
 run_open_redirect_checks
 run_ssrf_checks
 run_path_traversal_checks
+run_jwt_verification_checks
 run_taint_analysis_checks
 fi
 
