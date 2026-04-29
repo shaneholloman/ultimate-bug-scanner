@@ -1987,6 +1987,268 @@ PY
 )
 }
 
+run_cors_misconfig_checks() {
+  print_subheader "Credentialed wildcard CORS"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable CORS configuration checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "CORS allows credentials with wildcard origins" "Use an explicit origin allow-list whenever cookies or Authorization headers are allowed"
+        else
+          print_finding "good" "No wildcard credentialed CORS configurations detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+ORIGIN_KEYS = {'origins', 'allow_origins'}
+CREDENTIAL_KEYS = {'supports_credentials', 'allow_credentials'}
+DJANGO_WILDCARD_SETTINGS = {'CORS_ALLOW_ALL_ORIGINS', 'CORS_ORIGIN_ALLOW_ALL'}
+DJANGO_ORIGIN_LIST_SETTINGS = {'CORS_ALLOWED_ORIGINS', 'CORS_ORIGIN_WHITELIST'}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    return ''
+
+def const_value(node):
+    return node.value if isinstance(node, ast.Constant) else None
+
+def is_true(node):
+    return const_value(node) is True
+
+def key_name(node):
+    value = const_value(node)
+    return value if isinstance(value, str) else None
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def contains_wildcard_origin(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value.strip() == '*'
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return any(contains_wildcard_origin(elt) for elt in node.elts)
+    if isinstance(node, ast.Dict):
+        return any(contains_wildcard_origin(value) for value in node.values)
+    return False
+
+def dict_has_unsafe_cors_pair(node):
+    if not isinstance(node, ast.Dict):
+        return False
+    saw_origin_key = False
+    has_wildcard = False
+    has_credentials = False
+    for key, value in zip(node.keys, node.values):
+        name = key_name(key)
+        if name in ORIGIN_KEYS:
+            saw_origin_key = True
+            if contains_wildcard_origin(value):
+                has_wildcard = True
+        elif name in CREDENTIAL_KEYS and is_true(value):
+            has_credentials = True
+        elif dict_has_unsafe_cors_pair(value):
+            return True
+    return has_credentials and (has_wildcard or not saw_origin_key)
+
+def keyword_value(call, key):
+    for keyword in call.keywords:
+        if keyword.arg == key:
+            return keyword.value
+    return None
+
+def has_wildcard_origin_kw(call):
+    return any(
+        keyword_value(call, key) is not None and contains_wildcard_origin(keyword_value(call, key))
+        for key in ORIGIN_KEYS
+    )
+
+def has_credentials_kw(call):
+    return any(
+        keyword_value(call, key) is not None and is_true(keyword_value(call, key))
+        for key in CREDENTIAL_KEYS
+    )
+
+def has_send_wildcard_kw(call):
+    value = keyword_value(call, 'send_wildcard')
+    return value is not None and is_true(value)
+
+def resources_are_unsafe(call):
+    resources = keyword_value(call, 'resources')
+    return resources is not None and dict_has_unsafe_cors_pair(resources)
+
+def positional_resources(call):
+    return call.args[1] if len(call.args) > 1 else None
+
+def flask_cors_is_unsafe(call):
+    if resources_are_unsafe(call):
+        return True
+    positional = positional_resources(call)
+    if positional is not None and dict_has_unsafe_cors_pair(positional):
+        return True
+    if not has_credentials_kw(call):
+        return False
+    resources = keyword_value(call, 'resources')
+    if resources is not None and contains_wildcard_origin(resources):
+        return True
+    if has_wildcard_origin_kw(call) or has_send_wildcard_kw(call):
+        return True
+    if positional is not None and contains_wildcard_origin(positional):
+        return True
+    return keyword_value(call, 'origins') is None and keyword_value(call, 'resources') is None and positional is None
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [elt.id for elt in target.elts if isinstance(elt, ast.Name)]
+    return []
+
+class CORSAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, lines):
+        self.path = path
+        self.lines = lines
+        self.cors_calls = {'CORS', 'cross_origin', 'flask_cors.CORS', 'flask_cors.cross_origin'}
+        self.middleware_calls = {'CORSMiddleware', 'starlette.middleware.cors.CORSMiddleware', 'fastapi.middleware.cors.CORSMiddleware'}
+        self.django_wildcard_origin_lines = []
+        self.django_credential_lines = []
+        self.issues = []
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no):
+            return
+        try:
+            rel = self.path.relative_to(BASE_DIR)
+        except ValueError:
+            rel = self.path.name
+        self.issues.append((str(rel), line_no, source_line(self.lines, line_no)))
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if alias.name == 'flask_cors':
+                self.cors_calls.add(f'{local}.CORS')
+                self.cors_calls.add(f'{local}.cross_origin')
+            elif alias.name in {'starlette.middleware.cors', 'fastapi.middleware.cors'}:
+                self.middleware_calls.add(f'{local}.CORSMiddleware')
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        module = node.module or ''
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if module == 'flask_cors' and alias.name in {'CORS', 'cross_origin'}:
+                self.cors_calls.add(local)
+            elif module in {'starlette.middleware.cors', 'fastapi.middleware.cors'} and alias.name == 'CORSMiddleware':
+                self.middleware_calls.add(local)
+        self.generic_visit(node)
+
+    def remember_django_setting(self, name, value, line_no):
+        if name in DJANGO_WILDCARD_SETTINGS and is_true(value):
+            self.django_wildcard_origin_lines.append(line_no)
+        elif name in DJANGO_ORIGIN_LIST_SETTINGS and contains_wildcard_origin(value):
+            self.django_wildcard_origin_lines.append(line_no)
+        elif name == 'CORS_ALLOW_CREDENTIALS' and is_true(value):
+            self.django_credential_lines.append(line_no)
+
+    def visit_Assign(self, node):
+        for target in node.targets:
+            for name in target_names(target):
+                self.remember_django_setting(name, node.value, node.lineno)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        for name in target_names(node.target):
+            if node.value is not None:
+                self.remember_django_setting(name, node.value, node.lineno)
+        self.generic_visit(node)
+
+    def call_is_unsafe(self, node):
+        name = call_name(node.func)
+        if name in self.cors_calls or name.rsplit('.', 1)[-1] in {'CORS', 'cross_origin'}:
+            return flask_cors_is_unsafe(node)
+        if name in self.middleware_calls or name.rsplit('.', 1)[-1] == 'CORSMiddleware':
+            return has_wildcard_origin_kw(node) and has_credentials_kw(node)
+        if name.endswith('.add_middleware') and node.args:
+            middleware_name = call_name(node.args[0])
+            if middleware_name in self.middleware_calls or middleware_name.rsplit('.', 1)[-1] == 'CORSMiddleware':
+                return has_wildcard_origin_kw(node) and has_credentials_kw(node)
+        return False
+
+    def visit_Call(self, node):
+        if self.call_is_unsafe(node):
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+    def finalize(self):
+        if self.django_wildcard_origin_lines and self.django_credential_lines:
+            self.remember_issue(self.django_credential_lines[0])
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = CORSAnalyzer(path, lines)
+    analyzer.visit(tree)
+    analyzer.finalize()
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 show_ast_samples_from_json() {
   local blob=$1
   [[ -n "$blob" ]] || return 0
@@ -3501,6 +3763,7 @@ run_open_redirect_checks
 run_ssrf_checks
 run_path_traversal_checks
 run_jwt_verification_checks
+run_cors_misconfig_checks
 run_taint_analysis_checks
 fi
 
