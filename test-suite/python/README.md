@@ -8,6 +8,7 @@
 | `security/archive_extraction_buggy.py` | Archive extraction security | tarfile/zipfile `extractall()` without member path validation |
 | `security/open_redirect_buggy.py` | Web redirect security | request-derived Flask/Django/Starlette redirect targets without allow-list validation |
 | `security/ssrf_buggy.py` | Outbound HTTP security | request-derived URLs reaching requests/httpx/aiohttp/urllib clients without host allow-list validation |
+| `security/path_traversal_buggy.py` | File download security | request-derived paths reaching `open`, `send_file`, `FileResponse`, or `Path.read_*` without containment validation |
 | `buggy/mutable_defaults.py` | Function scope issues | mutable defaults, swallowed exceptions, weak hash |
 | `clean/*.py` mirrors | Defensive patterns | safe YAML, parameterized SQL, integer cents |
 

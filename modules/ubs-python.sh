@@ -1599,6 +1599,224 @@ PY
 )
 }
 
+run_path_traversal_checks() {
+  print_subheader "Request-derived filesystem paths"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable path traversal checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Request-derived path reaches file read/download sink" "Validate paths with safe_join or a resolved-base containment check before opening or sending files"
+        else
+          print_finding "good" "No request-derived filesystem paths detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+REQUEST_SOURCE_RE = re.compile(
+    r'\b(?:flask\.)?request\.(?:args|values|form|GET|POST|query_params|path_params|match_info|cookies|files|FILES)\b'
+    r'|\b(?:self\.)?request\.(?:GET|POST|query_params|path_params|match_info|FILES)\b',
+    re.IGNORECASE,
+)
+SAFE_VALIDATOR_RE = re.compile(
+    r'\b(?:safe_join|secure_filename|validate_path|validate_file|validate_filename|'
+    r'safe_path|safe_filename|sanitize_path|sanitize_filename|allowed_path|allowed_file|'
+    r'is_safe_path|is_safe_file|commonpath|relative_to|is_relative_to)\b',
+    re.IGNORECASE,
+)
+PATH_METHODS = {'open', 'read_text', 'read_bytes', 'write_text', 'write_bytes'}
+PATH_FUNCTION_SINKS = {
+    'open',
+    'io.open',
+    'send_file',
+    'flask.send_file',
+    'FileResponse',
+    'django.http.FileResponse',
+    'starlette.responses.FileResponse',
+    'fastapi.responses.FileResponse',
+}
+FILE_RESPONSE_SINKS = {'FileResponse', 'django.http.FileResponse', 'starlette.responses.FileResponse', 'fastapi.responses.FileResponse'}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+class PathTraversalAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, text, lines):
+        self.path = path
+        self.text = text
+        self.lines = lines
+        self.tainted = {}
+        self.issues = []
+
+    def segment(self, node):
+        return ast.get_source_segment(self.text, node) or ''
+
+    def is_request_source(self, node):
+        return bool(REQUEST_SOURCE_RE.search(self.segment(node)))
+
+    def has_safe_expression(self, node):
+        return bool(SAFE_VALIDATOR_RE.search(self.segment(node)))
+
+    def names_in(self, node):
+        return {child.id for child in ast.walk(node) if isinstance(child, ast.Name)}
+
+    def tainted_names_in(self, node):
+        return sorted(name for name in self.names_in(node) if name in self.tainted)
+
+    def target_names(self, targets):
+        names = []
+        for target in targets:
+            if isinstance(target, ast.Name):
+                names.append(target.id)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                names.extend(elt.id for elt in target.elts if isinstance(elt, ast.Name))
+        return names
+
+    def safe_validation_context(self, names, line_no):
+        if not names:
+            return False
+        start = max(0, line_no - 12)
+        context = '\n'.join(self.lines[start:line_no])
+        if not SAFE_VALIDATOR_RE.search(context):
+            return False
+        return any(re.search(rf'\b{re.escape(name)}\b', context) for name in names)
+
+    def mark_assignment(self, names, value):
+        if self.has_safe_expression(value):
+            for name in names:
+                self.tainted.pop(name, None)
+            return
+        if self.is_request_source(value):
+            for name in names:
+                self.tainted[name] = 'request'
+            return
+        refs = self.tainted_names_in(value)
+        if refs:
+            for name in names:
+                self.tainted[name] = refs[0]
+            return
+        for name in names:
+            self.tainted.pop(name, None)
+
+    def visit_Assign(self, node):
+        names = self.target_names(node.targets)
+        if names:
+            self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if isinstance(node.target, ast.Name) and node.value is not None:
+            self.mark_assignment([node.target.id], node.value)
+        self.generic_visit(node)
+
+    def sink_argument(self, node):
+        name = call_name(node.func)
+        short_name = name.rsplit('.', 1)[-1]
+        if name in PATH_FUNCTION_SINKS or short_name in PATH_FUNCTION_SINKS:
+            for keyword in node.keywords:
+                if keyword.arg in {'file', 'filename', 'path'}:
+                    return keyword.value
+            if node.args:
+                if (name in FILE_RESPONSE_SINKS or short_name in FILE_RESPONSE_SINKS) and self.call_is_open(node.args[0]):
+                    return None
+                return node.args[0]
+        if isinstance(node.func, ast.Attribute) and short_name in PATH_METHODS:
+            return node.func.value
+        return None
+
+    def call_is_open(self, node):
+        if not isinstance(node, ast.Call):
+            return False
+        name = call_name(node.func)
+        short_name = name.rsplit('.', 1)[-1]
+        return name in {'open', 'io.open'} or short_name == 'open'
+
+    def visit_Call(self, node):
+        if has_ignore(self.lines, node.lineno):
+            self.generic_visit(node)
+            return
+        arg = self.sink_argument(node)
+        if arg is not None:
+            direct = self.is_request_source(arg)
+            refs = self.tainted_names_in(arg)
+            if (direct or refs) and not self.has_safe_expression(arg) and not self.safe_validation_context(refs, node.lineno):
+                try:
+                    rel = self.path.relative_to(BASE_DIR)
+                except ValueError:
+                    rel = self.path.name
+                self.issues.append((str(rel), node.lineno, source_line(self.lines, node.lineno)))
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = PathTraversalAnalyzer(path, text, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 show_ast_samples_from_json() {
   local blob=$1
   [[ -n "$blob" ]] || return 0
@@ -3111,6 +3329,7 @@ if [ "$count" -gt 0 ]; then print_finding "critical" "$count" "Insecure tempfile
 run_archive_extraction_checks
 run_open_redirect_checks
 run_ssrf_checks
+run_path_traversal_checks
 run_taint_analysis_checks
 fi
 
