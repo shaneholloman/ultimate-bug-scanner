@@ -100,7 +100,7 @@ This keeps the JS module maintainable and ensures future contributors extend str
 | Language | Buggy path | Clean path | Highlights |
 |----------|------------|------------|------------|
 | JavaScript/TypeScript | `test-suite/buggy/`, `test-suite/js/buggy/`, `test-suite/js/type_narrowing/` | `test-suite/clean/`, `test-suite/js/clean/`, `test-suite/js/type_narrowing/clean/` | 20 core files + framework + realistic + edge cases plus dedicated type-narrowing fixtures |
-| Python | `test-suite/python/buggy/`, `test-suite/python/security/` | `test-suite/python/clean/`, `test-suite/python/security/` | Async/security/resource fixtures + mutable defaults, shell injection, archive traversal, open redirects, SSRF, path traversal, JWT verification, credentialed CORS, session cookie flags, debug/host configuration, unsafe XML parsing, insecure security randomness, disabled TLS verification |
+| Python | `test-suite/python/buggy/`, `test-suite/python/security/` | `test-suite/python/clean/`, `test-suite/python/security/` | Async/security/resource fixtures + mutable defaults, shell injection, archive traversal, open redirects, SSRF, path traversal, JWT verification, credentialed CORS, session cookie flags, CSRF disables, debug/host configuration, unsafe XML parsing, insecure security randomness, disabled TLS verification |
 | Go | `test-suite/golang/buggy/` | `test-suite/golang/clean/` | Concurrency, HTTP safety, context leaks, ticker/perf issues |
 | C/C++ | `test-suite/cpp/buggy/` | `test-suite/cpp/clean/` | RAII vs leaks, unsafe `strcpy`, overflow/memory hygiene |
 | Rust | `test-suite/rust/buggy/` | `test-suite/rust/clean/` | `unwrap()` panics, async tasks, command injection, float precision, type-narrowing demo |

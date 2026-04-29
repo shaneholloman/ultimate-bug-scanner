@@ -2450,6 +2450,250 @@ PY
 )
 }
 
+run_csrf_disable_checks() {
+  print_subheader "CSRF protection disabled"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable CSRF disable checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "CSRF protection explicitly disabled" "Remove CSRF exemptions or require request signatures / same-site tokens on state-changing routes"
+        else
+          print_finding "good" "No explicit CSRF disable patterns detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+FALSE_DISABLE_KEYS = {'WTF_CSRF_ENABLED', 'WTF_CSRF_CHECK_DEFAULT', 'CSRF_ENABLED', 'CSRF_CHECK_DEFAULT'}
+TRUE_DISABLE_KEYS = {'CSRF_EXEMPT'}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    return ''
+
+def const_value(node):
+    return node.value if isinstance(node, ast.Constant) else None
+
+def is_false(node):
+    value = const_value(node)
+    return value is False or value == 0 or (isinstance(value, str) and value.strip().lower() in {'0', 'false', 'no', 'off'})
+
+def is_true(node):
+    value = const_value(node)
+    return value is True or value == 1 or (isinstance(value, str) and value.strip().lower() in {'1', 'true', 'yes', 'on'})
+
+def key_name(node):
+    value = const_value(node)
+    return value if isinstance(value, str) else None
+
+def subscript_key(node):
+    if not isinstance(node, ast.Subscript):
+        return None
+    return key_name(node.slice)
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [elt.id for elt in target.elts if isinstance(elt, ast.Name)]
+    return []
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def keyword_value(call, key):
+    for keyword in call.keywords:
+        if keyword.arg == key:
+            return keyword.value
+    return None
+
+def csrf_owner(name):
+    return 'csrf' in name.lower() or 'xsrf' in name.lower()
+
+def config_value_disables_csrf(name, value):
+    if not name:
+        return False
+    key = name.upper()
+    return (key in FALSE_DISABLE_KEYS and is_false(value)) or (key in TRUE_DISABLE_KEYS and is_true(value))
+
+def dict_disables_csrf(node):
+    if not isinstance(node, ast.Dict):
+        return False
+    return any(config_value_disables_csrf(key_name(key), value) for key, value in zip(node.keys, node.values))
+
+class CSRFDisableAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, lines):
+        self.path = path
+        self.lines = lines
+        self.csrf_exempt_names = {'csrf_exempt'}
+        self.csrf_objects = set()
+        self.issues = []
+        self.seen_lines = set()
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        try:
+            rel = self.path.relative_to(BASE_DIR)
+        except ValueError:
+            rel = self.path.name
+        self.issues.append((str(rel), line_no, source_line(self.lines, line_no)))
+
+    def visit_ImportFrom(self, node):
+        module = node.module or ''
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if module == 'django.views.decorators.csrf' and alias.name == 'csrf_exempt':
+                self.csrf_exempt_names.add(local)
+        self.generic_visit(node)
+
+    def check_config_value(self, name, value, line_no):
+        if config_value_disables_csrf(name, value):
+            self.remember_issue(line_no)
+
+    def call_creates_csrf_object(self, node):
+        if not isinstance(node, ast.Call):
+            return False
+        return call_name(node.func).rsplit('.', 1)[-1] in {'CSRFProtect', 'CsrfProtect', 'SeaSurf'}
+
+    def decorator_disables_csrf(self, decorator):
+        expr = decorator.func if isinstance(decorator, ast.Call) else decorator
+        name = call_name(expr)
+        short = name.rsplit('.', 1)[-1]
+        owner = name.rsplit('.', 1)[0] if '.' in name else ''
+        return (
+            name in self.csrf_exempt_names
+            or short == 'csrf_exempt'
+            or (short == 'exempt' and (csrf_owner(owner) or owner in self.csrf_objects))
+        )
+
+    def call_disables_csrf(self, node):
+        name = call_name(node.func)
+        short = name.rsplit('.', 1)[-1]
+        owner = name.rsplit('.', 1)[0] if '.' in name else ''
+        if name in self.csrf_exempt_names or short == 'csrf_exempt':
+            return True
+        if short == 'exempt' and (csrf_owner(owner) or owner in self.csrf_objects):
+            return True
+        enabled = keyword_value(node, 'enabled')
+        if enabled is not None and is_false(enabled) and call_name(node.func).rsplit('.', 1)[-1] in {'CSRFProtect', 'CsrfProtect', 'SeaSurf'}:
+            return True
+        if name.endswith('.config.update') or name.endswith('.config.from_mapping') or name in {'config.update', 'config.from_mapping'}:
+            return any(keyword.arg is not None and self.keyword_disables_csrf(keyword) for keyword in node.keywords) or any(dict_disables_csrf(arg) for arg in node.args)
+        return False
+
+    def keyword_disables_csrf(self, keyword):
+        if keyword.arg is None:
+            return False
+        return config_value_disables_csrf(keyword.arg, keyword.value)
+
+    def visit_Assign(self, node):
+        for target in node.targets:
+            for name in target_names(target):
+                if self.call_creates_csrf_object(node.value):
+                    self.csrf_objects.add(name)
+                self.check_config_value(name, node.value, node.lineno)
+            key = subscript_key(target)
+            if key is not None:
+                self.check_config_value(key, node.value, node.lineno)
+            if isinstance(target, ast.Attribute):
+                self.check_config_value(target.attr, node.value, node.lineno)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            for name in target_names(node.target):
+                self.check_config_value(name, node.value, node.lineno)
+            key = subscript_key(node.target)
+            if key is not None:
+                self.check_config_value(key, node.value, node.lineno)
+            if isinstance(node.target, ast.Attribute):
+                self.check_config_value(node.target.attr, node.value, node.lineno)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node):
+        for decorator in node.decorator_list:
+            if self.decorator_disables_csrf(decorator):
+                self.remember_issue(getattr(decorator, 'lineno', node.lineno))
+        self.generic_visit(node)
+
+    def visit_AsyncFunctionDef(self, node):
+        for decorator in node.decorator_list:
+            if self.decorator_disables_csrf(decorator):
+                self.remember_issue(getattr(decorator, 'lineno', node.lineno))
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        if self.call_disables_csrf(node):
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = CSRFDisableAnalyzer(path, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_debug_host_config_checks() {
   print_subheader "Debug mode and host allow-list"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -4854,7 +5098,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_skip 7; then
 print_header "7. SECURITY VULNERABILITIES"
-print_category "Detects: code injection, unsafe deserialization, weak crypto, TLS off" \
+print_category "Detects: code injection, unsafe deserialization, weak crypto, TLS/CSRF off" \
   "Security bugs expose users to attacks and data breaches."
 
 print_subheader "eval/exec usage"
@@ -4927,6 +5171,7 @@ run_path_traversal_checks
 run_jwt_verification_checks
 run_cors_misconfig_checks
 run_cookie_security_checks
+run_csrf_disable_checks
 run_debug_host_config_checks
 run_xml_parser_security_checks
 run_insecure_random_security_checks
