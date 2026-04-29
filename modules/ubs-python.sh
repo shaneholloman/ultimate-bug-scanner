@@ -2694,6 +2694,245 @@ PY
 )
 }
 
+run_template_autoescape_checks() {
+  print_subheader "Template autoescape disabled"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable template autoescape checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Template autoescape explicitly disabled" "Keep template autoescape enabled for HTML/XML templates; mark only audited trusted fragments safe"
+        else
+          print_finding "good" "No explicit template autoescape disables detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+ENV_FACTORY_NAMES = {'Environment', 'Template', 'SandboxedEnvironment'}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    return ''
+
+def const_value(node):
+    return node.value if isinstance(node, ast.Constant) else None
+
+def is_false(node):
+    value = const_value(node)
+    return value is False or value == 0 or (isinstance(value, str) and value.strip().lower() in {'0', 'false', 'no', 'off'})
+
+def returns_false(node):
+    if isinstance(node, ast.Lambda):
+        return is_false(node.body)
+    return False
+
+def disables_autoescape_value(node):
+    return is_false(node) or returns_false(node)
+
+def key_name(node):
+    value = const_value(node)
+    return value if isinstance(value, str) else None
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def keyword_value(call, key):
+    for keyword in call.keywords:
+        if keyword.arg == key:
+            return keyword.value
+    return None
+
+def dict_has_autoescape_false(node):
+    if not isinstance(node, ast.Dict):
+        return False
+    return any(key_name(key) == 'autoescape' and disables_autoescape_value(value) for key, value in zip(node.keys, node.values))
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Attribute):
+        return [call_name(target)]
+    return []
+
+def subscript_key(node):
+    if not isinstance(node, ast.Subscript):
+        return None
+    return key_name(node.slice)
+
+def has_jinja_context(name):
+    lowered = name.lower()
+    return 'jinja' in lowered or 'template' in lowered or lowered.endswith('autoescape')
+
+class TemplateAutoescapeAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, lines):
+        self.path = path
+        self.lines = lines
+        self.jinja_modules = {'jinja2'}
+        self.env_factories = set(ENV_FACTORY_NAMES)
+        self.select_autoescape_names = {'select_autoescape'}
+        self.issues = []
+        self.seen_lines = set()
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        try:
+            rel = self.path.relative_to(BASE_DIR)
+        except ValueError:
+            rel = self.path.name
+        self.issues.append((str(rel), line_no, source_line(self.lines, line_no)))
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            local = alias.asname or alias.name.split('.')[0]
+            if alias.name == 'jinja2':
+                self.jinja_modules.add(local)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        module = node.module or ''
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if module in {'jinja2', 'jinja2.environment', 'jinja2.sandbox'}:
+                if alias.name in ENV_FACTORY_NAMES:
+                    self.env_factories.add(local)
+                elif alias.name == 'select_autoescape':
+                    self.select_autoescape_names.add(local)
+        self.generic_visit(node)
+
+    def is_env_factory_call(self, name):
+        short = name.rsplit('.', 1)[-1]
+        if name in self.env_factories or short in self.env_factories:
+            return True
+        if '.' not in name:
+            return False
+        first = name.split('.', 1)[0]
+        return first in self.jinja_modules and short in ENV_FACTORY_NAMES
+
+    def is_select_autoescape_call(self, name):
+        short = name.rsplit('.', 1)[-1]
+        if name in self.select_autoescape_names or short in self.select_autoescape_names:
+            return True
+        if '.' not in name:
+            return False
+        first = name.split('.', 1)[0]
+        return first in self.jinja_modules and short == 'select_autoescape'
+
+    def call_disables_autoescape(self, node):
+        name = call_name(node.func)
+        autoescape = keyword_value(node, 'autoescape')
+        if autoescape is not None and disables_autoescape_value(autoescape) and self.is_env_factory_call(name):
+            return True
+        if self.is_select_autoescape_call(name):
+            default = keyword_value(node, 'default')
+            default_for_string = keyword_value(node, 'default_for_string')
+            if default is not None and is_false(default):
+                return True
+            if default_for_string is not None and is_false(default_for_string):
+                return True
+        if name.endswith('.jinja_options.update') or name.endswith('.jinja_env.options.update'):
+            return any(keyword.arg == 'autoescape' and disables_autoescape_value(keyword.value) for keyword in node.keywords) or any(dict_has_autoescape_false(arg) for arg in node.args)
+        return False
+
+    def visit_Assign(self, node):
+        for target in node.targets:
+            key = subscript_key(target)
+            target_name = call_name(target)
+            if key == 'autoescape' and has_jinja_context(target_name) and disables_autoescape_value(node.value):
+                self.remember_issue(node.lineno)
+            elif isinstance(target, ast.Attribute) and target.attr == 'autoescape' and has_jinja_context(call_name(target.value)) and disables_autoescape_value(node.value):
+                self.remember_issue(node.lineno)
+            elif any(has_jinja_context(name) for name in target_names(target)) and dict_has_autoescape_false(node.value):
+                self.remember_issue(node.lineno)
+            elif isinstance(target, ast.Name) and target.id == 'autoescape' and disables_autoescape_value(node.value):
+                self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            key = subscript_key(node.target)
+            target_name = call_name(node.target)
+            if key == 'autoescape' and has_jinja_context(target_name) and disables_autoescape_value(node.value):
+                self.remember_issue(node.lineno)
+            elif isinstance(node.target, ast.Attribute) and node.target.attr == 'autoescape' and has_jinja_context(call_name(node.target.value)) and disables_autoescape_value(node.value):
+                self.remember_issue(node.lineno)
+            elif any(has_jinja_context(name) for name in target_names(node.target)) and dict_has_autoescape_false(node.value):
+                self.remember_issue(node.lineno)
+            elif isinstance(node.target, ast.Name) and node.target.id == 'autoescape' and disables_autoescape_value(node.value):
+                self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        if self.call_disables_autoescape(node):
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = TemplateAutoescapeAnalyzer(path, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_debug_host_config_checks() {
   print_subheader "Debug mode and host allow-list"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -5098,7 +5337,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_skip 7; then
 print_header "7. SECURITY VULNERABILITIES"
-print_category "Detects: code injection, unsafe deserialization, weak crypto, TLS/CSRF off" \
+print_category "Detects: code injection, unsafe deserialization, weak crypto, TLS/CSRF/autoescape off" \
   "Security bugs expose users to attacks and data breaches."
 
 print_subheader "eval/exec usage"
@@ -5172,6 +5411,7 @@ run_jwt_verification_checks
 run_cors_misconfig_checks
 run_cookie_security_checks
 run_csrf_disable_checks
+run_template_autoescape_checks
 run_debug_host_config_checks
 run_xml_parser_security_checks
 run_insecure_random_security_checks

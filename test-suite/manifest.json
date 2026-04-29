@@ -1898,6 +1898,65 @@
       }
     },
     {
+      "id": "python-template-autoescape-buggy",
+      "description": "Python Jinja2/Flask template environments should not explicitly disable autoescape.",
+      "path": "test-suite/python/security/template_autoescape_buggy.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "xss",
+        "buggy"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Template autoescape explicitly disabled"
+        ]
+      }
+    },
+    {
+      "id": "python-template-autoescape-clean",
+      "description": "Python Jinja2/Flask template environments with autoescape enabled should stay clean.",
+      "path": "test-suite/python/security/template_autoescape_clean.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "xss",
+        "clean"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Template autoescape explicitly disabled"
+        ]
+      }
+    },
+    {
       "id": "python-debug-host-config-buggy",
       "description": "Python web apps should not ship production debug flags or wildcard host allow-lists.",
       "path": "test-suite/python/security/debug_host_config_buggy.py",
