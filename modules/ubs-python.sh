@@ -2249,6 +2249,207 @@ PY
 )
 }
 
+run_cookie_security_checks() {
+  print_subheader "Cookie/session security flags"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable cookie/session checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Insecure web cookie/session configuration" "Set Secure and HttpOnly on session/CSRF cookies and avoid SameSite=None without Secure"
+        else
+          print_finding "good" "No insecure cookie/session flags detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+FALSE_IS_BAD = {'SESSION_COOKIE_SECURE', 'CSRF_COOKIE_SECURE', 'SESSION_COOKIE_HTTPONLY', 'CSRF_COOKIE_HTTPONLY'}
+SAMESITE_SETTINGS = {'SESSION_COOKIE_SAMESITE', 'CSRF_COOKIE_SAMESITE'}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    return ''
+
+def const_value(node):
+    return node.value if isinstance(node, ast.Constant) else None
+
+def is_false(node):
+    return const_value(node) is False
+
+def is_true(node):
+    return const_value(node) is True
+
+def is_samesite_none(node):
+    value = const_value(node)
+    if value is None or value is False:
+        return True
+    return isinstance(value, str) and value.lower() == 'none'
+
+def key_name(node):
+    value = const_value(node)
+    return value if isinstance(value, str) else None
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def keyword_value(call, key):
+    for keyword in call.keywords:
+        if keyword.arg == key:
+            return keyword.value
+    return None
+
+def subscript_key(node):
+    if not isinstance(node, ast.Subscript):
+        return None
+    return key_name(node.slice)
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [elt.id for elt in target.elts if isinstance(elt, ast.Name)]
+    return []
+
+class CookieSecurityAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, lines):
+        self.path = path
+        self.lines = lines
+        self.secure_true_settings = set()
+        self.samesite_candidates = []
+        self.issues = []
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no):
+            return
+        try:
+            rel = self.path.relative_to(BASE_DIR)
+        except ValueError:
+            rel = self.path.name
+        self.issues.append((str(rel), line_no, source_line(self.lines, line_no)))
+
+    def check_setting_value(self, name, value, line_no):
+        if name in FALSE_IS_BAD and is_false(value):
+            self.remember_issue(line_no)
+        elif name in {'SESSION_COOKIE_SECURE', 'CSRF_COOKIE_SECURE'} and is_true(value):
+            self.secure_true_settings.add(name)
+        elif name in SAMESITE_SETTINGS and is_samesite_none(value):
+            self.samesite_candidates.append((name, line_no))
+
+    def visit_Assign(self, node):
+        for target in node.targets:
+            for name in target_names(target):
+                self.check_setting_value(name, node.value, node.lineno)
+            key = subscript_key(target)
+            if key is not None:
+                self.check_setting_value(key, node.value, node.lineno)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            for name in target_names(node.target):
+                self.check_setting_value(name, node.value, node.lineno)
+            key = subscript_key(node.target)
+            if key is not None:
+                self.check_setting_value(key, node.value, node.lineno)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        name = call_name(node.func)
+        if name.endswith('.config.update') or name.endswith('.config.from_mapping') or name in {'config.update', 'config.from_mapping'}:
+            secure_true = any(keyword.arg == 'SESSION_COOKIE_SECURE' and is_true(keyword.value) for keyword in node.keywords)
+            for keyword in node.keywords:
+                if keyword.arg is None:
+                    continue
+                if keyword.arg in FALSE_IS_BAD:
+                    self.check_setting_value(keyword.arg, keyword.value, node.lineno)
+                elif keyword.arg in SAMESITE_SETTINGS and is_samesite_none(keyword.value) and not secure_true:
+                    self.remember_issue(node.lineno)
+
+        short_name = name.rsplit('.', 1)[-1]
+        if short_name in {'set_cookie', 'set_signed_cookie'}:
+            secure = keyword_value(node, 'secure')
+            httponly = keyword_value(node, 'httponly')
+            samesite = keyword_value(node, 'samesite')
+            if secure is not None and is_false(secure):
+                self.remember_issue(node.lineno)
+            if httponly is not None and is_false(httponly):
+                self.remember_issue(node.lineno)
+            if samesite is not None and is_samesite_none(samesite) and not (secure is not None and is_true(secure)):
+                self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+    def finalize(self):
+        for name, line_no in self.samesite_candidates:
+            secure_key = 'CSRF_COOKIE_SECURE' if name.startswith('CSRF_') else 'SESSION_COOKIE_SECURE'
+            if secure_key not in self.secure_true_settings:
+                self.remember_issue(line_no)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = CookieSecurityAnalyzer(path, lines)
+    analyzer.visit(tree)
+    analyzer.finalize()
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 show_ast_samples_from_json() {
   local blob=$1
   [[ -n "$blob" ]] || return 0
@@ -3764,6 +3965,7 @@ run_ssrf_checks
 run_path_traversal_checks
 run_jwt_verification_checks
 run_cors_misconfig_checks
+run_cookie_security_checks
 run_taint_analysis_checks
 fi
 

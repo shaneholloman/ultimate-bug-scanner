@@ -11,6 +11,7 @@
 | `security/path_traversal_buggy.py` | File download security | request-derived paths reaching `open`, `send_file`, `FileResponse`, or `Path.read_*` without containment validation |
 | `security/jwt_verification_buggy.py` | JWT verification security | `jwt.decode` calls that disable signature/claim checks or allow `algorithms=["none"]` |
 | `security/cors_misconfig_buggy.py` | CORS configuration security | credentialed Flask-CORS, Starlette/FastAPI, or Django CORS configs that allow wildcard origins |
+| `security/cookie_security_buggy.py` | Cookie/session security | Django/Flask cookie settings or response cookies that disable Secure/HttpOnly or use SameSite=None without Secure |
 | `buggy/mutable_defaults.py` | Function scope issues | mutable defaults, swallowed exceptions, weak hash |
 | `clean/*.py` mirrors | Defensive patterns | safe YAML, parameterized SQL, integer cents |
 
