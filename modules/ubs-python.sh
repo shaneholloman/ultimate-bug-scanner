@@ -2913,6 +2913,228 @@ PY
 )
 }
 
+run_insecure_random_security_checks() {
+  print_subheader "Security-sensitive random module usage"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable security randomness checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Security token generated with non-cryptographic random" "Use secrets.token_urlsafe/token_hex/randbelow or random.SystemRandom for tokens, sessions, OTPs, salts, and keys"
+        else
+          print_finding "good" "No security-sensitive random module usage detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+RANDOM_FUNCS = {'random', 'randint', 'randrange', 'choice', 'choices', 'sample', 'shuffle', 'getrandbits', 'randbytes', 'uniform'}
+SECURITY_NAME_RE = re.compile(r'(token|secret|session|csrf|nonce|otp|password|passwd|api_?key|auth|salt|reset|invite|verification|cookie|credential|signing|hmac|jwt|key)', re.IGNORECASE)
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Call):
+        return call_name(node.func)
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Attribute):
+        return [target.attr]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = []
+        for elt in target.elts:
+            names.extend(target_names(elt))
+        return names
+    return []
+
+def expr_has_security_name(*parts):
+    return any(SECURITY_NAME_RE.search(part or '') for part in parts)
+
+class SecurityRandomAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, lines):
+        self.path = path
+        self.lines = lines
+        self.random_aliases = {'random'}
+        self.random_functions = set()
+        self.random_instances = set()
+        self.safe_instances = set()
+        self.function_stack = []
+        self.issues = []
+        self.seen_lines = set()
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no):
+            return
+        if line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        try:
+            rel = self.path.relative_to(BASE_DIR)
+        except ValueError:
+            rel = self.path.name
+        self.issues.append((str(rel), line_no, source_line(self.lines, line_no)))
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            local = alias.asname or alias.name.split('.')[0]
+            if alias.name == 'random':
+                self.random_aliases.add(local)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        module = node.module or ''
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if module == 'random' and alias.name in RANDOM_FUNCS:
+                self.random_functions.add(local)
+            elif module == 'random' and alias.name == 'Random':
+                self.random_functions.add(local)
+            elif module == 'random' and alias.name == 'SystemRandom':
+                self.safe_instances.add(local)
+        self.generic_visit(node)
+
+    def is_random_constructor(self, node):
+        if not isinstance(node, ast.Call):
+            return False
+        name = call_name(node.func)
+        if name in self.random_functions and name.endswith('Random') and name not in self.safe_instances:
+            return True
+        return any(name == f'{alias}.Random' for alias in self.random_aliases)
+
+    def is_insecure_random_call(self, node):
+        if not isinstance(node, ast.Call):
+            return False
+        name = call_name(node.func)
+        short = name.rsplit('.', 1)[-1]
+        if short not in RANDOM_FUNCS:
+            return False
+        if name in self.random_functions:
+            return True
+        if '.' in name:
+            prefix = name.rsplit('.', 1)[0]
+            if 'SystemRandom' in prefix.split('.'):
+                return False
+            first = prefix.split('.', 1)[0]
+            return first in self.random_aliases or first in self.random_instances
+        return False
+
+    def expr_uses_insecure_random(self, node):
+        return any(isinstance(child, ast.Call) and self.is_insecure_random_call(child) for child in ast.walk(node))
+
+    def visit_FunctionDef(self, node):
+        self.function_stack.append(node.name)
+        self.generic_visit(node)
+        self.function_stack.pop()
+
+    def visit_AsyncFunctionDef(self, node):
+        self.function_stack.append(node.name)
+        self.generic_visit(node)
+        self.function_stack.pop()
+
+    def visit_Assign(self, node):
+        names = []
+        for target in node.targets:
+            names.extend(target_names(target))
+        if self.is_random_constructor(node.value):
+            self.random_instances.update(names)
+        elif names and expr_has_security_name(*names) and self.expr_uses_insecure_random(node.value):
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        names = target_names(node.target)
+        if node.value is not None:
+            if self.is_random_constructor(node.value):
+                self.random_instances.update(names)
+            elif names and expr_has_security_name(*names) and self.expr_uses_insecure_random(node.value):
+                self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+    def visit_Return(self, node):
+        current = self.function_stack[-1] if self.function_stack else ''
+        if node.value is not None and expr_has_security_name(current) and self.expr_uses_insecure_random(node.value):
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        if self.expr_uses_insecure_random(node):
+            name = call_name(node.func)
+            keyword_names = [keyword.arg or '' for keyword in node.keywords]
+            line = source_line(self.lines, node.lineno)
+            if expr_has_security_name(name, line, *keyword_names):
+                self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = SecurityRandomAnalyzer(path, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 show_ast_samples_from_json() {
   local blob=$1
   [[ -n "$blob" ]] || return 0
@@ -4431,6 +4653,7 @@ run_cors_misconfig_checks
 run_cookie_security_checks
 run_debug_host_config_checks
 run_xml_parser_security_checks
+run_insecure_random_security_checks
 run_taint_analysis_checks
 fi
 

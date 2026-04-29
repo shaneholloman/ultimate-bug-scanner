@@ -1957,6 +1957,65 @@
       }
     },
     {
+      "id": "python-random-security-buggy",
+      "description": "Python security tokens, sessions, OTPs, and keys should not be generated with the non-cryptographic random module.",
+      "path": "test-suite/python/security/random_security_buggy.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "crypto",
+        "buggy"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Security token generated with non-cryptographic random"
+        ]
+      }
+    },
+    {
+      "id": "python-random-security-clean",
+      "description": "Python secrets and SystemRandom security helpers should not trigger random-module security-token findings.",
+      "path": "test-suite/python/security/random_security_clean.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "crypto",
+        "clean"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Security token generated with non-cryptographic random"
+        ]
+      }
+    },
+    {
       "id": "python-async-errors-buggy",
       "description": "Python async error path regression (await outside try and fire-and-forget tasks).",
       "path": "test-suite/python/async_errors/buggy",
