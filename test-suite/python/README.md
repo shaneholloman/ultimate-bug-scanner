@@ -23,6 +23,7 @@
 | `security/cookie_security_buggy.py` | Cookie/session security | Django/Flask cookie settings or response cookies that disable Secure/HttpOnly or use SameSite=None without Secure |
 | `security/csrf_disable_buggy.py` | CSRF protection security | Django `csrf_exempt`, Flask-WTF exemptions, and settings that disable CSRF checks |
 | `security/template_autoescape_buggy.py` | Template/XSS security | Jinja2/Flask template environments and options that disable autoescape |
+| `security/safe_html_xss_buggy.py` | Safe HTML/XSS security | request-controlled values passed to `mark_safe`, `Markup`, `SafeString`, or related safe-HTML APIs without escaping or sanitization |
 | `security/mass_assignment_buggy.py` | Mass-assignment security | request dictionaries passed into model constructors, ORM creates/updates, object updates, or `setattr` loops |
 | `security/unsafe_deserialization_buggy.py` | Deserialization security | marshal/dill/cloudpickle/joblib/jsonpickle/shelve/pandas/yaml unsafe loaders, NumPy pickle arrays, and unsafe torch checkpoints |
 | `security/password_hashing_buggy.py` | Password hashing security | plaintext, MD5, SHA1, unsalted, or legacy Django/Werkzeug/Passlib password hashers |

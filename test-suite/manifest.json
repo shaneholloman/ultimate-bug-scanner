@@ -2490,6 +2490,65 @@
       }
     },
     {
+      "id": "python-safe-html-xss-buggy",
+      "description": "Python apps should not mark request-controlled values as safe HTML without escaping or sanitization.",
+      "path": "test-suite/python/security/safe_html_xss_buggy.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "xss",
+        "buggy"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-controlled value marked as safe HTML"
+        ]
+      }
+    },
+    {
+      "id": "python-safe-html-xss-clean",
+      "description": "Python values escaped or sanitized before being marked safe HTML should stay clean.",
+      "path": "test-suite/python/security/safe_html_xss_clean.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "xss",
+        "clean"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-controlled value marked as safe HTML"
+        ]
+      }
+    },
+    {
       "id": "python-mass-assignment-buggy",
       "description": "Python web apps should not mass-assign request dictionaries into domain models or objects.",
       "path": "test-suite/python/security/mass_assignment_buggy.py",

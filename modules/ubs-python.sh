@@ -5937,6 +5937,275 @@ PY
 )
 }
 
+run_safe_html_xss_checks() {
+  print_subheader "Request-controlled values marked safe HTML"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable safe HTML XSS checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Request-controlled value marked as safe HTML" "Escape with html.escape()/markupsafe.escape(), sanitize with bleach/nh3, or render as normal escaped template context instead of marking user input safe"
+        else
+          print_finding "good" "No request-controlled values marked safe HTML detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+REQUEST_NAMES = {'request'}
+SAFE_HTML_SINKS = {
+    'mark_safe', 'django.utils.safestring.mark_safe',
+    'SafeString', 'django.utils.safestring.SafeString',
+    'SafeText', 'django.utils.safestring.SafeText',
+    'Markup', 'markupsafe.Markup', 'flask.Markup', 'jinja2.Markup',
+}
+HTML_SAFE_FUNCS = {
+    'html.escape', 'markupsafe.escape', 'flask.escape',
+    'django.utils.html.escape', 'conditional_escape', 'django.utils.html.conditional_escape',
+    'bleach.clean', 'nh3.clean', 'sanitize_html', 'clean_html', 'sanitize_fragment',
+}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Call):
+        return call_name(node.func)
+    if isinstance(node, ast.Subscript):
+        return call_name(node.value)
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = []
+        for elt in target.elts:
+            names.extend(target_names(elt))
+        return names
+    return []
+
+def rooted_at_request(node):
+    if isinstance(node, ast.Name):
+        return node.id in REQUEST_NAMES or node.id.endswith('_request')
+    if isinstance(node, ast.Attribute):
+        return rooted_at_request(node.value)
+    if isinstance(node, ast.Call):
+        return rooted_at_request(node.func)
+    if isinstance(node, ast.Subscript):
+        return rooted_at_request(node.value)
+    return False
+
+def direct_untrusted_source(node):
+    name = call_name(node)
+    if rooted_at_request(node):
+        return True
+    if isinstance(node, ast.Call) and name in {'input', 'sys.stdin.read', 'sys.stdin.readline'}:
+        return True
+    if isinstance(node, ast.Subscript) and call_name(node.value) in {'sys.argv', 'os.environ'}:
+        return True
+    return False
+
+class SafeHtmlXssAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, text, lines):
+        self.path = path
+        self.text = text
+        self.lines = lines
+        self.tainted_values = set()
+        self.safe_values = set()
+        self.safe_html_sinks = set(SAFE_HTML_SINKS)
+        self.html_safe_funcs = set(HTML_SAFE_FUNCS)
+        self.issues = []
+        self.seen_lines = set()
+
+    def relative_path(self):
+        try:
+            return str(self.path.relative_to(BASE_DIR))
+        except ValueError:
+            return self.path.name
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        self.issues.append((self.relative_path(), line_no, source_line(self.lines, line_no)))
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            local = alias.asname or alias.name.split('.')[0]
+            if alias.name in {'markupsafe', 'flask', 'jinja2', 'django.utils.safestring', 'django.utils.html'}:
+                self.safe_html_sinks.add(f'{local}.Markup')
+                self.safe_html_sinks.add(f'{local}.mark_safe')
+                self.safe_html_sinks.add(f'{local}.SafeString')
+                self.safe_html_sinks.add(f'{local}.SafeText')
+                self.html_safe_funcs.add(f'{local}.escape')
+                self.html_safe_funcs.add(f'{local}.conditional_escape')
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        module = node.module or ''
+        for alias in node.names:
+            local = alias.asname or alias.name
+            qualified = f'{module}.{alias.name}' if module else alias.name
+            if qualified in SAFE_HTML_SINKS or alias.name in SAFE_HTML_SINKS:
+                self.safe_html_sinks.add(local)
+            if qualified in HTML_SAFE_FUNCS or alias.name in HTML_SAFE_FUNCS:
+                self.html_safe_funcs.add(local)
+        self.generic_visit(node)
+
+    def call_is_html_safe_func(self, node):
+        name = call_name(node)
+        short = name.rsplit('.', 1)[-1]
+        return name in self.html_safe_funcs or ('.' not in name and short in self.html_safe_funcs)
+
+    def expr_is_html_safe(self, node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes, int, float, bool, type(None))):
+            return True
+        if isinstance(node, ast.Name):
+            return node.id in self.safe_values
+        if isinstance(node, ast.Call):
+            if self.call_is_html_safe_func(node.func):
+                return True
+            if isinstance(node.func, ast.Attribute) and node.func.attr == 'format':
+                return self.expr_is_html_safe(node.func.value) and all(
+                    self.expr_is_html_safe(arg) for arg in node.args
+                ) and all(self.expr_is_html_safe(keyword.value) for keyword in node.keywords)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return self.expr_is_html_safe(node.left) and self.expr_is_html_safe(node.right)
+        if isinstance(node, ast.JoinedStr):
+            for value in node.values:
+                if isinstance(value, ast.Constant):
+                    continue
+                if isinstance(value, ast.FormattedValue) and self.expr_is_html_safe(value.value):
+                    continue
+                return False
+            return True
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return all(self.expr_is_html_safe(elt) for elt in node.elts)
+        return False
+
+    def expr_contains_taint(self, node):
+        if self.expr_is_html_safe(node):
+            return False
+        if isinstance(node, ast.Name):
+            return node.id in self.tainted_values
+        if direct_untrusted_source(node):
+            return True
+        return any(self.expr_contains_taint(child) for child in ast.iter_child_nodes(node))
+
+    def mark_assignment(self, names, value):
+        is_safe = self.expr_is_html_safe(value)
+        is_tainted = (not is_safe) and self.expr_contains_taint(value)
+        for name in names:
+            if is_safe:
+                self.safe_values.add(name)
+            else:
+                self.safe_values.discard(name)
+            if is_tainted:
+                self.tainted_values.add(name)
+            else:
+                self.tainted_values.discard(name)
+
+    def visit_FunctionDef(self, node):
+        old_safe = set(self.safe_values)
+        old_tainted = set(self.tainted_values)
+        self.safe_values.clear()
+        self.tainted_values.clear()
+        for stmt in node.body:
+            self.visit(stmt)
+        self.safe_values = old_safe
+        self.tainted_values = old_tainted
+
+    def visit_AsyncFunctionDef(self, node):
+        self.visit_FunctionDef(node)
+
+    def visit_Assign(self, node):
+        names = [name for target in node.targets for name in target_names(target)]
+        if names:
+            self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            names = target_names(node.target)
+            if names:
+                self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        name = call_name(node.func)
+        short = name.rsplit('.', 1)[-1]
+        if (name in self.safe_html_sinks or short in self.safe_html_sinks) and any(
+            self.expr_contains_taint(arg) for arg in node.args
+        ):
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = SafeHtmlXssAnalyzer(path, text, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_mass_assignment_checks() {
   print_subheader "Request-derived mass assignment"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -8642,6 +8911,7 @@ run_cors_misconfig_checks
 run_cookie_security_checks
 run_csrf_disable_checks
 run_template_autoescape_checks
+run_safe_html_xss_checks
 run_mass_assignment_checks
 run_debug_host_config_checks
 run_xml_parser_security_checks
