@@ -2450,6 +2450,201 @@ PY
 )
 }
 
+run_debug_host_config_checks() {
+  print_subheader "Debug mode and host allow-list"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable debug/host configuration checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Production debug mode or wildcard host allow-list" "Disable debug mode and replace wildcard ALLOWED_HOSTS with explicit production hostnames"
+        else
+          print_finding "good" "No production debug or wildcard host settings detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    return ''
+
+def const_value(node):
+    return node.value if isinstance(node, ast.Constant) else None
+
+def is_enabled(node):
+    value = const_value(node)
+    if value is True:
+        return True
+    if isinstance(value, int) and not isinstance(value, bool) and value == 1:
+        return True
+    if isinstance(value, str) and value.strip().lower() in {'1', 'true', 'yes', 'on'}:
+        return True
+    return False
+
+def is_debug_name(name):
+    return name in {'DEBUG', 'FLASK_DEBUG'} or name.endswith('_DEBUG')
+
+def key_name(node):
+    value = const_value(node)
+    return value if isinstance(value, str) else None
+
+def contains_wildcard_host(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        host = node.value.strip()
+        return host in {'*', '*.*'} or host.startswith('*.') or (host.startswith('.') and len(host) > 1)
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return any(contains_wildcard_host(elt) for elt in node.elts)
+    return False
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def keyword_value(call, key):
+    for keyword in call.keywords:
+        if keyword.arg == key:
+            return keyword.value
+    return None
+
+def subscript_key(node):
+    if not isinstance(node, ast.Subscript):
+        return None
+    return key_name(node.slice)
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [elt.id for elt in target.elts if isinstance(elt, ast.Name)]
+    return []
+
+class DebugHostAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, lines):
+        self.path = path
+        self.lines = lines
+        self.issues = []
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no):
+            return
+        try:
+            rel = self.path.relative_to(BASE_DIR)
+        except ValueError:
+            rel = self.path.name
+        self.issues.append((str(rel), line_no, source_line(self.lines, line_no)))
+
+    def check_config_value(self, name, value, line_no):
+        if is_debug_name(name) and is_enabled(value):
+            self.remember_issue(line_no)
+        elif name == 'ALLOWED_HOSTS' and contains_wildcard_host(value):
+            self.remember_issue(line_no)
+
+    def visit_Assign(self, node):
+        for target in node.targets:
+            for name in target_names(target):
+                self.check_config_value(name, node.value, node.lineno)
+            key = subscript_key(target)
+            if key is not None:
+                self.check_config_value(key, node.value, node.lineno)
+            if isinstance(target, ast.Attribute):
+                self.check_config_value(target.attr, node.value, node.lineno)
+                if target.attr == 'debug' and is_enabled(node.value):
+                    self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            for name in target_names(node.target):
+                self.check_config_value(name, node.value, node.lineno)
+            key = subscript_key(node.target)
+            if key is not None:
+                self.check_config_value(key, node.value, node.lineno)
+            if isinstance(node.target, ast.Attribute):
+                self.check_config_value(node.target.attr, node.value, node.lineno)
+                if node.target.attr == 'debug' and is_enabled(node.value):
+                    self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        name = call_name(node.func)
+        if name.endswith('.config.update') or name.endswith('.config.from_mapping') or name in {'config.update', 'config.from_mapping'}:
+            for keyword in node.keywords:
+                if keyword.arg is not None:
+                    self.check_config_value(keyword.arg, keyword.value, node.lineno)
+        if name.endswith('.run') or name in {'run', 'uvicorn.run', 'hypercorn.run'}:
+            debug = keyword_value(node, 'debug')
+            if debug is not None and is_enabled(debug):
+                self.remember_issue(node.lineno)
+            use_debugger = keyword_value(node, 'use_debugger')
+            if use_debugger is not None and is_enabled(use_debugger):
+                self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = DebugHostAnalyzer(path, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 show_ast_samples_from_json() {
   local blob=$1
   [[ -n "$blob" ]] || return 0
@@ -3966,6 +4161,7 @@ run_path_traversal_checks
 run_jwt_verification_checks
 run_cors_misconfig_checks
 run_cookie_security_checks
+run_debug_host_config_checks
 run_taint_analysis_checks
 fi
 
