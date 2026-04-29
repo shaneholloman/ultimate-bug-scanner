@@ -1664,6 +1664,65 @@
       }
     },
     {
+      "id": "python-template-injection-buggy",
+      "description": "Python template engines should not render request-controlled template source strings.",
+      "path": "test-suite/python/security/template_injection_buggy.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "template-injection",
+        "buggy"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-controlled template source reaches renderer"
+        ]
+      }
+    },
+    {
+      "id": "python-template-injection-clean",
+      "description": "Python template rendering with fixed template sources and escaped context should stay clean.",
+      "path": "test-suite/python/security/template_injection_clean.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "template-injection",
+        "clean"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-controlled template source reaches renderer"
+        ]
+      }
+    },
+    {
       "id": "python-archive-extraction-buggy",
       "description": "Python tarfile/zipfile extractall should validate archive member paths before extraction.",
       "path": "test-suite/python/security/archive_extraction_buggy.py",

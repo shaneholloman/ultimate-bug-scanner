@@ -1662,6 +1662,264 @@ PY
 )
 }
 
+run_template_injection_checks() {
+  print_subheader "Server-side template injection"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable template injection checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Request-controlled template source reaches renderer" "Render fixed templates and pass user data only as escaped context values"
+        else
+          print_finding "good" "No request-controlled template sources detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+REQUEST_NAMES = {'request'}
+TEMPLATE_SOURCE_KEYWORDS = {'source', 'text', 'template', 'template_string', 'string'}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Call):
+        return call_name(node.func)
+    if isinstance(node, ast.Subscript):
+        return call_name(node.value)
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = []
+        for elt in target.elts:
+            names.extend(target_names(elt))
+        return names
+    return []
+
+def keyword_value(node, names):
+    for keyword in getattr(node, 'keywords', []):
+        if keyword.arg in names:
+            return keyword.value
+    return None
+
+def rooted_at_request(node):
+    if isinstance(node, ast.Name):
+        return node.id in REQUEST_NAMES or node.id.endswith('_request')
+    if isinstance(node, ast.Attribute):
+        return rooted_at_request(node.value)
+    if isinstance(node, ast.Call):
+        return rooted_at_request(node.func)
+    if isinstance(node, ast.Subscript):
+        return rooted_at_request(node.value)
+    return False
+
+def direct_untrusted_source(node):
+    name = call_name(node)
+    if rooted_at_request(node):
+        return True
+    if isinstance(node, ast.Call) and name in {'input', 'sys.stdin.read', 'sys.stdin.readline'}:
+        return True
+    if isinstance(node, ast.Subscript) and call_name(node.value) in {'sys.argv', 'os.environ'}:
+        return True
+    return False
+
+class TemplateInjectionAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, text, lines):
+        self.path = path
+        self.text = text
+        self.lines = lines
+        self.template_modules = {'jinja2', 'mako.template', 'django.template'}
+        self.template_constructors = {'Template'}
+        self.render_template_string_names = {'render_template_string'}
+        self.tainted_templates = set()
+        self.safe_templates = set()
+        self.issues = []
+        self.seen_lines = set()
+
+    def relative_path(self):
+        try:
+            return str(self.path.relative_to(BASE_DIR))
+        except ValueError:
+            return self.path.name
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        self.issues.append((self.relative_path(), line_no, source_line(self.lines, line_no)))
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            if alias.name in {'jinja2', 'mako.template', 'django.template'}:
+                self.template_modules.add(alias.asname or alias.name)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        if node.module in {'flask'}:
+            for alias in node.names:
+                if alias.name == 'render_template_string':
+                    self.render_template_string_names.add(alias.asname or alias.name)
+        if node.module in {'jinja2', 'mako.template', 'django.template'}:
+            for alias in node.names:
+                if alias.name == 'Template':
+                    self.template_constructors.add(alias.asname or alias.name)
+        self.generic_visit(node)
+
+    def expr_is_safe_template(self, node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return True
+        if isinstance(node, ast.Name):
+            return node.id in self.safe_templates
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return self.expr_is_safe_template(node.left) and self.expr_is_safe_template(node.right)
+        if isinstance(node, ast.JoinedStr):
+            return all(isinstance(value, ast.Constant) for value in node.values)
+        return False
+
+    def expr_contains_untrusted_template(self, node):
+        if self.expr_is_safe_template(node):
+            return False
+        if isinstance(node, ast.Name):
+            return node.id in self.tainted_templates
+        if direct_untrusted_source(node):
+            return True
+        return any(self.expr_contains_untrusted_template(child) for child in ast.iter_child_nodes(node))
+
+    def mark_assignment(self, names, value):
+        is_safe = self.expr_is_safe_template(value)
+        is_tainted = (not is_safe) and self.expr_contains_untrusted_template(value)
+        for name in names:
+            if is_safe:
+                self.safe_templates.add(name)
+            else:
+                self.safe_templates.discard(name)
+            if is_tainted:
+                self.tainted_templates.add(name)
+            else:
+                self.tainted_templates.discard(name)
+
+    def visit_FunctionDef(self, node):
+        old_safe = set(self.safe_templates)
+        old_tainted = set(self.tainted_templates)
+        self.safe_templates.clear()
+        self.tainted_templates.clear()
+        for stmt in node.body:
+            self.visit(stmt)
+        self.safe_templates = old_safe
+        self.tainted_templates = old_tainted
+
+    def visit_AsyncFunctionDef(self, node):
+        self.visit_FunctionDef(node)
+
+    def visit_Assign(self, node):
+        names = [name for target in node.targets for name in target_names(target)]
+        if names:
+            self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            names = target_names(node.target)
+            if names:
+                self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def constructor_template_source(self, node):
+        name = call_name(node.func)
+        short = name.rsplit('.', 1)[-1]
+        parts = name.split('.')
+        if (
+            short in self.template_constructors
+            or name in self.template_constructors
+            or (len(parts) >= 2 and parts[-1] == 'Template' and '.'.join(parts[:-1]) in self.template_modules)
+        ):
+            return node.args[0] if node.args else keyword_value(node, TEMPLATE_SOURCE_KEYWORDS)
+        return None
+
+    def render_template_string_source(self, node):
+        name = call_name(node.func)
+        short = name.rsplit('.', 1)[-1]
+        if name in self.render_template_string_names or short in self.render_template_string_names:
+            return node.args[0] if node.args else keyword_value(node, {'source', 'template_string', 'string'})
+        if short == 'from_string':
+            return node.args[0] if node.args else keyword_value(node, {'source', 'template_string', 'string'})
+        return None
+
+    def visit_Call(self, node):
+        source = self.render_template_string_source(node) or self.constructor_template_source(node)
+        if source is not None and self.expr_contains_untrusted_template(source):
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = TemplateInjectionAnalyzer(path, text, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_command_injection_checks() {
   print_subheader "Command injection dataflow"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -7421,6 +7679,7 @@ run_command_injection_checks
 run_sql_injection_checks
 run_nosql_injection_checks
 run_regex_dos_checks
+run_template_injection_checks
 
 print_subheader "requests verify=False (TLS disabled)"
 count=$("${GREP_RN[@]}" -e "requests\.[a-z]+\([^)]*verify\s*=\s*False" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
