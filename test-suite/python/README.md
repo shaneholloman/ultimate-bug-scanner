@@ -29,6 +29,7 @@
 | `security/unsafe_deserialization_buggy.py` | Deserialization security | marshal/dill/cloudpickle/joblib/jsonpickle/shelve/pandas/yaml unsafe loaders, NumPy pickle arrays, and unsafe torch checkpoints |
 | `security/password_hashing_buggy.py` | Password hashing security | plaintext, MD5, SHA1, unsalted, or legacy Django/Werkzeug/Passlib password hashers |
 | `security/crypto_misuse_buggy.py` | Cryptography misuse security | ECB mode, DES/ARC4-style legacy ciphers, and static IV/nonces in PyCryptodome or `cryptography` APIs |
+| `security/constant_time_compare_buggy.py` | Constant-time comparison security | HMACs, signatures, API keys, CSRF tokens, bearer tokens, or reset tokens compared with `==` or `!=` instead of `compare_digest` |
 | `security/debug_host_config_buggy.py` | Debug/host configuration security | production debug flags, debugger-enabled app runs, and wildcard host allow-lists |
 | `security/xml_parser_buggy.py` | XML parser security | request/upload XML parsed by stdlib/lxml parsers or lxml parsers with DTD/entity-expansion flags |
 | `security/random_security_buggy.py` | Security randomness | tokens, sessions, OTPs, salts, and keys generated with the non-cryptographic `random` module |

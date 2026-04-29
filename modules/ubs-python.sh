@@ -3874,6 +3874,207 @@ PY
 )
 }
 
+run_constant_time_compare_checks() {
+  print_subheader "Timing-safe comparison for secrets"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable constant-time comparison checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Secret, signature, or token compared with ==/!=" "Use hmac.compare_digest() or secrets.compare_digest() for HMACs, API keys, CSRF tokens, reset tokens, and other secret material"
+        else
+          print_finding "good" "No timing-sensitive secret equality comparisons detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+SENSITIVE_RE = re.compile(
+    r'(hmac|mac|signature|sig|token|secret|api_?key|csrf|xsrf|nonce|digest|password|passwd|reset|auth|bearer|webhook)',
+    re.IGNORECASE,
+)
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Call):
+        return call_name(node.func)
+    if isinstance(node, ast.Subscript):
+        return call_name(node.value)
+    return ''
+
+def const_string(node):
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = []
+        for elt in target.elts:
+            names.extend(target_names(elt))
+        return names
+    return []
+
+def name_is_sensitive(name):
+    return bool(name and SENSITIVE_RE.search(name))
+
+class ConstantTimeCompareAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, lines):
+        self.path = path
+        self.lines = lines
+        self.sensitive_names = set()
+        self.issues = []
+        self.seen_lines = set()
+
+    def relative_path(self):
+        try:
+            return str(self.path.relative_to(BASE_DIR))
+        except ValueError:
+            return self.path.name
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        self.issues.append((self.relative_path(), line_no, source_line(self.lines, line_no)))
+
+    def expr_is_sensitive(self, node):
+        if isinstance(node, ast.Name):
+            return node.id in self.sensitive_names or name_is_sensitive(node.id)
+        if isinstance(node, ast.Attribute):
+            return name_is_sensitive(node.attr) or name_is_sensitive(call_name(node))
+        if isinstance(node, ast.Subscript):
+            key = const_string(node.slice)
+            return name_is_sensitive(key or '') or self.expr_is_sensitive(node.value)
+        if isinstance(node, ast.Call):
+            name = call_name(node.func)
+            short = name.rsplit('.', 1)[-1]
+            owner = name.rsplit('.', 1)[0] if '.' in name else ''
+            return (
+                name_is_sensitive(name)
+                or short in {'digest', 'hexdigest'}
+                or name in {'hmac.new', 'hashlib.pbkdf2_hmac'}
+                or owner == 'hmac'
+            )
+        if isinstance(node, ast.BinOp):
+            return self.expr_is_sensitive(node.left) or self.expr_is_sensitive(node.right)
+        if isinstance(node, ast.BoolOp):
+            return any(self.expr_is_sensitive(value) for value in node.values)
+        return False
+
+    def mark_assignment(self, names, value):
+        value_sensitive = self.expr_is_sensitive(value)
+        for name in names:
+            if name_is_sensitive(name) or value_sensitive:
+                self.sensitive_names.add(name)
+            else:
+                self.sensitive_names.discard(name)
+
+    def visit_FunctionDef(self, node):
+        old_sensitive = set(self.sensitive_names)
+        self.sensitive_names.clear()
+        for arg in list(node.args.posonlyargs) + list(node.args.args) + list(node.args.kwonlyargs):
+            if name_is_sensitive(arg.arg):
+                self.sensitive_names.add(arg.arg)
+        if node.args.vararg and name_is_sensitive(node.args.vararg.arg):
+            self.sensitive_names.add(node.args.vararg.arg)
+        if node.args.kwarg and name_is_sensitive(node.args.kwarg.arg):
+            self.sensitive_names.add(node.args.kwarg.arg)
+        for stmt in node.body:
+            self.visit(stmt)
+        self.sensitive_names = old_sensitive
+
+    def visit_AsyncFunctionDef(self, node):
+        self.visit_FunctionDef(node)
+
+    def visit_Assign(self, node):
+        names = [name for target in node.targets for name in target_names(target)]
+        if names:
+            self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            names = target_names(node.target)
+            if names:
+                self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def visit_Compare(self, node):
+        if any(isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops):
+            values = [node.left] + list(node.comparators)
+            if any(self.expr_is_sensitive(value) for value in values):
+                self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = ConstantTimeCompareAnalyzer(path, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_http_timeout_checks() {
   print_subheader "Outbound HTTP calls without timeouts"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -9450,6 +9651,7 @@ fi
 
 run_password_hashing_checks
 run_crypto_misuse_checks
+run_constant_time_compare_checks
 
 print_subheader "Hardcoded secrets"
 count=$("${GREP_RNI[@]}" -e "(password|api_?key|secret|token)[[:space:]]*[:=][[:space:]]*['\"][^\"']+['\"]" "$PROJECT_DIR" 2>/dev/null | \

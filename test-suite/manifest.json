@@ -2844,6 +2844,67 @@
       }
     },
     {
+      "id": "python-constant-time-compare-buggy",
+      "description": "Python code should not compare HMACs, signatures, API keys, CSRF tokens, or reset tokens with == or !=.",
+      "path": "test-suite/python/security/constant_time_compare_buggy.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "crypto",
+        "timing",
+        "buggy"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Secret, signature, or token compared with ==/!="
+        ]
+      }
+    },
+    {
+      "id": "python-constant-time-compare-clean",
+      "description": "Python code using hmac.compare_digest or secrets.compare_digest for secret comparisons should stay clean.",
+      "path": "test-suite/python/security/constant_time_compare_clean.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "crypto",
+        "timing",
+        "clean"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Secret, signature, or token compared with ==/!="
+        ]
+      }
+    },
+    {
       "id": "python-debug-host-config-buggy",
       "description": "Python web apps should not ship production debug flags or wildcard host allow-lists.",
       "path": "test-suite/python/security/debug_host_config_buggy.py",
