@@ -1110,6 +1110,254 @@ PY
 )
 }
 
+run_password_hashing_checks() {
+  print_subheader "Password hashing misconfiguration"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable password hashing checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Weak or plaintext password hashing configured" "Use Argon2, bcrypt, scrypt, or PBKDF2-SHA256 with current work factors"
+        else
+          print_finding "good" "No weak password hashing configurations detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+WEAK_SCHEMES = {
+    'plain', 'plaintext', 'md5', 'sha1', 'unsalted_md5', 'unsalted_sha1',
+    'md5_crypt', 'des_crypt', 'ldap_md5', 'ldap_salted_md5', 'pbkdf2_sha1',
+}
+WEAK_DJANGO_HASHER_RE = re.compile(r'(?:^|\.)(?:((?:un)?salted)?(?:md5|sha1)|pbkdf2sha1)passwordhasher$|(?:^|\.)cryptpasswordhasher$', re.IGNORECASE)
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Subscript):
+        return call_name(node.value)
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Attribute):
+        return [call_name(target)]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = []
+        for elt in target.elts:
+            names.extend(target_names(elt))
+        return names
+    return []
+
+def const_string(node):
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+def normalized_scheme(value):
+    text = value.strip().lower()
+    if ':' in text:
+        return text.split(':', 1)[0]
+    return text
+
+def is_weak_scheme_string(value):
+    scheme = normalized_scheme(value)
+    lowered = value.strip().lower()
+    return scheme in WEAK_SCHEMES or lowered.startswith('pbkdf2:sha1') or bool(WEAK_DJANGO_HASHER_RE.search(value))
+
+def string_literals(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        yield node.value
+    elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        for elt in node.elts:
+            yield from string_literals(elt)
+    elif isinstance(node, ast.Dict):
+        for key in node.keys:
+            if key is not None:
+                yield from string_literals(key)
+        for value in node.values:
+            yield from string_literals(value)
+
+def keyword_value(call, name):
+    for keyword in call.keywords:
+        if keyword.arg == name:
+            return keyword.value
+    return None
+
+class PasswordHashingAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, lines):
+        self.path = path
+        self.lines = lines
+        self.issues = []
+        self.seen_lines = set()
+        self.werkzeug_modules = {'werkzeug.security'}
+        self.generate_password_hash_names = {'generate_password_hash'}
+        self.crypt_context_names = {'CryptContext', 'passlib.context.CryptContext'}
+        self.make_password_names = {'make_password', 'django.contrib.auth.hashers.make_password'}
+        self.passlib_hash_modules = {'passlib.hash'}
+        self.weak_passlib_hashers = set(WEAK_SCHEMES)
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        try:
+            rel = self.path.relative_to(BASE_DIR)
+        except ValueError:
+            rel = self.path.name
+        self.issues.append((str(rel), line_no, source_line(self.lines, line_no)))
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if alias.name == 'werkzeug.security':
+                self.werkzeug_modules.add(local)
+            elif alias.name == 'passlib.hash':
+                self.passlib_hash_modules.add(local)
+            elif alias.name == 'passlib.context':
+                self.crypt_context_names.add(f'{local}.CryptContext')
+            elif alias.name == 'django.contrib.auth.hashers':
+                self.make_password_names.add(f'{local}.make_password')
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        module = node.module or ''
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if module == 'werkzeug.security' and alias.name == 'generate_password_hash':
+                self.generate_password_hash_names.add(local)
+            elif module == 'passlib.context' and alias.name == 'CryptContext':
+                self.crypt_context_names.add(local)
+            elif module == 'django.contrib.auth.hashers' and alias.name == 'make_password':
+                self.make_password_names.add(local)
+            elif module == 'passlib.hash':
+                if alias.name in WEAK_SCHEMES:
+                    self.weak_passlib_hashers.add(local)
+        self.generic_visit(node)
+
+    def is_generate_password_hash(self, name):
+        return name in self.generate_password_hash_names or any(name == f'{module}.generate_password_hash' for module in self.werkzeug_modules)
+
+    def is_crypt_context(self, name):
+        return name in self.crypt_context_names
+
+    def is_make_password(self, name):
+        return name in self.make_password_names
+
+    def passlib_hasher_is_weak(self, name):
+        parts = name.split('.')
+        if len(parts) >= 2 and parts[-1] in {'hash', 'verify'}:
+            owner = parts[-2]
+            if owner in self.weak_passlib_hashers or owner in WEAK_SCHEMES:
+                return True
+        for module in self.passlib_hash_modules:
+            prefix = f'{module}.'
+            if name.startswith(prefix):
+                rest = name[len(prefix):].split('.')
+                if rest and rest[0] in WEAK_SCHEMES:
+                    return True
+        return False
+
+    def call_uses_weak_method(self, node, keyword, positional_index=None):
+        value = keyword_value(node, keyword)
+        if value is None and positional_index is not None and len(node.args) > positional_index:
+            value = node.args[positional_index]
+        literal = const_string(value) if value is not None else None
+        return bool(literal and is_weak_scheme_string(literal))
+
+    def crypt_context_is_weak(self, node):
+        schemes = keyword_value(node, 'schemes')
+        if schemes is None:
+            return False
+        return any(is_weak_scheme_string(value) for value in string_literals(schemes))
+
+    def password_hashers_value_is_weak(self, node):
+        return any(is_weak_scheme_string(value) for value in string_literals(node))
+
+    def visit_Assign(self, node):
+        if any(name.endswith('PASSWORD_HASHERS') for target in node.targets for name in target_names(target)):
+            if self.password_hashers_value_is_weak(node.value):
+                self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        name = call_name(node.func)
+        if self.is_generate_password_hash(name) and self.call_uses_weak_method(node, 'method', positional_index=1):
+            self.remember_issue(node.lineno)
+        elif self.is_crypt_context(name) and self.crypt_context_is_weak(node):
+            self.remember_issue(node.lineno)
+        elif self.is_make_password(name) and self.call_uses_weak_method(node, 'hasher', positional_index=1):
+            self.remember_issue(node.lineno)
+        elif self.passlib_hasher_is_weak(name):
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = PasswordHashingAnalyzer(path, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_archive_extraction_checks() {
   print_subheader "Archive extractall path traversal"
   local printed=0
@@ -5815,6 +6063,8 @@ if [ "$count" -gt 0 ]; then
   print_finding "warning" "$count" "Weak hash usage" "Use hashlib.sha256/512"
   show_detailed_finding "hashlib\.(md5|sha1)\(" 3
 fi
+
+run_password_hashing_checks
 
 print_subheader "Hardcoded secrets"
 count=$("${GREP_RNI[@]}" -e "(password|api_?key|secret|token)[[:space:]]*[:=][[:space:]]*['\"][^\"']+['\"]" "$PROJECT_DIR" 2>/dev/null | \

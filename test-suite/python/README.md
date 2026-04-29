@@ -16,6 +16,7 @@
 | `security/template_autoescape_buggy.py` | Template/XSS security | Jinja2/Flask template environments and options that disable autoescape |
 | `security/mass_assignment_buggy.py` | Mass-assignment security | request dictionaries passed into model constructors, ORM creates/updates, object updates, or `setattr` loops |
 | `security/unsafe_deserialization_buggy.py` | Deserialization security | marshal/dill/cloudpickle/joblib/jsonpickle/shelve/pandas/yaml unsafe loaders, NumPy pickle arrays, and unsafe torch checkpoints |
+| `security/password_hashing_buggy.py` | Password hashing security | plaintext, MD5, SHA1, unsalted, or legacy Django/Werkzeug/Passlib password hashers |
 | `security/debug_host_config_buggy.py` | Debug/host configuration security | production debug flags, debugger-enabled app runs, and wildcard host allow-lists |
 | `security/xml_parser_buggy.py` | XML parser security | request/upload XML parsed by stdlib/lxml parsers or lxml parsers with DTD/entity-expansion flags |
 | `security/random_security_buggy.py` | Security randomness | tokens, sessions, OTPs, salts, and keys generated with the non-cryptographic `random` module |
