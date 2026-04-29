@@ -1957,6 +1957,65 @@
       }
     },
     {
+      "id": "python-mass-assignment-buggy",
+      "description": "Python web apps should not mass-assign request dictionaries into domain models or objects.",
+      "path": "test-suite/python/security/mass_assignment_buggy.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "mass-assignment",
+        "buggy"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request data mass-assigned into model/object"
+        ]
+      }
+    },
+    {
+      "id": "python-mass-assignment-clean",
+      "description": "Python web apps that map request fields explicitly should not trigger mass-assignment findings.",
+      "path": "test-suite/python/security/mass_assignment_clean.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "mass-assignment",
+        "clean"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request data mass-assigned into model/object"
+        ]
+      }
+    },
+    {
       "id": "python-debug-host-config-buggy",
       "description": "Python web apps should not ship production debug flags or wildcard host allow-lists.",
       "path": "test-suite/python/security/debug_host_config_buggy.py",

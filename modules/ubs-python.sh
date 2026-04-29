@@ -2933,6 +2933,217 @@ PY
 )
 }
 
+run_mass_assignment_checks() {
+  print_subheader "Request-derived mass assignment"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable mass-assignment checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Request data mass-assigned into model/object" "Map allowed fields explicitly before constructing or updating domain objects"
+        else
+          print_finding "good" "No request-derived mass assignment patterns detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+MODELISH_OWNER_RE = ('user', 'account', 'profile', 'model', 'object', 'obj', 'entity', 'record', 'instance', 'customer', 'member', 'admin', 'role', 'permission')
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Subscript):
+        return call_name(node.value)
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [elt.id for elt in target.elts if isinstance(elt, ast.Name)]
+    return []
+
+def is_request_attr_name(name):
+    lowered = name.lower()
+    return (
+        lowered.startswith('request.')
+        or '.request.' in lowered
+        or lowered.startswith('flask.request.')
+        or lowered.startswith('self.request.')
+    ) and any(part in lowered for part in ('.json', '.form', '.values', '.args', '.data', '.post', '.get', '.files', '.body'))
+
+def is_request_source_expr(node, tainted):
+    if isinstance(node, ast.Name):
+        return node.id in tainted
+    name = call_name(node)
+    if name and is_request_attr_name(name):
+        return True
+    if isinstance(node, ast.Call):
+        func_name = call_name(node.func)
+        if is_request_attr_name(func_name):
+            return True
+        if func_name.rsplit('.', 1)[-1] in {'dict', 'to_dict', 'copy'} and is_request_source_expr(node.func, tainted):
+            return True
+    if isinstance(node, ast.Subscript):
+        return is_request_source_expr(node.value, tainted)
+    return any(isinstance(child, ast.Name) and child.id in tainted for child in ast.walk(node))
+
+def looks_like_model_constructor(name):
+    short = name.rsplit('.', 1)[-1]
+    return bool(short) and short[0].isupper() and short not in {'dict', 'list', 'set', 'tuple', 'Response', 'JsonResponse'}
+
+def looks_like_model_create(name):
+    lowered = name.lower()
+    short = name.rsplit('.', 1)[-1]
+    return (
+        short in {'create', 'update', 'bulk_create', 'bulk_update', 'from_dict', 'from_json'}
+        or lowered.endswith('.objects.create')
+        or lowered.endswith('.query.update')
+        or lowered.endswith('.model_validate')
+        or lowered.endswith('.parse_obj')
+    )
+
+def owner_looks_modelish(owner):
+    lowered = owner.lower()
+    return any(token in lowered for token in MODELISH_OWNER_RE)
+
+class MassAssignmentAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, lines):
+        self.path = path
+        self.lines = lines
+        self.tainted = set()
+        self.loop_tainted = set()
+        self.issues = []
+        self.seen_lines = set()
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        try:
+            rel = self.path.relative_to(BASE_DIR)
+        except ValueError:
+            rel = self.path.name
+        self.issues.append((str(rel), line_no, source_line(self.lines, line_no)))
+
+    def expr_is_request_source(self, node):
+        return is_request_source_expr(node, self.tainted | self.loop_tainted)
+
+    def mark_targets_from_source(self, targets, value):
+        if self.expr_is_request_source(value):
+            for target in targets:
+                self.tainted.update(target_names(target))
+
+    def call_is_mass_assignment(self, node):
+        name = call_name(node.func)
+        short = name.rsplit('.', 1)[-1]
+        owner = name.rsplit('.', 1)[0] if '.' in name else ''
+        for keyword in node.keywords:
+            if keyword.arg is None and self.expr_is_request_source(keyword.value):
+                if looks_like_model_constructor(name) or looks_like_model_create(name):
+                    return True
+            elif keyword.arg in {'data', 'defaults', 'values'} and self.expr_is_request_source(keyword.value) and looks_like_model_create(name):
+                return True
+        if short in {'update', 'from_dict', 'from_json'} and node.args and self.expr_is_request_source(node.args[0]):
+            return owner_looks_modelish(owner) or looks_like_model_create(name)
+        if short in {'create', 'bulk_create', 'bulk_update'} and node.args and self.expr_is_request_source(node.args[0]):
+            return True
+        if short in {'model_validate', 'parse_obj'} and node.args and self.expr_is_request_source(node.args[0]):
+            return True
+        if name == 'setattr' and len(node.args) >= 3:
+            return self.expr_is_request_source(node.args[1])
+        if short == 'populate_obj' and node.args:
+            return owner_looks_modelish(call_name(node.args[0]))
+        return False
+
+    def visit_Assign(self, node):
+        self.mark_targets_from_source(node.targets, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            self.mark_targets_from_source([node.target], node.value)
+        self.generic_visit(node)
+
+    def visit_For(self, node):
+        old_loop = set(self.loop_tainted)
+        if self.expr_is_request_source(node.iter):
+            self.loop_tainted.update(target_names(node.target))
+        self.generic_visit(node)
+        self.loop_tainted = old_loop
+
+    def visit_Call(self, node):
+        if self.call_is_mass_assignment(node):
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = MassAssignmentAnalyzer(path, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_debug_host_config_checks() {
   print_subheader "Debug mode and host allow-list"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -5412,6 +5623,7 @@ run_cors_misconfig_checks
 run_cookie_security_checks
 run_csrf_disable_checks
 run_template_autoescape_checks
+run_mass_assignment_checks
 run_debug_host_config_checks
 run_xml_parser_security_checks
 run_insecure_random_security_checks
