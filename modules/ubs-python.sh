@@ -2225,6 +2225,281 @@ PY
 )
 }
 
+run_ldap_injection_checks() {
+  print_subheader "LDAP filter/DN injection"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable LDAP injection checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Request-controlled LDAP filter or DN reaches directory sink" "Escape LDAP filter values with escape_filter_chars(), escape DN fragments with escape_dn_chars(), or use fixed allow-lists before LDAP operations"
+        else
+          print_finding "good" "No request-controlled LDAP filters or DNs detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+REQUEST_NAMES = {'request'}
+LDAP_SEARCH_METHODS = {
+    'search', 'search_s', 'search_st', 'search_ext', 'search_ext_s',
+    'paged_search', 'paged_search_s', 'paged_search_ext_s',
+}
+LDAP_SECOND_ARG_FILTER_METHODS = {'search', 'paged_search'}
+LDAP_DN_METHODS = {
+    'add', 'add_s', 'delete', 'delete_s', 'modify', 'modify_s',
+    'modify_dn', 'modify_dn_s', 'rename', 'rename_s', 'compare_s',
+    'simple_bind_s', 'bind_s', 'rebind', 'rebind_s',
+}
+LDAP_CONSTRUCTORS = {'LDAPSearch', 'django_auth_ldap.config.LDAPSearch'}
+FILTER_KEYWORDS = {'search_filter', 'filterstr', 'ldap_filter'}
+DN_KEYWORDS = {'dn', 'user', 'user_dn', 'bind_dn', 'base_dn'}
+SAFE_LDAP_FUNCS = {
+    'escape_filter_chars', 'ldap.filter.escape_filter_chars',
+    'escape_dn_chars', 'ldap.dn.escape_dn_chars',
+    'validate_ldap_filter_value', 'validate_ldap_dn_value',
+    'sanitize_ldap_filter_value', 'sanitize_ldap_dn_value',
+    'allowlisted_ldap_value', 'allowlisted_ldap_dn',
+}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.py', '.pyi'}:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+            yield path
+
+def call_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = call_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    if isinstance(node, ast.Call):
+        return call_name(node.func)
+    if isinstance(node, ast.Subscript):
+        return call_name(node.value)
+    return ''
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = []
+        for elt in target.elts:
+            names.extend(target_names(elt))
+        return names
+    return []
+
+def rooted_at_request(node):
+    if isinstance(node, ast.Name):
+        return node.id in REQUEST_NAMES or node.id.endswith('_request')
+    if isinstance(node, ast.Attribute):
+        return rooted_at_request(node.value)
+    if isinstance(node, ast.Call):
+        return rooted_at_request(node.func)
+    if isinstance(node, ast.Subscript):
+        return rooted_at_request(node.value)
+    return False
+
+def direct_untrusted_source(node):
+    name = call_name(node)
+    if rooted_at_request(node):
+        return True
+    if isinstance(node, ast.Call) and name in {'input', 'sys.stdin.read', 'sys.stdin.readline'}:
+        return True
+    if isinstance(node, ast.Subscript) and call_name(node.value) in {'sys.argv', 'os.environ'}:
+        return True
+    return False
+
+def keyword_values(node, names):
+    return [keyword.value for keyword in getattr(node, 'keywords', []) if keyword.arg in names]
+
+class LDAPInjectionAnalyzer(ast.NodeVisitor):
+    def __init__(self, path, text, lines):
+        self.path = path
+        self.text = text
+        self.lines = lines
+        self.tainted_values = set()
+        self.safe_values = set()
+        self.issues = []
+        self.seen_lines = set()
+
+    def relative_path(self):
+        try:
+            return str(self.path.relative_to(BASE_DIR))
+        except ValueError:
+            return self.path.name
+
+    def remember_issue(self, line_no):
+        if has_ignore(self.lines, line_no) or line_no in self.seen_lines:
+            return
+        self.seen_lines.add(line_no)
+        self.issues.append((self.relative_path(), line_no, source_line(self.lines, line_no)))
+
+    def expr_is_safe_ldap(self, node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes, int, float, bool, type(None))):
+            return True
+        if isinstance(node, ast.Name):
+            return node.id in self.safe_values
+        if isinstance(node, ast.Call):
+            name = call_name(node.func)
+            short = name.rsplit('.', 1)[-1]
+            if name in SAFE_LDAP_FUNCS or short in SAFE_LDAP_FUNCS:
+                return True
+            if isinstance(node.func, ast.Attribute) and node.func.attr == 'format':
+                return self.expr_is_safe_ldap(node.func.value) and all(
+                    self.expr_is_safe_ldap(arg) for arg in node.args
+                ) and all(self.expr_is_safe_ldap(keyword.value) for keyword in node.keywords)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return self.expr_is_safe_ldap(node.left) and self.expr_is_safe_ldap(node.right)
+        if isinstance(node, ast.JoinedStr):
+            for value in node.values:
+                if isinstance(value, ast.Constant):
+                    continue
+                if isinstance(value, ast.FormattedValue) and self.expr_is_safe_ldap(value.value):
+                    continue
+                return False
+            return True
+        return False
+
+    def expr_contains_taint(self, node):
+        if self.expr_is_safe_ldap(node):
+            return False
+        if isinstance(node, ast.Name):
+            return node.id in self.tainted_values
+        if direct_untrusted_source(node):
+            return True
+        return any(self.expr_contains_taint(child) for child in ast.iter_child_nodes(node))
+
+    def mark_assignment(self, names, value):
+        is_safe = self.expr_is_safe_ldap(value)
+        is_tainted = (not is_safe) and self.expr_contains_taint(value)
+        for name in names:
+            if is_safe:
+                self.safe_values.add(name)
+            else:
+                self.safe_values.discard(name)
+            if is_tainted:
+                self.tainted_values.add(name)
+            else:
+                self.tainted_values.discard(name)
+
+    def visit_FunctionDef(self, node):
+        old_safe = set(self.safe_values)
+        old_tainted = set(self.tainted_values)
+        self.safe_values.clear()
+        self.tainted_values.clear()
+        for stmt in node.body:
+            self.visit(stmt)
+        self.safe_values = old_safe
+        self.tainted_values = old_tainted
+
+    def visit_AsyncFunctionDef(self, node):
+        self.visit_FunctionDef(node)
+
+    def visit_Assign(self, node):
+        names = [name for target in node.targets for name in target_names(target)]
+        if names:
+            self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            names = target_names(node.target)
+            if names:
+                self.mark_assignment(names, node.value)
+        self.generic_visit(node)
+
+    def search_filter_args(self, node, short):
+        args = []
+        if short in LDAP_SECOND_ARG_FILTER_METHODS:
+            if len(node.args) >= 2:
+                args.append(node.args[1])
+        elif short in LDAP_SEARCH_METHODS:
+            if len(node.args) >= 3:
+                args.append(node.args[2])
+        if short in LDAP_CONSTRUCTORS:
+            if len(node.args) >= 3:
+                args.append(node.args[2])
+        args.extend(keyword_values(node, FILTER_KEYWORDS))
+        return args
+
+    def dn_args(self, node, short):
+        args = []
+        if short in LDAP_DN_METHODS and node.args:
+            args.append(node.args[0])
+        args.extend(keyword_values(node, DN_KEYWORDS))
+        return args
+
+    def visit_Call(self, node):
+        name = call_name(node.func)
+        short = name.rsplit('.', 1)[-1]
+        values = []
+        if short in LDAP_SEARCH_METHODS or short in LDAP_CONSTRUCTORS or name in LDAP_CONSTRUCTORS:
+            values.extend(self.search_filter_args(node, short))
+        if short in LDAP_DN_METHODS:
+            values.extend(self.dn_args(node, short))
+        if values and any(self.expr_contains_taint(value) for value in values):
+            self.remember_issue(node.lineno)
+        self.generic_visit(node)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+        tree = ast.parse(text, filename=str(path))
+    except Exception:
+        return
+    lines = text.splitlines()
+    analyzer = LDAPInjectionAnalyzer(path, text, lines)
+    analyzer.visit(tree)
+    issues.extend(analyzer.issues)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f'__COUNT__\t{len(issues)}')
+for file_name, line_no, code in issues[:25]:
+    print(f'__SAMPLE__\t{file_name}\t{line_no}\t{code}')
+PY
+)
+}
+
 run_command_injection_checks() {
   print_subheader "Command injection dataflow"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -7986,6 +8261,7 @@ run_nosql_injection_checks
 run_regex_dos_checks
 run_template_injection_checks
 run_header_injection_checks
+run_ldap_injection_checks
 
 print_subheader "requests verify=False (TLS disabled)"
 count=$("${GREP_RN[@]}" -e "requests\.[a-z]+\([^)]*verify\s*=\s*False" "$PROJECT_DIR" 2>/dev/null | count_lines || true)

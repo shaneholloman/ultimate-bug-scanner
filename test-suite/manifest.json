@@ -1782,6 +1782,65 @@
       }
     },
     {
+      "id": "python-ldap-injection-buggy",
+      "description": "Python LDAP filters and DNs should not consume request-controlled values without LDAP escaping or allow-list validation.",
+      "path": "test-suite/python/security/ldap_injection_buggy.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "ldap-injection",
+        "buggy"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-controlled LDAP filter or DN reaches directory sink"
+        ]
+      }
+    },
+    {
+      "id": "python-ldap-injection-clean",
+      "description": "Python LDAP filters and DNs that use LDAP-specific escaping should stay clean.",
+      "path": "test-suite/python/security/ldap_injection_clean.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "ldap-injection",
+        "clean"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-controlled LDAP filter or DN reaches directory sink"
+        ]
+      }
+    },
+    {
       "id": "python-archive-extraction-buggy",
       "description": "Python tarfile/zipfile extractall should validate archive member paths before extraction.",
       "path": "test-suite/python/security/archive_extraction_buggy.py",

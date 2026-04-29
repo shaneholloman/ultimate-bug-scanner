@@ -11,6 +11,7 @@
 | `security/redos_regex_buggy.py` | Regex DoS security | request/stdin/argv patterns reaching `re`, `regex`, or pandas string regex sinks without `re.escape` or fixed allow-lists |
 | `security/template_injection_buggy.py` | Template injection security | request-controlled template source strings reaching Flask/Jinja2/Django/Mako renderers |
 | `security/header_injection_buggy.py` | Response header injection security | request-controlled values reaching response headers, header dictionaries, and download filename parameters |
+| `security/ldap_injection_buggy.py` | LDAP injection security | request-controlled values reaching LDAP search filters, filter keywords, bind DNs, or modification DNs without LDAP escaping |
 | `security/archive_extraction_buggy.py` | Archive extraction security | tarfile/zipfile `extractall()` without member path validation |
 | `security/open_redirect_buggy.py` | Web redirect security | request-derived Flask/Django/Starlette redirect targets without allow-list validation |
 | `security/ssrf_buggy.py` | Outbound HTTP security | request-derived URLs reaching requests/httpx/aiohttp/urllib clients without host allow-list validation |
