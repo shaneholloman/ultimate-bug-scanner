@@ -5241,6 +5241,66 @@
       }
     },
     {
+      "id": "rust-temp-file-race-buggy",
+      "description": "Rust predictable temp-file writes should use tempfile helpers or create_new(true).",
+      "path": "test-suite/rust/buggy/temp_file_race.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "tempfile",
+        "buggy"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Predictable temp-file write race"
+        ]
+      }
+    },
+    {
+      "id": "rust-temp-file-race-clean",
+      "description": "Rust safe temp-file creation with tempfile or create_new(true) should stay clean.",
+      "path": "test-suite/rust/clean/temp_file_race.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "tempfile",
+        "clean"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Predictable temp-file write race"
+        ]
+      }
+    },
+    {
       "id": "rust-async-errors-buggy",
       "description": "Rust awaits lacking ?/match handling + tokio::spawn handles dropped.",
       "path": "test-suite/rust/async_errors/buggy",
