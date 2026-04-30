@@ -7,6 +7,7 @@
 | `buggy/blocking_async.rs` | Blocking sleep/fs/thread operations inside async functions |
 | `buggy/resource_lifecycle.rs` | Missing JoinHandle cleanup |
 | `buggy/security_injection.rs` | Command injection + exposed secrets |
+| `buggy/archive_extraction.rs` | Archive member paths joined into extraction destinations |
 | `buggy/math_precision.rs` | Float equality for money |
 | Clean files (`clean/*.rs`) | `Result` handling, JoinHandle waiting, integer cents |
 

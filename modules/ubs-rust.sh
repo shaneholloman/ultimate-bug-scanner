@@ -1768,6 +1768,220 @@ collect_samples_path_traversal() {
   printf ']'
 }
 
+rust_archive_entry_path_matches() {
+  [[ "$have_python3" -eq 1 ]] || return 1
+  python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+
+skip_dirs = {".git", "target", ".cargo", "node_modules"}
+archive_receiver = re.compile(r"(?:entry|file|member|archive|zip|tar)", re.IGNORECASE)
+direct_join = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
+    r"\s*\.\s*(?:join|push)\s*\(\s*&?\s*"
+    r"(?P<src>[A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(?:name|path)\s*\(",
+    re.MULTILINE,
+)
+archive_assignment = re.compile(
+    r"\blet\s+(?:mut\s+)?(?P<var>[A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=\s*&?\s*"
+    r"(?P<src>[A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(?:name|path)\s*\(",
+    re.MULTILINE,
+)
+join_var = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
+    r"\s*\.\s*(?:join|push)\s*\(\s*&?\s*(?P<arg>[A-Za-z_][A-Za-z0-9_]*)\b",
+    re.MULTILINE,
+)
+safe_context = re.compile(
+    r"\b(?:enclosed_name|canonicalize|starts_with|strip_prefix|components\s*\(|Component::Normal|unpack_in)\b"
+)
+
+
+def rust_files(path: Path):
+    if path.is_file():
+        if path.suffix == ".rs":
+            yield path
+        return
+    for child in path.rglob("*.rs"):
+        if skip_dirs.intersection(child.parts):
+            continue
+        yield child
+
+
+def mask_range(chars, start, end):
+    for pos in range(start, min(end, len(chars))):
+        if chars[pos] != "\n":
+            chars[pos] = " "
+
+
+def mask_comments_and_strings(text: str) -> str:
+    chars = list(text)
+    i = 0
+    n = len(chars)
+    state = "code"
+    while i < n:
+        ch = chars[i]
+        nxt = chars[i + 1] if i + 1 < n else ""
+        if state == "code":
+            if ch == "/" and nxt == "/":
+                start = i
+                i += 2
+                while i < n and chars[i] != "\n":
+                    i += 1
+                mask_range(chars, start, i)
+                continue
+            if ch == "/" and nxt == "*":
+                chars[i] = chars[i + 1] = " "
+                i += 2
+                state = "block"
+                continue
+            if ch == "r":
+                j = i + 1
+                while j < n and chars[j] == "#":
+                    j += 1
+                if j < n and chars[j] == '"':
+                    hashes = j - i - 1
+                    close = '"' + ("#" * hashes)
+                    end = text.find(close, j + 1)
+                    if end == -1:
+                        end = n - 1
+                    else:
+                        end += len(close)
+                    mask_range(chars, i, end)
+                    i = end
+                    continue
+            if ch == '"':
+                chars[i] = " "
+                i += 1
+                state = "string"
+                continue
+        elif state == "block":
+            if ch == "*" and nxt == "/":
+                chars[i] = chars[i + 1] = " "
+                i += 2
+                state = "code"
+                continue
+            if ch != "\n":
+                chars[i] = " "
+        elif state == "string":
+            if ch == "\\":
+                chars[i] = " "
+                if i + 1 < n and chars[i + 1] != "\n":
+                    chars[i + 1] = " "
+                    i += 2
+                    continue
+            if ch == '"':
+                chars[i] = " "
+                i += 1
+                state = "code"
+                continue
+            if ch != "\n":
+                chars[i] = " "
+        i += 1
+    return "".join(chars)
+
+
+def line_number(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def surrounding_code(lines, line_index):
+    start = max(0, line_index - 8)
+    end = min(len(lines), line_index + 4)
+    return "\n".join(lines[start:end])
+
+
+seen = set()
+for path in rust_files(root):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        continue
+    masked = mask_comments_and_strings(text)
+    original_lines = text.splitlines()
+    masked_lines = masked.splitlines()
+    archive_vars = set()
+    for assignment in archive_assignment.finditer(masked):
+        if archive_receiver.search(assignment.group("src")):
+            archive_vars.add(assignment.group("var"))
+
+    for hit in direct_join.finditer(masked):
+        if not archive_receiver.search(hit.group("src")):
+            continue
+        line = line_number(masked, hit.start())
+        context = surrounding_code(masked_lines, line - 1)
+        if safe_context.search(context):
+            continue
+        code = original_lines[line - 1].strip() if 0 < line <= len(original_lines) else ""
+        if "ubs:ignore" in code:
+            continue
+        key = (str(path), line, code)
+        if key in seen:
+            continue
+        seen.add(key)
+        print(f"{path}:{line}:{code}")
+
+    for hit in join_var.finditer(masked):
+        if hit.group("arg") not in archive_vars:
+            continue
+        line = line_number(masked, hit.start())
+        context = surrounding_code(masked_lines, line - 1)
+        if safe_context.search(context):
+            continue
+        code = original_lines[line - 1].strip() if 0 < line <= len(original_lines) else ""
+        if "ubs:ignore" in code:
+            continue
+        key = (str(path), line, code)
+        if key in seen:
+            continue
+        seen.add(key)
+        print(f"{path}:{line}:{code}")
+PY
+}
+
+count_archive_entry_path_matches() {
+  if [[ "$have_python3" -eq 1 ]]; then
+    rust_archive_entry_path_matches | count_lines || true
+  else
+    return 1
+  fi
+}
+
+show_archive_entry_path_examples() {
+  local limit="${1:-$DETAIL_LIMIT}"
+  local printed=0
+  [[ "$have_python3" -eq 1 ]] || return 1
+  while IFS= read -r rawline; do
+    [[ -z "$rawline" ]] && continue
+    parse_grep_line "$rawline" || continue
+    print_code_sample "$PARSED_FILE" "$PARSED_LINE" "$PARSED_CODE"
+    printed=$((printed + 1))
+    [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
+  done < <(rust_archive_entry_path_matches | head -n "$limit")
+  [[ "$printed" -gt 0 ]]
+}
+
+collect_samples_archive_entry_path() {
+  local limit="${1:-$DETAIL_LIMIT}"
+  if [[ "$have_python3" -ne 1 ]]; then
+    printf '[]'
+    return
+  fi
+  mapfile -t lines < <(rust_archive_entry_path_matches | head -n "$limit")
+  printf '['
+  local i=0
+  local line
+  for line in "${lines[@]}"; do
+    [[ $i -gt 0 ]] && printf ','
+    printf '"%s"' "$(printf '%s' "$line" | json_escape)"
+    i=$((i + 1))
+  done
+  printf ']'
+}
+
 rust_command_executable_matches() {
   [[ "$have_python3" -eq 1 ]] || return 1
   python3 - "$PROJECT_DIR" <<'PY'
@@ -3804,6 +4018,15 @@ if [ "$path_traversal_hits" -gt 0 ]; then
   print_finding "warning" "$path_traversal_hits" "Path join/push with untrusted-looking segment" "Reject absolute paths and '..' components; canonicalize and verify the result stays under the intended root"
   show_path_traversal_examples 3 || true
   add_finding "warning" "$path_traversal_hits" "Path join/push with untrusted-looking segment" "Reject absolute paths and '..' components; canonicalize and verify the result stays under the intended root" "${CATEGORY_NAME[8]}" "$(collect_samples_path_traversal 3)"
+fi
+
+print_subheader "Archive entry paths joined into extraction destination"
+archive_entry_path_hits=$(count_archive_entry_path_matches || echo 0)
+archive_entry_path_hits=$(printf '%s\n' "${archive_entry_path_hits:-0}" | awk 'END{print $0+0}')
+if [ "$archive_entry_path_hits" -gt 0 ]; then
+  print_finding "warning" "$archive_entry_path_hits" "Archive entry path traversal risk" "Use zip::read::ZipFile::enclosed_name(), tar::Entry::unpack_in(), or canonicalize and verify destination containment before writing"
+  show_archive_entry_path_examples 3 || true
+  add_finding "warning" "$archive_entry_path_hits" "Archive entry path traversal risk" "Use zip::read::ZipFile::enclosed_name(), tar::Entry::unpack_in(), or canonicalize and verify destination containment before writing" "${CATEGORY_NAME[8]}" "$(collect_samples_archive_entry_path 3)"
 fi
 
 print_subheader "Plain http:// URLs"

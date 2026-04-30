@@ -4998,6 +4998,66 @@
       }
     },
     {
+      "id": "rust-archive-extraction-buggy",
+      "description": "Rust archive extraction should validate zip/tar entry paths before writing files.",
+      "path": "test-suite/rust/buggy/archive_extraction.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "archive",
+        "buggy"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Archive entry path traversal risk"
+        ]
+      }
+    },
+    {
+      "id": "rust-archive-extraction-clean",
+      "description": "Rust archive extraction that uses enclosed_name/unpack_in containment should stay clean.",
+      "path": "test-suite/rust/clean/archive_extraction.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "archive",
+        "clean"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Archive entry path traversal risk"
+        ]
+      }
+    },
+    {
       "id": "rust-async-errors-buggy",
       "description": "Rust awaits lacking ?/match handling + tokio::spawn handles dropped.",
       "path": "test-suite/rust/async_errors/buggy",
