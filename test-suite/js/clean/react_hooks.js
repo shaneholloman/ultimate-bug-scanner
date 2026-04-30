@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-export function CleanHooks({ userId, theme }) {
+export function CleanHooks({ userId, theme, signal }) {
   const [count, setCount] = useState(0);
   const memoizedConfig = useMemo(() => ({ userId, theme }), [userId, theme]);
 
   useEffect(() => {
-    fetch(`/api/users/${userId}`);
-  }, [userId]);
+    fetch(`/api/users/${userId}`, { signal });
+  }, [userId, signal]);
 
   const handleClick = useCallback(() => {
     console.log(theme, count);

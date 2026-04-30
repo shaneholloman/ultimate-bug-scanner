@@ -4,15 +4,15 @@
 // ============================================================================
 
 // GOOD: Proper async/await usage
-async function fetchUser(id) {
-  const response = await fetch(`/api/users/${id}`);
+async function fetchUser(id, signal = AbortSignal.timeout(5000)) {
+  const response = await fetch(`/api/users/${id}`, { signal });
   return response.json();
 }
 
 // GOOD: Error handling with try/catch
-async function loadUserData(userId) {
+async function loadUserData(userId, signal = AbortSignal.timeout(5000)) {
   try {
-    const response = await fetch(`/api/users/${userId}`);
+    const response = await fetch(`/api/users/${userId}`, { signal });
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
@@ -40,8 +40,8 @@ async function loadAllData(userId) {
 }
 
 // GOOD: Promise with .catch()
-function fetchData() {
-  return fetch('/api/data')
+function fetchData(signal = AbortSignal.timeout(5000)) {
+  return fetch('/api/data', { signal })
     .then(res => res.json())
     .then(data => processData(data))
     .catch(error => {
@@ -63,9 +63,9 @@ async function processItems(items) {
 }
 
 // GOOD: Using Promise.allSettled for handling partial failures
-async function fetchMultipleEndpoints(urls) {
+async function fetchMultipleEndpoints(urls, signal = AbortSignal.timeout(5000)) {
   const results = await Promise.allSettled(
-    urls.map(url => fetch(url))
+    urls.map(url => fetch(url, { signal }))
   );
 
   return results.map((result, index) => {
@@ -95,7 +95,7 @@ class DataService {
   }
 
   async loadData() {
-    const response = await fetch('/api/initial-data');
+    const response = await fetch('/api/initial-data', { signal: AbortSignal.timeout(5000) });
     return response.json();
   }
 }

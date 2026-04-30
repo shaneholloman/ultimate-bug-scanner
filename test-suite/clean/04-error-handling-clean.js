@@ -4,9 +4,9 @@
 // ============================================================================
 
 // GOOD: Try-catch with specific error handling
-async function loadUserData(userId) {
+async function loadUserData(userId, signal = AbortSignal.timeout(5000)) {
   try {
-    const response = await fetch(`/api/users/${userId}`);
+    const response = await fetch(`/api/users/${userId}`, { signal });
 
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -69,8 +69,8 @@ async function processFile(filename) {
 }
 
 // GOOD: Promise rejection handling
-function fetchWithErrorHandling(url) {
-  return fetch(url)
+function fetchWithErrorHandling(url, signal = AbortSignal.timeout(5000)) {
+  return fetch(url, { signal })
     .then(response => {
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -162,7 +162,7 @@ async function fetchWithRetry(url, maxRetries = 3) {
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);

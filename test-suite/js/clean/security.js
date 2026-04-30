@@ -12,8 +12,8 @@ function render(comment) {
   }
 }
 
-async function fetchData(url) {
-  const response = await fetch(url);
+async function fetchData(url, signal = AbortSignal.timeout(5000)) {
+  const response = await fetch(url, { signal });
   if (!response.ok) throw new Error('bad response');
   return response.json();
 }

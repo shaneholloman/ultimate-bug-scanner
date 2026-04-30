@@ -4888,6 +4888,201 @@ if [ "$open_redirect_count" -gt 0 ]; then
   done <<<"$open_redirect_samples"
 fi
 
+print_subheader "fetch without AbortSignal cancellation"
+fetch_cancellation_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+fetch_start_re = re.compile(r'(?<![\w$.])(?:window\s*\.\s*|globalThis\s*\.\s*)?fetch\s*\(')
+definition_re = re.compile(r'^\s*(?:export\s+)?(?:async\s+)?function\s+fetch\s*\(|^\s*declare\s+function\s+fetch\s*\(')
+assignment_re = re.compile(r'\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b[^=]*=\s*(.*)')
+identifier_re = re.compile(r'^([A-Za-z_$][A-Za-z0-9_$]*)\b')
+signal_property_re = re.compile(r'\bsignal\s*:')
+signal_shorthand_re = re.compile(r'[{,]\s*signal\s*(?:[,}])')
+
+def code_line(source_line):
+    stripped = source_line.strip()
+    if not stripped or stripped.startswith(("//", "/*", "*")):
+        return ""
+    without_block_comments = re.sub(r'/\*.*?\*/', '', source_line)
+    return re.sub(r'//.*', '', without_block_comments)
+
+def statement_from(lines, idx, max_lines=14):
+    parts = []
+    paren_balance = 0
+    saw_open = False
+    for line_idx in range(idx, min(len(lines), idx + max_lines)):
+        current = code_line(lines[line_idx]).strip()
+        if not current:
+            continue
+        parts.append(current)
+        if fetch_start_re.search(current) or 'new Request' in current or '=' in current:
+            saw_open = True
+        if saw_open:
+            paren_balance += current.count('(') - current.count(')')
+        if line_idx > idx and paren_balance <= 0:
+            break
+        if ';' in current and paren_balance <= 0:
+            break
+    return ' '.join(parts)
+
+def has_signal_option(text):
+    return bool(signal_property_re.search(text) or signal_shorthand_re.search(text))
+
+def extract_fetch_args(call_text):
+    match = fetch_start_re.search(call_text)
+    if not match:
+        return ""
+    start = match.end()
+    depth = 1
+    quote = ""
+    escaped = False
+    for pos in range(start, len(call_text)):
+        ch = call_text[pos]
+        if quote:
+            if escaped:
+                escaped = False
+                continue
+            if ch == '\\':
+                escaped = True
+                continue
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in ('"', "'", '`'):
+            quote = ch
+            continue
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                return call_text[start:pos]
+    return call_text[start:]
+
+def split_top_level_args(args_text):
+    args = []
+    current = []
+    depth = 0
+    quote = ""
+    escaped = False
+    for ch in args_text:
+        if quote:
+            current.append(ch)
+            if escaped:
+                escaped = False
+                continue
+            if ch == '\\':
+                escaped = True
+                continue
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in ('"', "'", '`'):
+            quote = ch
+            current.append(ch)
+            continue
+        if ch in '([{':
+            depth += 1
+        elif ch in ')]}':
+            depth = max(0, depth - 1)
+        if ch == ',' and depth == 0:
+            args.append(''.join(current).strip())
+            current = []
+            continue
+        current.append(ch)
+    tail = ''.join(current).strip()
+    if tail:
+        args.append(tail)
+    return args
+
+def leading_identifier(arg):
+    match = identifier_re.match(arg.strip())
+    return match.group(1) if match else ""
+
+issues = []
+if root.is_file():
+    candidates = [root]
+    sample_root = root.parent
+else:
+    candidates = []
+    sample_root = root
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            candidates.append(Path(dirpath) / fname)
+
+for path in candidates:
+    if path.suffix.lower() not in exts:
+        continue
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        continue
+
+    safe_init_vars = set()
+    safe_request_vars = set()
+    for idx, line in enumerate(lines):
+        stripped = code_line(line).strip()
+        if not stripped:
+            continue
+        assignment = assignment_re.search(stripped)
+        if assignment:
+            statement = statement_from(lines, idx)
+            name = assignment.group(1)
+            if 'new Request' in statement and has_signal_option(statement):
+                safe_request_vars.add(name)
+            elif has_signal_option(statement):
+                safe_init_vars.add(name)
+
+    for idx, line in enumerate(lines):
+        stripped = code_line(line).strip()
+        if not stripped or definition_re.search(stripped) or not fetch_start_re.search(stripped):
+            continue
+        call_text = statement_from(lines, idx)
+        if 'ubs:ignore' in call_text:
+            continue
+        args = split_top_level_args(extract_fetch_args(call_text))
+        first_arg = args[0] if args else ""
+        options_arg = args[1] if len(args) > 1 else ""
+        first_ident = leading_identifier(first_arg)
+        options_ident = leading_identifier(options_arg)
+        if options_arg and (has_signal_option(options_arg) or options_ident in safe_init_vars):
+            continue
+        if first_ident in safe_request_vars:
+            continue
+        if first_arg.startswith('new Request') and has_signal_option(first_arg):
+            continue
+        try:
+            rel = path.relative_to(sample_root)
+        except ValueError:
+            rel = path
+        issues.append((str(rel), idx + 1, stripped.replace('\t', ' ')))
+
+print(len(issues))
+for entry in issues[:25]:
+    print('\t'.join(str(part) for part in entry))
+PY
+)
+fetch_cancellation_count=$(printf '%s\n' "$fetch_cancellation_report" | head -n1 | awk 'END{print $0+0}')
+fetch_cancellation_samples=$(printf '%s\n' "$fetch_cancellation_report" | tail -n +2)
+if [ "$fetch_cancellation_count" -gt 0 ]; then
+  print_finding "warning" "$fetch_cancellation_count" "fetch() without AbortSignal cancellation" "Pass a signal from AbortSignal.timeout() or an AbortController so callers can bound stalled requests"
+  sample_limit=3
+  while IFS=$'\t' read -r sample_path sample_line sample_text; do
+    [ -z "$sample_path" ] && continue
+    print_code_sample "$sample_path" "$sample_line" "$sample_text"
+    sample_limit=$((sample_limit - 1))
+    [ "$sample_limit" -le 0 ] && break
+  done <<<"$fetch_cancellation_samples"
+fi
+
 print_subheader "Hardcoded secrets/credentials"
 count=$("${GREP_RNI[@]}" -e "\b(password|api_?key|secret|token)\b[[:space:]]*[:=][[:space:]]*['\"]([^'\"]+)['\"]" "$PROJECT_DIR" 2>/dev/null |   (grep -v "process\.env" || true) | count_lines)
 if [ "$count" -gt 0 ]; then
