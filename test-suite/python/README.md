@@ -6,6 +6,7 @@
 | `buggy/resource_lifecycle.py` | File/task cleanup | missing `close()`/`cancel()` |
 | `buggy/security_injection.py` | Code & command injection, yaml.load, eval | eval/exec, yaml.load without Loader, shell=True |
 | `security/command_injection_buggy.py` | Command execution security | request/stdin data reaching `shell=True`, shell `-c`, `os.system`, aliased subprocess calls, or executable selection |
+| `security/subprocess_timeout_buggy.py` | Process execution reliability | subprocess calls without explicit bounded `timeout=` values |
 | `security/sql_injection_buggy.py` | SQL injection security | f-string, `%`, `.format()`, and concatenated SQL reaching execute/raw/extra/read_sql sinks |
 | `security/nosql_injection_buggy.py` | NoSQL injection security | request dictionaries, operator payloads, dynamic keys, `$where`, aggregation pipelines, and MongoDB commands reaching PyMongo-style sinks |
 | `security/redos_regex_buggy.py` | Regex DoS security | request/stdin/argv patterns reaching `re`, `regex`, or pandas string regex sinks without `re.escape` or fixed allow-lists |
