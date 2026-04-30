@@ -5083,6 +5083,155 @@ if [ "$fetch_cancellation_count" -gt 0 ]; then
   done <<<"$fetch_cancellation_samples"
 fi
 
+print_subheader "Archive/upload entry paths joined into destinations"
+archive_entry_path_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+archive_receiver_re = re.compile(r'(?:entry|file|member|header|archive|zip|tar)', re.IGNORECASE)
+source_property_re = re.compile(
+    r'\b(?P<receiver>[A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*'
+    r'(?P<prop>entryName|fileName|path|name)\b'
+)
+assignment_re = re.compile(r'\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b[^=]*=\s*(.*)')
+path_join_re = re.compile(r'\b(?:(?:path|nodePath|posix|win32)\s*\.\s*)?(?:join|resolve)\s*\(', re.IGNORECASE)
+safe_re = re.compile(
+    r'(?:'
+    r'\bpath\s*\.\s*relative\s*\(|\bnodePath\s*\.\s*relative\s*\(|\.startsWith\s*\(|'
+    r'\bpath\s*\.\s*isAbsolute\s*\(|\bnodePath\s*\.\s*isAbsolute\s*\(|'
+    r'\bpath\s*\.\s*basename\s*\(|\bnodePath\s*\.\s*basename\s*\(|'
+    r'isSafeArchivePath|validateArchivePath|sanitizeArchivePath|safeArchiveTarget|'
+    r'stripComponents|stripPath|enclosedName|containsPath'
+    r')',
+    re.IGNORECASE,
+)
+
+def code_line(source_line):
+    stripped = source_line.strip()
+    if not stripped or stripped.startswith(("//", "/*", "*")):
+        return ""
+    without_block_comments = re.sub(r'/\*.*?\*/', '', source_line)
+    return re.sub(r'//.*', '', without_block_comments)
+
+def statement_from(lines, idx, max_lines=12):
+    parts = []
+    paren_balance = 0
+    brace_balance = 0
+    saw_code = False
+    for line_idx in range(idx, min(len(lines), idx + max_lines)):
+        current = code_line(lines[line_idx]).strip()
+        if not current:
+            continue
+        parts.append(current)
+        saw_code = True
+        paren_balance += current.count('(') - current.count(')')
+        brace_balance += current.count('{') - current.count('}')
+        if line_idx > idx and paren_balance <= 0 and brace_balance <= 0:
+            break
+        if ';' in current and paren_balance <= 0 and brace_balance <= 0:
+            break
+    return ' '.join(parts) if saw_code else ""
+
+def context_from(lines, idx):
+    start = max(0, idx - 8)
+    end = min(len(lines), idx + 10)
+    return '\n'.join(
+        clean
+        for source_line in lines[start:end]
+        for clean in [code_line(source_line)]
+        if clean.strip()
+    )
+
+def has_archive_source(text, archive_vars):
+    for match in source_property_re.finditer(text):
+        if archive_receiver_re.search(match.group('receiver')):
+            return True
+    for name in archive_vars:
+        if re.search(rf'\b{re.escape(name)}\b', text):
+            return True
+    return False
+
+issues = []
+if root.is_file():
+    candidates = [root]
+    sample_root = root.parent
+else:
+    candidates = []
+    sample_root = root
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            candidates.append(Path(dirpath) / fname)
+
+for path in candidates:
+    if path.suffix.lower() not in exts:
+        continue
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        continue
+
+    archive_vars = {}
+    for idx, line in enumerate(lines):
+        statement = statement_from(lines, idx)
+        if not statement or 'ubs:ignore' in statement:
+            continue
+        assignment = assignment_re.search(statement)
+        if not assignment:
+            continue
+        expr = assignment.group(2)
+        for match in source_property_re.finditer(expr):
+            if archive_receiver_re.search(match.group('receiver')):
+                archive_vars[assignment.group(1)] = idx
+                break
+
+    seen_lines = set()
+    for idx, line in enumerate(lines):
+        stripped = code_line(line).strip()
+        if not stripped or 'ubs:ignore' in stripped:
+            continue
+        if not path_join_re.search(stripped):
+            continue
+        statement = statement_from(lines, idx)
+        if not statement or 'ubs:ignore' in statement:
+            continue
+        if not has_archive_source(statement, archive_vars):
+            continue
+        if safe_re.search(context_from(lines, idx)):
+            continue
+        if idx in seen_lines:
+            continue
+        seen_lines.add(idx)
+        try:
+            rel = path.relative_to(sample_root)
+        except ValueError:
+            rel = path
+        issues.append((str(rel), idx + 1, stripped.replace('\t', ' ')))
+
+print(len(issues))
+for entry in issues[:25]:
+    print('\t'.join(str(part) for part in entry))
+PY
+)
+archive_entry_path_count=$(printf '%s\n' "$archive_entry_path_report" | head -n1 | awk 'END{print $0+0}')
+archive_entry_path_samples=$(printf '%s\n' "$archive_entry_path_report" | tail -n +2)
+if [ "$archive_entry_path_count" -gt 0 ]; then
+  print_finding "warning" "$archive_entry_path_count" "Archive/upload entry path traversal risk" "Validate archive entry names with path.relative()/isAbsolute() containment checks or strip to path.basename() before writing"
+  sample_limit=3
+  while IFS=$'\t' read -r sample_path sample_line sample_text; do
+    [ -z "$sample_path" ] && continue
+    print_code_sample "$sample_path" "$sample_line" "$sample_text"
+    sample_limit=$((sample_limit - 1))
+    [ "$sample_limit" -le 0 ] && break
+  done <<<"$archive_entry_path_samples"
+fi
+
 print_subheader "Hardcoded secrets/credentials"
 count=$("${GREP_RNI[@]}" -e "\b(password|api_?key|secret|token)\b[[:space:]]*[:=][[:space:]]*['\"]([^'\"]+)['\"]" "$PROJECT_DIR" 2>/dev/null |   (grep -v "process\.env" || true) | count_lines)
 if [ "$count" -gt 0 ]; then
