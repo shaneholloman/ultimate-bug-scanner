@@ -3863,6 +3863,67 @@
       }
     },
     {
+      "id": "js-typescript-cors-credentials-buggy",
+      "description": "TypeScript/Node CORS must not combine credentials with wildcard or reflected origins.",
+      "path": "test-suite/js/security/cors-credentials-buggy.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "security",
+        "cors",
+        "buggy"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Credentialed wildcard/reflected CORS"
+        ]
+      }
+    },
+    {
+      "id": "js-typescript-cors-credentials-clean",
+      "description": "TypeScript/Node CORS with explicit allowlisted origins should stay clean.",
+      "path": "test-suite/js/security/cors-credentials-clean.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "security",
+        "cors",
+        "clean"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Credentialed wildcard/reflected CORS"
+        ]
+      }
+    },
+    {
       "id": "js-typescript-fetch-cancellation-buggy",
       "description": "TypeScript fetch calls should pass an AbortSignal so stalled requests can be cancelled.",
       "path": "test-suite/js/security/fetch-timeout-buggy.ts",
