@@ -1,0 +1,50 @@
+import { NextResponse } from "next/server";
+import cookie from "cookie";
+
+type ResponseLike = {
+  cookie(name: string, value: string, options?: Record<string, unknown>): void;
+  setHeader(name: string, value: string): void;
+};
+
+export function expressMissingFlags(res: ResponseLike, sessionId: string): void {
+  res.cookie("session_id", sessionId);
+}
+
+export function expressExplicitlyUnsafe(res: ResponseLike, token: string): void {
+  res.cookie("auth_token", token, {
+    httpOnly: false,
+    secure: false,
+    sameSite: "none",
+  });
+}
+
+export function nextResponseMissingSecure(token: string): NextResponse {
+  const response = NextResponse.json({ ok: true });
+  response.cookies.set("refresh_token", token, {
+    httpOnly: true,
+    sameSite: "none",
+  });
+  return response;
+}
+
+export function nextResponseObjectFormMissingSecure(token: string): NextResponse {
+  const response = NextResponse.json({ ok: true });
+  response.cookies.set({
+    name: "login_token",
+    value: token,
+    httpOnly: true,
+    sameSite: "none",
+  });
+  return response;
+}
+
+export function rawSetCookieHeader(res: ResponseLike, jwt: string): void {
+  res.setHeader("Set-Cookie", `jwt=${jwt}; Path=/; SameSite=Lax`);
+}
+
+export function serializedCookie(token: string): string {
+  return cookie.serialize("access_token", token, {
+    httpOnly: true,
+    sameSite: "lax",
+  });
+}

@@ -5544,6 +5544,147 @@ if [ "$cors_credentials_count" -gt 0 ]; then
   done <<<"$cors_credentials_samples"
 fi
 
+print_subheader "Insecure auth/session cookie settings"
+cookie_security_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+cookie_call_re = re.compile(
+    r'(?:'
+    r'\.(?:cookie)\s*\(|'
+    r'\bcookie\s*\.\s*serialize\s*\(|'
+    r'\bcookies\s*\(\s*\)\s*\.\s*set\s*\(|'
+    r'\.cookies\s*\.\s*set\s*\('
+    r')',
+    re.IGNORECASE,
+)
+set_cookie_header_re = re.compile(
+    r'(?:'
+    r'\b(?:setHeader|append|set)\s*\(\s*[\'"]Set-Cookie[\'"]|'
+    r'\bheaders\s*\.\s*(?:append|set)\s*\(\s*[\'"]Set-Cookie[\'"]'
+    r')',
+    re.IGNORECASE,
+)
+sensitive_name_re = re.compile(
+    r'[\'"`][^\'"`]*(?:session|sess|sid|auth|token|jwt|refresh|access|remember|login)[^\'"`]*[\'"`]',
+    re.IGNORECASE,
+)
+http_only_true_re = re.compile(r'\bhttpOnly\s*:\s*true\b', re.IGNORECASE)
+http_only_false_re = re.compile(r'\bhttpOnly\s*:\s*false\b', re.IGNORECASE)
+secure_true_re = re.compile(r'\bsecure\s*:\s*true\b', re.IGNORECASE)
+secure_false_re = re.compile(r'\bsecure\s*:\s*false\b', re.IGNORECASE)
+same_site_none_re = re.compile(r'\bsameSite\s*:\s*[\'"`]none[\'"`]', re.IGNORECASE)
+raw_http_only_re = re.compile(r'\bHttpOnly\b', re.IGNORECASE)
+raw_secure_re = re.compile(r'(?:^|[;,\s])Secure(?:[;,\s]|$)', re.IGNORECASE)
+
+def code_line(source_line):
+    stripped = source_line.strip()
+    if not stripped or stripped.startswith(("//", "/*", "*")):
+        return ""
+    without_block_comments = re.sub(r'/\*.*?\*/', '', source_line)
+    return re.sub(r'//.*', '', without_block_comments)
+
+def statement_from(lines, idx, max_lines=18):
+    parts = []
+    paren_balance = 0
+    brace_balance = 0
+    saw_code = False
+    for line_idx in range(idx, min(len(lines), idx + max_lines)):
+        current = code_line(lines[line_idx]).strip()
+        if not current:
+            continue
+        parts.append(current)
+        saw_code = True
+        paren_balance += current.count('(') - current.count(')')
+        brace_balance += current.count('{') - current.count('}')
+        ends_statement = current.endswith(';') or current.endswith('});') or current.endswith('}));')
+        if line_idx > idx and paren_balance <= 0 and brace_balance <= 0 and ends_statement:
+            break
+        if line_idx > idx and paren_balance <= 0 and brace_balance <= 0 and ');' in current:
+            break
+    return ' '.join(parts) if saw_code else ""
+
+def is_insecure_cookie_call(statement):
+    if not cookie_call_re.search(statement):
+        return False
+    explicit_insecure = http_only_false_re.search(statement) or secure_false_re.search(statement)
+    same_site_none_without_secure = same_site_none_re.search(statement) and not secure_true_re.search(statement)
+    sensitive_cookie = sensitive_name_re.search(statement)
+    has_options = '{' in statement and '}' in statement
+    missing_required_flags = sensitive_cookie and (
+        not has_options or not http_only_true_re.search(statement) or not secure_true_re.search(statement)
+    )
+    return bool(explicit_insecure or same_site_none_without_secure or missing_required_flags)
+
+def is_insecure_set_cookie_header(statement):
+    if not set_cookie_header_re.search(statement):
+        return False
+    return not (raw_http_only_re.search(statement) and raw_secure_re.search(statement))
+
+issues = []
+if root.is_file():
+    candidates = [root]
+    sample_root = root.parent
+else:
+    candidates = []
+    sample_root = root
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            candidates.append(Path(dirpath) / fname)
+
+for path in candidates:
+    if path.suffix.lower() not in exts:
+        continue
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        continue
+    seen_lines = set()
+    for idx, line in enumerate(lines):
+        stripped = code_line(line).strip()
+        if not stripped or 'ubs:ignore' in stripped:
+            continue
+        if not (cookie_call_re.search(stripped) or set_cookie_header_re.search(stripped)):
+            continue
+        statement = statement_from(lines, idx)
+        if not statement or 'ubs:ignore' in statement:
+            continue
+        if not (is_insecure_cookie_call(statement) or is_insecure_set_cookie_header(statement)):
+            continue
+        if idx in seen_lines:
+            continue
+        seen_lines.add(idx)
+        try:
+            rel = path.relative_to(sample_root)
+        except ValueError:
+            rel = path
+        issues.append((str(rel), idx + 1, stripped.replace('\t', ' ')))
+
+print(len(issues))
+for entry in issues[:25]:
+    print('\t'.join(str(part) for part in entry))
+PY
+)
+cookie_security_count=$(printf '%s\n' "$cookie_security_report" | head -n1 | awk 'END{print $0+0}')
+cookie_security_samples=$(printf '%s\n' "$cookie_security_report" | tail -n +2)
+if [ "$cookie_security_count" -gt 0 ]; then
+  print_finding "warning" "$cookie_security_count" "Insecure auth/session cookie settings" "Set auth cookies with httpOnly, secure, and SameSite protections; SameSite=None must also use Secure"
+  sample_limit=3
+  while IFS=$'\t' read -r sample_path sample_line sample_text; do
+    [ -z "$sample_path" ] && continue
+    print_code_sample "$sample_path" "$sample_line" "$sample_text"
+    sample_limit=$((sample_limit - 1))
+    [ "$sample_limit" -le 0 ] && break
+  done <<<"$cookie_security_samples"
+fi
+
 print_subheader "Hardcoded secrets/credentials"
 count=$("${GREP_RNI[@]}" -e "\b(password|api_?key|secret|token)\b[[:space:]]*[:=][[:space:]]*['\"]([^'\"]+)['\"]" "$PROJECT_DIR" 2>/dev/null |   (grep -v "process\.env" || true) | count_lines)
 if [ "$count" -gt 0 ]; then

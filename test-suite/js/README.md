@@ -19,6 +19,7 @@
 - `async_errors/promise-all-map-*.ts` covers TypeScript `Promise.all(ids.map(...))` calls where a block-bodied `map` callback forgets to return the promise.
 - `async_errors/use-effect-async-*.tsx` covers TypeScript/React effects that accidentally return a Promise by passing an async callback directly to `useEffect`.
 - `security/dangerously-set-html-*.tsx` covers TypeScript/React XSS risk from unsanitized `dangerouslySetInnerHTML`.
+- `security/cookie-security-*.ts` covers TypeScript auth/session cookies missing `httpOnly`, `secure`, or safe SameSite settings.
 - `security/cors-credentials-*.ts` covers TypeScript/Node CORS configurations that combine credentials with wildcard or reflected origins.
 - `security/fetch-timeout-*.ts` covers TypeScript fetch calls that need AbortSignal cancellation/timeout wiring.
 - `security/jwt-verification-*.ts` covers TypeScript JWT code that decodes tokens or disables verification before trusting claims.
