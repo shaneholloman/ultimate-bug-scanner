@@ -2257,7 +2257,7 @@
     },
     {
       "id": "python-path-traversal-buggy",
-      "description": "Python file read/download/write sinks should not consume request-derived paths without containment validation.",
+      "description": "Python file read/download/write sinks should not consume request/header-derived paths without containment validation.",
       "path": "test-suite/python/security/path_traversal_buggy.py",
       "language": "python",
       "tags": [
@@ -2285,7 +2285,7 @@
     },
     {
       "id": "python-path-traversal-clean",
-      "description": "Python file reads/downloads/uploads with safe_join, secure_filename, or resolved-base containment checks should stay clean.",
+      "description": "Python file reads/downloads/uploads with safe_join, secure_filename, or resolved-base containment checks, including header-derived paths, should stay clean.",
       "path": "test-suite/python/security/path_traversal_clean.py",
       "language": "python",
       "tags": [

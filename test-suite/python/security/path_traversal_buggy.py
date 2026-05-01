@@ -36,10 +36,25 @@ def raw_open_download():
     return open(target, "rb").read()
 
 
+def flask_header_download():
+    name = request.headers.get("X-File-Path")
+    return send_file(UPLOAD_ROOT / name)
+
+
+def raw_header_open():
+    target = request.headers["X-Report-Path"]
+    return open(target, "rb").read()
+
+
 def django_download(request):
     name = request.GET["document"]
     path = UPLOAD_ROOT / name
     return FileResponse(open(path, "rb"))
+
+
+def django_meta_download(request):
+    name = request.META.get("HTTP_X_FILE_PATH")
+    return FileResponse(open(UPLOAD_ROOT / name, "rb"))
 
 
 async def starlette_preview(request):

@@ -50,3 +50,18 @@ def sanitized_upload_save_keyword():
 def containment_checked_download():
     target = validate_path(request.args.get("document"))
     return target.read_bytes()
+
+
+def flask_header_download():
+    name = request.headers.get("X-File-Path")
+    return send_file(validate_path(name))
+
+
+def raw_header_open():
+    target = validate_path(request.headers["X-Report-Path"])
+    return target.read_bytes()
+
+
+def django_meta_download(request):
+    name = request.META.get("HTTP_X_FILE_PATH")
+    return validate_path(name).read_bytes()

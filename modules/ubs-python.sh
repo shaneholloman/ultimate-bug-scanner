@@ -5901,8 +5901,8 @@ ROOT = Path(sys.argv[1]).resolve()
 BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
 SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
 REQUEST_SOURCE_RE = re.compile(
-    r'\b(?:flask\.)?request\.(?:args|values|form|GET|POST|query_params|path_params|match_info|cookies|files|FILES)\b'
-    r'|\b(?:self\.)?request\.(?:GET|POST|query_params|path_params|match_info|FILES)\b',
+    r'\b(?:flask\.)?request\.(?:args|values|form|headers|META|GET|POST|query_params|path_params|match_info|cookies|files|FILES)\b'
+    r'|\b(?:self\.)?request\.(?:GET|POST|query_params|path_params|match_info|headers|META|FILES)\b',
     re.IGNORECASE,
 )
 UPLOAD_SOURCE_RE = re.compile(
