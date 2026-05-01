@@ -1417,7 +1417,7 @@ ALLOWLIST_CONTEXT_RE = re.compile(
 )
 HTTP_CALL_RE = re.compile(
     r'\bhttp\.(?:Get|Head|Post|PostForm)\s*\('
-    r'|\b[A-Za-z_][A-Za-z0-9_]*\.(?:Get|Head|Post|PostForm)\s*\('
+    r'|\b(?!Header\b|Query\b|Values\b|Form\b|PostForm\b|URL\b)[A-Za-z_][A-Za-z0-9_]*\.(?:Get|Head|Post|PostForm)\s*\('
 )
 REQUEST_BUILD_RE = re.compile(r'\bhttp\.NewRequest(?:WithContext)?\s*\(')
 DO_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\.Do\s*\(')
