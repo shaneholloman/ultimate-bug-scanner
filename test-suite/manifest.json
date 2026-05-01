@@ -3600,6 +3600,67 @@
       }
     },
     {
+      "id": "js-typescript-random-security-buggy",
+      "description": "TypeScript security tokens, sessions, OTPs, nonces, and invite codes should not use Math.random().",
+      "path": "test-suite/js/security/random-security-buggy.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "security",
+        "crypto",
+        "buggy"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Security token generated with Math.random"
+        ]
+      }
+    },
+    {
+      "id": "js-typescript-random-security-clean",
+      "description": "TypeScript crypto-backed token/session/OTP generation should stay clean while non-security UI randomness is allowed.",
+      "path": "test-suite/js/security/random-security-clean.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "security",
+        "crypto",
+        "clean"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Use crypto.randomUUID()"
+        ]
+      }
+    },
+    {
       "id": "js-typescript-post-message-wildcard-buggy",
       "description": "TypeScript postMessage should not send to wildcard target origin.",
       "path": "test-suite/js/security/post-message-buggy.ts",

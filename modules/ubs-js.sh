@@ -5685,6 +5685,134 @@ if [ "$cookie_security_count" -gt 0 ]; then
   done <<<"$cookie_security_samples"
 fi
 
+print_subheader "Security tokens generated with Math.random"
+random_security_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+math_random_re = re.compile(r'\bMath\s*\.\s*random\s*\(')
+sensitive_re = re.compile(
+    r'(?:'
+    r'\b(?:token|session|sess|sid|jwt|secret|nonce|csrf|xsrf|otp|mfa|2fa|'
+    r'reset|password|auth|invite|verification|verify|login|credential|'
+    r'bearer|salt|key|recovery|activation)\b|'
+    r'\bapi\s+key\b|\bmagic\s+link\b'
+    r')',
+    re.IGNORECASE,
+)
+token_shape_re = re.compile(r'\.toString\s*\(\s*(?:36|16)\s*\)|\bpadStart\s*\(\s*[46]\b')
+
+def identifier_terms(text):
+    spaced = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', text)
+    return re.sub(r'[_-]+', ' ', spaced)
+
+def code_line(source_line):
+    stripped = source_line.strip()
+    if not stripped or stripped.startswith(("//", "/*", "*")):
+        return ""
+    without_block_comments = re.sub(r'/\*.*?\*/', '', source_line)
+    return re.sub(r'//.*', '', without_block_comments)
+
+def statement_from(lines, idx, max_lines=10):
+    parts = []
+    paren_balance = 0
+    brace_balance = 0
+    saw_code = False
+    for line_idx in range(idx, min(len(lines), idx + max_lines)):
+        current = code_line(lines[line_idx]).strip()
+        if not current:
+            continue
+        parts.append(current)
+        saw_code = True
+        paren_balance += current.count('(') - current.count(')')
+        brace_balance += current.count('{') - current.count('}')
+        if line_idx > idx and paren_balance <= 0 and brace_balance <= 0:
+            break
+        if ';' in current and paren_balance <= 0 and brace_balance <= 0:
+            break
+    return ' '.join(parts) if saw_code else ""
+
+def context_from(lines, idx):
+    start = max(0, idx - 6)
+    end = min(len(lines), idx + 4)
+    for line_idx in range(idx - 1, start - 1, -1):
+        if not lines[line_idx].strip():
+            start = line_idx + 1
+            break
+    for line_idx in range(idx + 1, end):
+        if not lines[line_idx].strip():
+            end = line_idx
+            break
+    return '\n'.join(
+        clean
+        for source_line in lines[start:end]
+        for clean in [code_line(source_line)]
+        if clean.strip()
+    )
+
+issues = []
+if root.is_file():
+    candidates = [root]
+    sample_root = root.parent
+else:
+    candidates = []
+    sample_root = root
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            candidates.append(Path(dirpath) / fname)
+
+for path in candidates:
+    if path.suffix.lower() not in exts:
+        continue
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        continue
+    seen_lines = set()
+    for idx, line in enumerate(lines):
+        stripped = code_line(line).strip()
+        if not stripped or 'ubs:ignore' in stripped or not math_random_re.search(stripped):
+            continue
+        statement = statement_from(lines, idx)
+        if not statement or 'ubs:ignore' in statement:
+            continue
+        context = context_from(lines, idx)
+        if not (sensitive_re.search(identifier_terms(context)) or token_shape_re.search(statement)):
+            continue
+        if idx in seen_lines:
+            continue
+        seen_lines.add(idx)
+        try:
+            rel = path.relative_to(sample_root)
+        except ValueError:
+            rel = path
+        issues.append((str(rel), idx + 1, stripped.replace('\t', ' ')))
+
+print(len(issues))
+for entry in issues[:25]:
+    print('\t'.join(str(part) for part in entry))
+PY
+)
+random_security_count=$(printf '%s\n' "$random_security_report" | head -n1 | awk 'END{print $0+0}')
+random_security_samples=$(printf '%s\n' "$random_security_report" | tail -n +2)
+if [ "$random_security_count" -gt 0 ]; then
+  print_finding "warning" "$random_security_count" "Security token generated with Math.random" "Use crypto.randomUUID(), crypto.randomBytes(), crypto.getRandomValues(), or crypto.randomInt() for security-sensitive tokens"
+  sample_limit=3
+  while IFS=$'\t' read -r sample_path sample_line sample_text; do
+    [ -z "$sample_path" ] && continue
+    print_code_sample "$sample_path" "$sample_line" "$sample_text"
+    sample_limit=$((sample_limit - 1))
+    [ "$sample_limit" -le 0 ] && break
+  done <<<"$random_security_samples"
+fi
+
 print_subheader "Hardcoded secrets/credentials"
 count=$("${GREP_RNI[@]}" -e "\b(password|api_?key|secret|token)\b[[:space:]]*[:=][[:space:]]*['\"]([^'\"]+)['\"]" "$PROJECT_DIR" 2>/dev/null |   (grep -v "process\.env" || true) | count_lines)
 if [ "$count" -gt 0 ]; then
