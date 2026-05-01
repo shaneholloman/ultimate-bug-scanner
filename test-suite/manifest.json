@@ -7802,6 +7802,65 @@
       }
     },
     {
+      "id": "elixir-ssrf-buggy",
+      "description": "Elixir Plug/Phoenix request values should not reach outbound HTTP clients without scheme and host allow-list validation.",
+      "path": "test-suite/elixir/buggy/ssrf.ex",
+      "language": "elixir",
+      "tags": [
+        "elixir",
+        "security",
+        "ssrf",
+        "buggy"
+      ],
+      "args": [
+        "--only=elixir",
+        "--fail-on-warning",
+        "--skip=1,2,3,5,6,7,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-derived URL reaches outbound HTTP client"
+        ]
+      }
+    },
+    {
+      "id": "elixir-ssrf-clean",
+      "description": "Elixir outbound URLs validated through safe helpers or inline URI parsing and host allow-lists should stay clean.",
+      "path": "test-suite/elixir/clean/ssrf.ex",
+      "language": "elixir",
+      "tags": [
+        "elixir",
+        "security",
+        "ssrf",
+        "clean"
+      ],
+      "args": [
+        "--only=elixir",
+        "--fail-on-warning",
+        "--skip=1,2,3,5,6,7,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-derived URL reaches outbound HTTP client"
+        ]
+      }
+    },
+    {
       "id": "toon-format-js-buggy",
       "description": "TOON format output for JS buggy fixtures (validates TOON encoding works).",
       "path": "test-suite/buggy",
