@@ -3723,7 +3723,7 @@
     },
     {
       "id": "js-typescript-ssrf-fetch-buggy",
-      "description": "TypeScript outbound HTTP clients should not fetch request-derived URLs without allow-list validation.",
+      "description": "TypeScript outbound HTTP clients should not fetch request-derived or host-derived URLs without allow-list validation.",
       "path": "test-suite/js/security/ssrf-fetch-buggy.ts",
       "language": "js",
       "tags": [
@@ -3752,7 +3752,7 @@
     },
     {
       "id": "js-typescript-ssrf-fetch-clean",
-      "description": "TypeScript outbound HTTP clients with explicit URL allow-list validation should stay clean.",
+      "description": "TypeScript outbound HTTP clients with explicit URL allow-list validation should stay clean, including URLs assembled from inbound host values.",
       "path": "test-suite/js/security/ssrf-fetch-clean.ts",
       "language": "js",
       "tags": [

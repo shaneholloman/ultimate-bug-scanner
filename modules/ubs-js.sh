@@ -5096,12 +5096,14 @@ skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cac
 
 assignment_re = re.compile(r'\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b[^=]*=\s*(.*)')
 urlish_name_re = re.compile(
-    r'(?:url|uri|target|callback|webhook|endpoint|image|feed|proxy|remote|avatar|next[_-]?hop)',
+    r'(?:url|uri|target|callback|webhook|endpoint|image|feed|proxy|remote|avatar|next[_-]?hop|host|hostname|origin)',
     re.IGNORECASE,
 )
 source_re = re.compile(
     r'(?:'
     r'\b(?:req|request|ctx|context|event)\s*\.\s*(?:query|body|params|headers|cookies|nextUrl|url)\b|'
+    r'\b(?:req|request|ctx|context|event)\s*\.\s*(?:host|hostname|protocol|originalUrl|baseUrl)\b|'
+    r'\b(?:req|request|ctx|context|event)\s*\.\s*(?:get|header)\s*\(\s*[\'"`](?:host|x-forwarded-host|x-forwarded-proto|origin)[\'"`]\s*\)|'
     r'\b(?:req|request|ctx|context|event)\s*\[\s*[\'"`](?:query|body|params|headers|url)[\'"`]\s*\]|'
     r'\b(?:query|body|params|headers|searchParams|queryParams)\s*\.\s*get\s*\(|'
     r'\b(?:searchParams|queryParams)\s*\.\s*get\s*\(|'
@@ -5133,8 +5135,39 @@ def code_line(source_line):
     stripped = source_line.strip()
     if not stripped or stripped.startswith(("//", "/*", "*")):
         return ""
-    without_block_comments = re.sub(r'/\*.*?\*/', '', source_line)
-    return re.sub(r'//.*', '', without_block_comments)
+    out = []
+    quote = ""
+    escaped = False
+    i = 0
+    while i < len(source_line):
+        ch = source_line[i]
+        nxt = source_line[i + 1] if i + 1 < len(source_line) else ""
+        if quote:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            break
+        if ch == "/" and nxt == "*":
+            end = source_line.find("*/", i + 2)
+            if end == -1:
+                break
+            i = end + 2
+            continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
 
 def statement_from(lines, idx, max_lines=14):
     parts = []
@@ -5173,6 +5206,12 @@ def has_safe_validation(text, var_name=""):
         return False
     return not var_name or re.search(rf'\b{re.escape(var_name)}\b', text)
 
+def tainted_ref(text, tainted_vars):
+    for name in tainted_vars:
+        if re.search(rf'\b{re.escape(name)}\b', text):
+            return name
+    return ""
+
 issues = []
 if root.is_file():
     candidates = [root]
@@ -5204,8 +5243,8 @@ for path in candidates:
             name = assignment.group(1)
             if (
                 urlish_name_re.search(name)
-                and source_re.search(statement)
                 and not has_safe_validation(statement)
+                and (source_re.search(statement) or tainted_ref(statement, tainted_vars))
             ):
                 tainted_vars[name] = idx
         if not sink_re.search(stripped):

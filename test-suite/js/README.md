@@ -28,7 +28,7 @@
 - `security/open-redirect-*.tsx` covers TypeScript/Next.js redirects that route URL/query-derived targets without validating same-origin relative paths or an allowlist.
 - `security/path-traversal-*.ts` covers TypeScript/Node file read/download/write/upload sinks fed by request-derived paths without basename sanitization or resolved-root containment checks.
 - `security/random-security-*.ts` covers TypeScript token/session/OTP generation that accidentally uses `Math.random()`.
-- `security/ssrf-fetch-*.ts` covers TypeScript/Node outbound HTTP clients fed by request/query/header URLs without allowlist validation.
+- `security/ssrf-fetch-*.ts` covers TypeScript/Node outbound HTTP clients fed by request/query/header/host-derived URLs without allowlist validation.
 - `security/tls-verification-*.ts` covers TypeScript/Node HTTP/TLS clients that disable certificate verification.
 - `security/archive-extraction-*.ts` covers TypeScript/Node archive extraction that writes entry paths into destination paths without containment validation.
 - `security/post-message-*.ts` covers TypeScript cross-origin messaging leaks from wildcard `postMessage` target origins.

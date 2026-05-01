@@ -7,6 +7,7 @@ type ExpressRequest = {
   query: Record<string, string | undefined>;
   body: Record<string, string | undefined>;
   headers: Record<string, string | undefined>;
+  hostname: string;
 };
 
 export async function proxyQueryUrl(req: ExpressRequest): Promise<Response> {
@@ -37,4 +38,16 @@ export function nextRouteProxy(request: { nextUrl: { searchParams: URLSearchPara
 
 export function rawHttpsProxy(req: ExpressRequest): https.ClientRequest {
   return https.request(req.query.callback!);
+}
+
+export function proxyInboundHost(req: ExpressRequest): Promise<unknown> {
+  const targetUrl = `https://${req.hostname}/internal/status`;
+  return axios.get(targetUrl);
+}
+
+export function proxyHostHeader(req: ExpressRequest): Promise<Response> {
+  const host = req.headers.host;
+  return fetch(`https://${host}/internal/status`, {
+    signal: AbortSignal.timeout(5000),
+  });
 }

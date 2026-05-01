@@ -6,6 +6,7 @@ type ExpressRequest = {
   query: Record<string, string | undefined>;
   body: Record<string, string | undefined>;
   headers: Record<string, string | undefined>;
+  hostname: string;
 };
 
 const ALLOWED_HOSTS = new Set(["api.example.com", "images.example.com"]);
@@ -51,4 +52,15 @@ export function streamHeaderTarget(req: ExpressRequest): http.ClientRequest {
 
 export function constantServiceCall(): Promise<unknown> {
   return axios.get("https://api.example.com/status");
+}
+
+export function proxyAllowedInboundHost(req: ExpressRequest): Promise<unknown> {
+  const targetUrl = validateOutboundUrl(`https://${req.hostname}/status`);
+  return axios.get(targetUrl);
+}
+
+export function proxyAllowedHostHeader(req: ExpressRequest): Promise<Response> {
+  const host = req.headers.host;
+  const targetUrl = validateOutboundUrl(`https://${host}/status`);
+  return fetch(targetUrl, { signal: AbortSignal.timeout(5000) });
 }
