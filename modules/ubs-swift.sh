@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════
-# SWIFT ULTIMATE BUG SCANNER v1.8.0 (Bash) - Industrial-Grade Code Analysis
+# SWIFT ULTIMATE BUG SCANNER v1.8.1 (Bash) - Industrial-Grade Code Analysis
 # ═══════════════════════════════════════════════════════════════
 # Comprehensive static analysis for modern Swift (6.2+) for iOS & macOS using:
 # • ast-grep (rule packs; language: swift)
@@ -60,7 +60,7 @@ shopt -s lastpipe || true
 shopt -s extglob || true
 shopt -s compat31 || true
 
-VERSION="1.8.0"
+VERSION="1.8.1"
 SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 
@@ -2390,7 +2390,7 @@ fi
 if should_run_category 6; then
 set_category 6
 print_header "6. SECURITY"
- print_category "Detects: trust-all URLSession delegate, hardcoded secrets, insecure unarchiving, unsafe archive extraction, Process misuse" \
+ print_category "Detects: trust-all URLSession delegate, hardcoded secrets, request path traversal, insecure unarchiving, unsafe archive extraction, Process misuse" \
   "Security bugs expose users and violate policies."
 tick
 

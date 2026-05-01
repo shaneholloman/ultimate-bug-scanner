@@ -255,6 +255,8 @@ Each file contains **intentional bugs** that the scanner should detect:
 | `kotlin-type-narrowing-clean` | `test-suite/kotlin/type_narrowing/clean` | Kotlin fixtures that return/throw or use Elvis early so the analyzer proves it suppresses safe flows. |
 | `kotlin-archive-extraction-buggy` | `test-suite/kotlin/archive_extraction_buggy` | Kotlin `ZipFile`/`ZipInputStream` flows that join `entry.name` into destination paths without validating containment. |
 | `kotlin-archive-extraction-clean` | `test-suite/kotlin/archive_extraction_clean` | Kotlin zip extraction that normalizes the destination and verifies `target.startsWith(base)` before writing. |
+| `swift-request-path-traversal-buggy` | `test-suite/swift/path_traversal_buggy` | Swift request query, URL path, and upload filename values flow into file read/write/serve/delete sinks without basename or root containment checks. |
+| `swift-request-path-traversal-clean` | `test-suite/swift/path_traversal_clean` | Swift fixtures that use `lastPathComponent` or standardized root containment before touching file sinks. |
 | `swift-type-narrowing-buggy` | `test-suite/swift/type_narrowing/buggy` | Swift guard lets, Objective-C bridging casts, and optional-chain bridges that log/continue instead of returning before force-unwrapping, so the helper flags unsafe paths. |
 | `swift-type-narrowing-clean` | `test-suite/swift/type_narrowing/clean` | Swift counterexamples that return/throw or fully bind optionals before use so the analyzer stays quiet on correct patterns. |
 
