@@ -6,6 +6,8 @@
 | `buggy/buggy_concurrency.go` | Concurrency handling | goroutines ignoring errors, WaitGroup misuse |
 | `buggy/resource_lifecycle.go` | Resource lifecycle | context leaks, missing cancel() |
 | `buggy/security_sql.go` | SQL/command injection + http.Client default | string concatenated SQL, exec.Command("sh -c"), no timeout |
+| `security/path_traversal_buggy.go` | Request path traversal | request/query/path/upload filenames reaching `os.*` and `http.ServeFile` sinks |
+| `security/path_traversal_clean.go` | Request path traversal | `filepath.Rel` containment and `filepath.Base` filename sanitization before file sinks |
 | `security/archive_extraction_buggy.go` | Archive extraction security | tar/zip entry names written with `filepath.Join` without containment checks |
 | `security/archive_extraction_clean.go` | Archive extraction security | `filepath.Rel`/absolute-path validation before tar/zip writes |
 | `buggy/performance.go` | Timers + defer in loops | `time.Tick` leaks, defer inside loop |
