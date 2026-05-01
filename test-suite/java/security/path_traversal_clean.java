@@ -1,8 +1,10 @@
 package security;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 
 final class PathTraversalClean {
     interface Request {
@@ -30,7 +32,7 @@ final class PathTraversalClean {
 
     void saveCheckedUpload(Request request, Path uploadRoot) throws IOException {
         Part avatar = request.getPart("avatar");
-        Path fileName = Path.of(avatar.getSubmittedFileName()).getFileName();
-        Files.writeString(uploadRoot.resolve(fileName), "avatar");
+        Path fileName = Paths.get(avatar.getSubmittedFileName()).getFileName();
+        Files.write(uploadRoot.resolve(fileName), "avatar".getBytes(StandardCharsets.UTF_8));
     }
 }

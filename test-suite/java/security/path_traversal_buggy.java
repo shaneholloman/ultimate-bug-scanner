@@ -5,6 +5,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 
 final class PathTraversalBuggy {
     interface Request {
@@ -32,7 +33,7 @@ final class PathTraversalBuggy {
     void saveSubmittedFile(Request request, Path uploadRoot) throws IOException {
         Part avatar = request.getPart("avatar");
         Path target = uploadRoot.resolve(avatar.getSubmittedFileName());
-        Files.writeString(target, "avatar");
+        Files.write(target, "avatar".getBytes(StandardCharsets.UTF_8));
     }
 
     void deleteFormSelection(Request request, Path uploadRoot) throws IOException {
