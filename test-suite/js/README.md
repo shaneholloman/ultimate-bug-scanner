@@ -25,7 +25,7 @@
 - `security/header-injection-*.ts` covers TypeScript/Node response headers fed by request/query/body/header values without CR/LF stripping or encoding.
 - `security/jwt-verification-*.ts` covers TypeScript JWT code that decodes tokens or disables verification before trusting claims.
 - `security/message-event-origin-*.ts` covers TypeScript cross-origin message receivers that trust `event.data` without validating `event.origin`.
-- `security/open-redirect-*.tsx` covers TypeScript/Next.js redirects that route URL/query-derived targets without validating same-origin relative paths or an allowlist.
+- `security/open-redirect-*.tsx` covers TypeScript/Next.js redirects that route URL/query/header-derived targets without validating same-origin relative paths or an allowlist.
 - `security/path-traversal-*.ts` covers TypeScript/Node file read/download/write/upload sinks fed by request-derived paths without basename sanitization or resolved-root containment checks.
 - `security/random-security-*.ts` covers TypeScript token/session/OTP generation that accidentally uses `Math.random()`.
 - `security/ssrf-fetch-*.ts` covers TypeScript/Node outbound HTTP clients fed by request/query/header/host-derived URLs without allowlist validation.

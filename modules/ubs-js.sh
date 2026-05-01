@@ -4768,6 +4768,9 @@ assignment_re = re.compile(
     r'\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.*(?:'
     r'(?:URLSearchParams|searchParams|params)\s*\.\s*get\s*\('
     r'|(?:window\.)?location\.(?:search|hash|href)\b'
+    r'|(?:req|request)\.(?:headers)\s*(?:\.\s*(?:referer|referrer|origin|host)|\[\s*[\'"`](?:referer|referrer|origin|host|x-forwarded-host|x-forwarded-proto|x-next-url|x-redirect-url|x-return-to|location)[\'"`]\s*\])'
+    r'|(?:req|request)\.(?:get|header)\s*\(\s*[\'"`](?:referer|referrer|origin|host|x-forwarded-host|x-forwarded-proto|x-next-url|x-redirect-url|x-return-to|location)[\'"`]\s*\)'
+    r'|headers\s*\(\s*\)\s*\.\s*get\s*\(\s*[\'"`](?:referer|referrer|origin|host|x-forwarded-host|x-forwarded-proto|x-next-url|x-redirect-url|x-return-to|location)[\'"`]\s*\)'
     r'|(?:req|request)\.query\b'
     r'|router\.query\b'
     r'|query\.(?:next|redirect|returnTo|return_to|callbackUrl|callback_url)\b'
@@ -4784,6 +4787,9 @@ sink_re = re.compile(
 direct_source_re = re.compile(
     r'(?:URLSearchParams|searchParams|params)\s*\.\s*get\s*\('
     r'|(?:window\.)?location\.(?:search|hash|href)\b'
+    r'|(?:req|request)\.(?:headers)\s*(?:\.\s*(?:referer|referrer|origin|host)|\[\s*[\'"`](?:referer|referrer|origin|host|x-forwarded-host|x-forwarded-proto|x-next-url|x-redirect-url|x-return-to|location)[\'"`]\s*\])'
+    r'|(?:req|request)\.(?:get|header)\s*\(\s*[\'"`](?:referer|referrer|origin|host|x-forwarded-host|x-forwarded-proto|x-next-url|x-redirect-url|x-return-to|location)[\'"`]\s*\)'
+    r'|headers\s*\(\s*\)\s*\.\s*get\s*\(\s*[\'"`](?:referer|referrer|origin|host|x-forwarded-host|x-forwarded-proto|x-next-url|x-redirect-url|x-return-to|location)[\'"`]\s*\)'
     r'|(?:req|request)\.query\b'
     r'|router\.query\b'
     r'|query\.(?:next|redirect|returnTo|return_to|callbackUrl|callback_url)\b',
@@ -4811,8 +4817,39 @@ def validation_code_line(source_line):
     stripped = source_line.strip()
     if not stripped or stripped.startswith(("//", "/*", "*")):
         return ""
-    without_block_comments = re.sub(r'/\*.*?\*/', '', source_line)
-    return re.sub(r'//.*', '', without_block_comments)
+    out = []
+    quote = ""
+    escaped = False
+    i = 0
+    while i < len(source_line):
+        ch = source_line[i]
+        nxt = source_line[i + 1] if i + 1 < len(source_line) else ""
+        if quote:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            break
+        if ch == "/" and nxt == "*":
+            end = source_line.find("*/", i + 2)
+            if end == -1:
+                break
+            i = end + 2
+            continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
 
 issues = []
 if root.is_file():
@@ -4878,7 +4915,7 @@ PY
 open_redirect_count=$(printf '%s\n' "$open_redirect_report" | head -n1 | awk 'END{print $0+0}')
 open_redirect_samples=$(printf '%s\n' "$open_redirect_report" | tail -n +2)
 if [ "$open_redirect_count" -gt 0 ]; then
-  print_finding "warning" "$open_redirect_count" "unvalidated redirect from URL/query data" "Validate redirect targets against same-origin relative paths or an explicit allowlist before navigation"
+  print_finding "warning" "$open_redirect_count" "unvalidated redirect from URL/query/header data" "Validate redirect targets against same-origin relative paths or an explicit allowlist before navigation"
   sample_limit=3
   while IFS=$'\t' read -r sample_path sample_line sample_text; do
     [ -z "$sample_path" ] && continue
