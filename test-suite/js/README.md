@@ -22,6 +22,7 @@
 - `security/cookie-security-*.ts` covers TypeScript auth/session cookies missing `httpOnly`, `secure`, or safe SameSite settings.
 - `security/cors-credentials-*.ts` covers TypeScript/Node CORS configurations that combine credentials with wildcard or reflected origins.
 - `security/fetch-timeout-*.ts` covers TypeScript fetch calls that need AbortSignal cancellation/timeout wiring.
+- `security/header-injection-*.ts` covers TypeScript/Node response headers fed by request/query/body/header values without CR/LF stripping or encoding.
 - `security/jwt-verification-*.ts` covers TypeScript JWT code that decodes tokens or disables verification before trusting claims.
 - `security/message-event-origin-*.ts` covers TypeScript cross-origin message receivers that trust `event.data` without validating `event.origin`.
 - `security/open-redirect-*.tsx` covers TypeScript/Next.js redirects that route URL/query-derived targets without validating same-origin relative paths or an allowlist.
