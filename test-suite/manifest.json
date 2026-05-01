@@ -4931,6 +4931,65 @@
       }
     },
     {
+      "id": "cpp-request-path-traversal-buggy",
+      "description": "C/C++ request/query/path filenames should not reach file read/write/delete sinks without containment checks.",
+      "path": "test-suite/cpp/security/path_traversal_buggy.cpp",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "security",
+        "path-traversal",
+        "buggy"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-derived path reaches file read/write/serve sink"
+        ]
+      }
+    },
+    {
+      "id": "cpp-request-path-traversal-clean",
+      "description": "C/C++ request-derived paths with canonical containment or basename sanitization should stay clean.",
+      "path": "test-suite/cpp/security/path_traversal_clean.cpp",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "security",
+        "path-traversal",
+        "clean"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-derived path reaches file read/write/serve sink"
+        ]
+      }
+    },
+    {
       "id": "cpp-archive-extraction-buggy",
       "description": "C++ archive extraction fixture with unvalidated entry-name path joins.",
       "path": "test-suite/cpp/archive_extraction_buggy",
