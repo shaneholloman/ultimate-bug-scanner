@@ -30,6 +30,11 @@ class CallbackProxy
     HTTParty.get("https://#{host}/internal/status")
   end
 
+  def fetch_request_host
+    target = "https://#{request.host}/internal/status"
+    Net::HTTP.get(URI.parse(target))
+  end
+
   def validate_too_late
     target = params[:late_url]
     Net::HTTP.get(URI.parse(target))

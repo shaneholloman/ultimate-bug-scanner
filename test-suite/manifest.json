@@ -6565,7 +6565,7 @@
     },
     {
       "id": "java-ssrf-buggy",
-      "description": "Java request parameters and headers should not reach outbound HTTP clients or request builders without scheme and host allow-list validation.",
+      "description": "Java request parameters, headers, and servlet host accessors should not reach outbound HTTP clients or request builders without scheme and host allow-list validation.",
       "path": "test-suite/java/security/SsrfBuggy.java",
       "language": "java",
       "tags": [
@@ -6593,7 +6593,7 @@
     },
     {
       "id": "java-ssrf-clean",
-      "description": "Java outbound request URLs validated through named safe helpers and host allow-lists should stay clean.",
+      "description": "Java outbound request URLs validated through named safe helpers and host allow-lists should stay clean, including URLs assembled from inbound host values.",
       "path": "test-suite/java/security/SsrfClean.java",
       "language": "java",
       "tags": [
@@ -6930,7 +6930,7 @@
     },
     {
       "id": "ruby-ssrf-buggy",
-      "description": "Ruby request params and headers should not reach outbound HTTP clients without scheme and host allow-list validation.",
+      "description": "Ruby request params, headers, and request host accessors should not reach outbound HTTP clients without scheme and host allow-list validation.",
       "path": "test-suite/ruby/ssrf_buggy",
       "language": "ruby",
       "tags": [
@@ -6958,7 +6958,7 @@
     },
     {
       "id": "ruby-ssrf-clean",
-      "description": "Ruby outbound URLs validated through named safe helpers and host allow-lists should stay clean.",
+      "description": "Ruby outbound URLs validated through named safe helpers and host allow-lists should stay clean, including URLs assembled from inbound host values.",
       "path": "test-suite/ruby/ssrf_clean",
       "language": "ruby",
       "tags": [

@@ -1118,9 +1118,10 @@ SKIP_DIRS = {'.git', '.gradle', '.mvn', 'build', 'target', 'out', 'node_modules'
 SOURCE_RE = re.compile(
     r'\b(?:request|req|ctx|context|exchange|routingContext)(?:\.|->)'
     r'(?:getParameter|getParameterValues|getQueryString|getRequestURI|getRequestURL|getServletPath|'
-    r'getPathInfo|getHeader|queryParam|queryParams|pathParam|pathParams|formParam|formParams)\s*\('
+    r'getPathInfo|getHeader|getServerName|getServerPort|getRemoteHost|getRemoteAddr|'
+    r'getLocalName|getLocalAddr|queryParam|queryParams|pathParam|pathParams|formParam|formParams)\s*\('
     r'|\b(?:call|routingCall|context|ctx)\.(?:parameters|pathParameters|queryParameters|headers)\s*(?:\[|\.get\b)'
-    r'|\b(?:call|routingCall)\.request\.(?:path|uri|local|queryParameters)\s*(?:\(|\[|\b)'
+    r'|\b(?:call|routingCall)\.request\.(?:path|uri|local|host|port|origin|queryParameters)\s*(?:\(|\[|\b)'
     r'|\b(?:parameters|params|queryParameters|pathParameters|headers)\s*\['
     r'|\b(?:request|req)\.(?:path|uri|url|target)\b',
     re.IGNORECASE,

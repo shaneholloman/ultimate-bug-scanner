@@ -37,4 +37,11 @@ public final class SsrfBuggy {
         return httpClient.send(HttpRequest.newBuilder(target).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
     }
+
+    public HttpResponse<String> fetchInboundHost(HttpServletRequest request)
+            throws IOException, InterruptedException {
+        String target = "https://" + request.getServerName() + "/internal/status";
+        return httpClient.send(HttpRequest.newBuilder(URI.create(target)).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
 }

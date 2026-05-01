@@ -982,7 +982,8 @@ EXTS = {'.rb', '.rake', '.ru', '.gemspec', '.erb', '.haml', '.slim', '.rbi', '.r
 
 SOURCE_RE = re.compile(
     r'\b(?:params|request\.params)\s*(?:\[[^\]]+\]|\.fetch\s*\(|\.dig\s*\()'
-    r'|\b(?:request|req|rack_request)\.(?:path|path_info|fullpath|original_fullpath|query_string|url|referer|referrer)\b'
+    r'|\b(?:request|req|rack_request)\.(?:path|path_info|fullpath|original_fullpath|query_string|url|'
+    r'referer|referrer|host|host_with_port|raw_host_with_port|domain|subdomain|subdomains|port|remote_ip|ip)\b'
     r'|\b(?:request|req|rack_request)\.(?:get|post|params|query|POST|GET|headers)\s*(?:\[[^\]]+\]|\.fetch\s*\(|\.dig\s*\()'
     r'|\b(?:env|request\.env)\s*\[\s*[\'"](?:REQUEST_URI|QUERY_STRING|HTTP_REFERER|HTTP_ORIGIN|HTTP_HOST|HTTP_X_FORWARDED_HOST)[\'"]\s*\]'
     r'|\bRack::Request\.new\s*\([^)]*\)\.params\s*(?:\[[^\]]+\]|\.fetch\s*\(|\.dig\s*\()',

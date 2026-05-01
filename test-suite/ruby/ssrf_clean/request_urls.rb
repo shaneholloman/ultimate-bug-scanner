@@ -39,4 +39,9 @@ class CallbackProxy
     target = safe_outbound_url(params[:url])
     HTTParty.get(target)
   end
+
+  def fetch_request_host
+    target = safe_outbound_url("https://#{request.host}/status")
+    Net::HTTP.get(target)
+  end
 end

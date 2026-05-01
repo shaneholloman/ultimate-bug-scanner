@@ -53,4 +53,11 @@ public final class SsrfClean {
         return httpClient.send(HttpRequest.newBuilder(target).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
     }
+
+    public HttpResponse<String> fetchAllowedInboundHost(HttpServletRequest request)
+            throws IOException, InterruptedException {
+        URI target = safeOutboundUri("https://" + request.getServerName() + "/status");
+        return httpClient.send(HttpRequest.newBuilder(target).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
 }

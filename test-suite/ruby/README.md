@@ -10,8 +10,8 @@
 | `archive_extraction_clean/zip_slip_safe.rb` | `File.expand_path`/`Pathname` + `start_with?` containment checks |
 | `path_traversal_buggy/request_paths.rb` | Rack/Rails params and upload names flowing to file read/write/serve/delete sinks |
 | `path_traversal_clean/request_paths.rb` | `File.basename` upload names and `File.expand_path` + `start_with?` containment checks |
-| `ssrf_buggy/request_urls.rb` | Rack/Rails params and headers flowing into Ruby outbound HTTP clients |
-| `ssrf_clean/request_urls.rb` | `URI.parse` + scheme/host allow-list validation before outbound HTTP clients |
+| `ssrf_buggy/request_urls.rb` | Rack/Rails params, headers, and request host accessors flowing into Ruby outbound HTTP clients |
+| `ssrf_clean/request_urls.rb` | `URI.parse` + scheme/host allow-list validation before outbound HTTP clients, including URLs assembled from inbound host values |
 | Clean files | Managed threads, Open3 argv |
 
 ```bash
