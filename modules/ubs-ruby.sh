@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-# RUBY ULTIMATE BUG SCANNER v2.0 (Bash) - Industrial-Grade Code Analysis
+# RUBY ULTIMATE BUG SCANNER v2.0.1 (Bash) - Industrial-Grade Code Analysis
 # ═══════════════════════════════════════════════════════════════════════════
 # Comprehensive static analysis for modern Ruby (3.3+) using:
 #   • ast-grep (rule packs; language: ruby)
@@ -947,6 +947,248 @@ PY
 )
 }
 
+run_outbound_url_checks() {
+  print_subheader "Request-derived outbound HTTP URLs"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable request-derived outbound URL checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Request-derived URL reaches outbound HTTP client" "Validate outbound URLs with explicit scheme and host allow-lists before using Net::HTTP, URI.open, Faraday, HTTParty, or RestClient"
+        else
+          print_finding "good" "No request-derived outbound HTTP URL sinks detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.bundle', 'vendor', 'node_modules', 'tmp', 'log', 'coverage', '.cache', 'dist', 'build'}
+EXTS = {'.rb', '.rake', '.ru', '.gemspec', '.erb', '.haml', '.slim', '.rbi', '.rbs', '.jbuilder'}
+
+SOURCE_RE = re.compile(
+    r'\b(?:params|request\.params)\s*(?:\[[^\]]+\]|\.fetch\s*\(|\.dig\s*\()'
+    r'|\b(?:request|req|rack_request)\.(?:path|path_info|fullpath|original_fullpath|query_string|url|referer|referrer)\b'
+    r'|\b(?:request|req|rack_request)\.(?:get|post|params|query|POST|GET|headers)\s*(?:\[[^\]]+\]|\.fetch\s*\(|\.dig\s*\()'
+    r'|\b(?:env|request\.env)\s*\[\s*[\'"](?:REQUEST_URI|QUERY_STRING|HTTP_REFERER|HTTP_ORIGIN|HTTP_HOST|HTTP_X_FORWARDED_HOST)[\'"]\s*\]'
+    r'|\bRack::Request\.new\s*\([^)]*\)\.params\s*(?:\[[^\]]+\]|\.fetch\s*\(|\.dig\s*\()',
+    re.IGNORECASE,
+)
+SAFE_EXPR_RE = re.compile(
+    r'\b(?:safe(?:_url|_uri|_outbound_url|_webhook_url|_callback_url|URL|Uri|URI|OutboundURL|WebhookURL|CallbackURL)|'
+    r'secure(?:_url|_uri|_outbound_url|URL|Uri|URI|OutboundURL)|'
+    r'allow(?:_url|_uri|_host|URL|Uri|URI|Host)|allowed(?:_url|_uri|_host|URL|Uri|URI|Host)|'
+    r'validate(?:_url|_uri|_host|_outbound_url|URL|Uri|URI|Host|OutboundURL)|'
+    r'sanitize(?:_url|_uri|URL|Uri|URI)|resolve_allowed(?:_url|_uri)|'
+    r'is_allowed_host|allowed_host\?|safe_url\?|safe_uri\?|safe_outbound_url\?)\b',
+    re.IGNORECASE,
+)
+URI_PARSE_RE = re.compile(r'\b(?:URI|Addressable::URI)\.(?:parse|join)\s*\(')
+HOST_CHECK_RE = re.compile(
+    r'\.(?:host|hostname|scheme)\b'
+    r'|\b(?:ALLOWED_HOSTS|allowed_hosts|allowlist|host_allowlist|trusted_hosts|allowed_host\?)\b'
+    r'|%w\['
+)
+REJECT_RE = re.compile(r'\b(?:raise|return\s+false|halt|head\s+:forbidden|forbidden|bad_request)\b', re.IGNORECASE)
+SINK_RE = re.compile(
+    r'\b(?:URI|OpenURI)\.open\s*\('
+    r'|\bopen\s*\('
+    r'|\bNet::HTTP\.(?:get|get_response|post|post_form|start|new)\s*\('
+    r'|\b(?:Faraday|HTTParty|RestClient|Excon|HTTP|Typhoeus|Curl)\.(?:get|post|put|patch|delete|head|request)\s*\('
+    r'|\.request\s*\('
+    r'|\.get\s*\(',
+)
+ASSIGN_RE = re.compile(r'^\s*(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<rhs>.+)$')
+PATH_LIMIT = 4
+
+def should_skip(path: Path) -> bool:
+    try:
+        parts = path.relative_to(BASE_DIR).parts
+    except ValueError:
+        parts = path.parts
+    return any(part in SKIP_DIRS for part in parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in EXTS:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in EXTS and not should_skip(path):
+            yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '#':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    balance = statement.count('(') - statement.count(')')
+    lookahead = idx + 1
+    while balance > 0 and lookahead < len(lines) and lookahead < idx + 8:
+        next_line = strip_line_comments(lines[lookahead])
+        statement += ' ' + next_line.strip()
+        balance += next_line.count('(') - next_line.count(')')
+        lookahead += 1
+    return statement
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip().replace('\t', ' ')
+    return ''
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def is_safe_expr(expr):
+    return bool(SAFE_EXPR_RE.search(expr))
+
+def refs_in_expr(expr, tainted):
+    refs = []
+    for name in tainted:
+        if re.search(rf'\b{re.escape(name)}\b', expr):
+            refs.append(name)
+    return refs
+
+def taint_from_expr(expr, tainted):
+    if is_safe_expr(expr):
+        return None
+    direct = SOURCE_RE.search(expr)
+    if direct:
+        return {'path': [direct.group(0).strip('(')]}
+    refs = refs_in_expr(expr, tainted)
+    if not refs:
+        return None
+    ref = refs[0]
+    path = list(tainted.get(ref, {}).get('path', [ref]))
+    if len(path) >= PATH_LIMIT:
+        path = path[-(PATH_LIMIT - 1):]
+    path.append(ref)
+    return {'path': path}
+
+def has_allowlist_context(lines, line_no, refs):
+    if not refs:
+        return False
+    start = max(0, line_no - 24)
+    context = '\n'.join(strip_line_comments(line) for line in lines[start:line_no])
+    if not any(re.search(rf'\b{re.escape(ref)}\b', context) for ref in refs):
+        return False
+    for line in context.splitlines():
+        if SAFE_EXPR_RE.search(line) and any(re.search(rf'\b{re.escape(ref)}\b', line) for ref in refs):
+            return True
+    return bool(URI_PARSE_RE.search(context) and HOST_CHECK_RE.search(context) and REJECT_RE.search(context))
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not (SOURCE_RE.search(text) and SINK_RE.search(text)):
+        return
+    lines = text.splitlines()
+    tainted = {}
+    seen = set()
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        statement = logical_statement(lines, idx).strip()
+        if not statement:
+            continue
+        assign = ASSIGN_RE.match(statement)
+        if assign:
+            name = assign.group('lhs')
+            rhs = assign.group('rhs')
+            taint = taint_from_expr(rhs, tainted)
+            if taint:
+                tainted[name] = taint
+            elif name in tainted and is_safe_expr(rhs):
+                tainted.pop(name, None)
+        if not SINK_RE.search(statement):
+            continue
+        if is_safe_expr(statement):
+            continue
+        direct = SOURCE_RE.search(statement)
+        refs = refs_in_expr(statement, tainted)
+        if not direct and not refs:
+            continue
+        if has_allowlist_context(lines, idx, refs):
+            continue
+        key = (relpath(path), idx)
+        if key in seen:
+            continue
+        seen.add(key)
+        if direct:
+            path_desc = f"{direct.group(0).strip('(')} -> outbound HTTP"
+        else:
+            ref = refs[0]
+            seq = list(tainted.get(ref, {}).get('path', [ref]))
+            if len(seq) >= PATH_LIMIT:
+                seq = seq[-(PATH_LIMIT - 1):]
+            seq.append('outbound HTTP')
+            path_desc = ' -> '.join(seq)
+        issues.append((relpath(path), idx, f"{source_line(lines, idx)}  [{path_desc}]"))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:25]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 write_ast_rules() {
   [[ "$HAS_AST_GREP" -eq 1 ]] || return 0
   trap '[[ -n "${AST_RULE_DIR:-}" && "${AST_RULE_DIR:-}" != "/" && "${AST_RULE_DIR:-}" != "." ]] && rm -rf -- "$AST_RULE_DIR" 2>/dev/null || true; [[ -n "${AST_CONFIG_FILE:-}" ]] && rm -f "$AST_CONFIG_FILE" 2>/dev/null || true' EXIT
@@ -1650,7 +1892,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if run_category 6; then
 print_header "6. SECURITY VULNERABILITIES"
-print_category "Detects: code injection, unsafe deserialization, TLS off, weak crypto, path traversal, unsafe archive extraction" \
+print_category "Detects: code injection, unsafe deserialization, TLS off, weak crypto, path traversal, outbound URL SSRF, unsafe archive extraction" \
   "Security bugs expose users to attacks and data breaches."
 
 print_subheader "eval/instance_eval/class_eval"
@@ -1733,6 +1975,7 @@ fi
 
 run_archive_extraction_checks
 run_path_traversal_checks
+run_outbound_url_checks
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════

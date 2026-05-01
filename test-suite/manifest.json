@@ -6870,6 +6870,65 @@
       }
     },
     {
+      "id": "ruby-ssrf-buggy",
+      "description": "Ruby request params and headers should not reach outbound HTTP clients without scheme and host allow-list validation.",
+      "path": "test-suite/ruby/ssrf_buggy",
+      "language": "ruby",
+      "tags": [
+        "ruby",
+        "security",
+        "ssrf",
+        "buggy"
+      ],
+      "args": [
+        "--only=ruby",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-derived URL reaches outbound HTTP client"
+        ]
+      }
+    },
+    {
+      "id": "ruby-ssrf-clean",
+      "description": "Ruby outbound URLs validated through named safe helpers and host allow-lists should stay clean.",
+      "path": "test-suite/ruby/ssrf_clean",
+      "language": "ruby",
+      "tags": [
+        "ruby",
+        "security",
+        "ssrf",
+        "clean"
+      ],
+      "args": [
+        "--only=ruby",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-derived URL reaches outbound HTTP client"
+        ]
+      }
+    },
+    {
       "id": "ruby-async-errors-buggy",
       "description": "Ruby Thread.new blocks lacking rescue/exception handling.",
       "path": "test-suite/ruby/async_errors/buggy",
