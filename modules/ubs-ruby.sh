@@ -748,7 +748,7 @@ SAFE_EXPR_RE = re.compile(
     r'|\.basename\b'
     r'|\b(?:safe(?:_path|_join|_file|_filename|_upload_path|_download_path|Path|Join|File|Filename|UploadPath|DownloadPath)|'
     r'secure(?:_path|_join|_file|_filename|_upload_path|_download_path|Path|Join|File|Filename|UploadPath|DownloadPath)|'
-    r'sanitize(?:_path|_filename|_file_name|Path|Filename|FileName)|clean(?:_path|_filename|Path|Filename)|'
+    r'sanitize(?:_path|_filename|_file_name|Path|Filename|FileName)|clean(?:_filename|Filename)|'
     r'validate(?:_path|_filename|_file_name|Path|Filename|FileName)|resolve_under_root|resolveUnderRoot|'
     r'safe_under_root|inside_root|insideRoot|within_root|withinRoot|is_safe_path|isSafePath|allowed_file|allowedFile)\b',
     re.IGNORECASE,
@@ -766,8 +766,6 @@ SINK_RE = re.compile(
     r'|\bIO\.(?:read|binread|write|binwrite|open)\s*\('
     r'|\bFileUtils\.(?:cp|copy|mv|move|rm|remove|rm_f|rm_rf|remove_entry|mkdir|mkdir_p|touch|chmod|chown)\s*\('
     r'|\bDir\.(?:open|foreach|mkdir|entries|children|delete|rmdir)\s*\('
-    r'|\bPathname\.new\s*\('
-    r'|\.join\s*\('
     r'|\b(?:send_file|serve_file|download_file|write_file_response)\s*\(?'
     r'|\brender\s+(?:file|template):',
 )
