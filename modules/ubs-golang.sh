@@ -1155,9 +1155,12 @@ SKIP_DIRS = {'.git', 'vendor', 'node_modules', '.cache', 'bin', 'build', 'dist'}
 SOURCE_RE = re.compile(
     r'\br\.URL\.Query\(\)\.Get\s*\('
     r'|\br\.(?:FormValue|PostFormValue|PathValue)\s*\('
+    r'|\b(?:r|req|request)\.Header\.(?:Get|Values)\s*\('
+    r'|\b(?:r|req|request)\.Header\s*\['
     r'|\br\.URL\.(?:Path|RawPath)\b'
     r'|\b(?:chi\.URLParam|mux\.Vars)\s*\('
-    r'|\b(?:c|ctx|context)\.(?:Param|Query|QueryParam|FormValue|PostForm|FormFile)\s*\('
+    r'|\b(?:c|ctx|context)\.(?:Param|Query|QueryParam|FormValue|PostForm|FormFile|GetHeader)\s*\('
+    r'|\b(?:c|ctx|context)\.Request\(\)\.Header\.(?:Get|Values)\s*\('
     r'|\.FormFile\s*\('
     r'|\.MultipartForm\b'
     r'|\b[A-Za-z_][A-Za-z0-9_]*\.Filename\b'

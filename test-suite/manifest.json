@@ -4514,7 +4514,7 @@
     },
     {
       "id": "golang-request-path-traversal-buggy",
-      "description": "Go request/query/path/upload filenames should not reach filesystem read/write/serve sinks without containment checks.",
+      "description": "Go request/query/path/header/upload filenames should not reach filesystem read/write/serve sinks without containment checks.",
       "path": "test-suite/golang/security/path_traversal_buggy.go",
       "language": "golang",
       "tags": [
@@ -4542,7 +4542,7 @@
     },
     {
       "id": "golang-request-path-traversal-clean",
-      "description": "Go request-derived paths sanitized with filepath.Rel containment or filepath.Base filenames should stay clean.",
+      "description": "Go request-derived paths sanitized with filepath.Rel containment or filepath.Base filenames, including header-derived paths, should stay clean.",
       "path": "test-suite/golang/security/path_traversal_clean.go",
       "language": "golang",
       "tags": [

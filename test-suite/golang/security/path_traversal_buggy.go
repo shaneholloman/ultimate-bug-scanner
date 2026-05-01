@@ -32,3 +32,13 @@ func removeRequestedFile(r *http.Request) error {
 	target := filepath.Join(publicUploadRoot, r.FormValue("delete"))
 	return os.Remove(target)
 }
+
+func downloadHeaderFile(w http.ResponseWriter, r *http.Request) {
+	name := r.Header.Get("X-File-Path")
+	http.ServeFile(w, r, filepath.Join(publicUploadRoot, name))
+}
+
+func readHeaderFile(req *http.Request) ([]byte, error) {
+	target := req.Header.Get("X-Report-Path")
+	return os.ReadFile(filepath.Join(publicUploadRoot, target))
+}

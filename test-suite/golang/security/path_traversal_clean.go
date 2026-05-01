@@ -50,3 +50,20 @@ func saveCleanUploadedAvatar(r *http.Request) error {
 	target := filepath.Join(cleanUploadRoot, name)
 	return os.WriteFile(target, []byte("avatar"), 0o600)
 }
+
+func downloadCleanHeaderFile(w http.ResponseWriter, r *http.Request) error {
+	target, err := safeUploadPath(r.Header.Get("X-File-Path"))
+	if err != nil {
+		return err
+	}
+	http.ServeFile(w, r, target)
+	return nil
+}
+
+func readCleanHeaderFile(req *http.Request) ([]byte, error) {
+	target, err := safeUploadPath(req.Header.Get("X-Report-Path"))
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(target)
+}
