@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-# ELIXIR ULTIMATE BUG SCANNER v1.0.0 (Bash) - Industrial-Grade Code Analysis
+# ELIXIR ULTIMATE BUG SCANNER v1.0.1 (Bash) - Industrial-Grade Code Analysis
 # ═══════════════════════════════════════════════════════════════════════════
 # Comprehensive static analysis for modern Elixir (1.15+) using:
 #   • ripgrep/grep heuristics for fast code smells
@@ -522,6 +522,225 @@ PY
 )
 }
 
+run_request_path_traversal_checks() {
+  print_subheader "Request-derived filesystem paths"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable request path traversal checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Request-derived path reaches file read/write/serve sink" "Reduce conn params, request paths, and upload filenames to a basename or prove the expanded path stays under the allowed root before touching files."
+        else
+          print_finding "good" "No request-derived file path sinks detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.hg', '.svn', '_build', 'deps', '.elixir_ls', '.hex', '.fetch', 'node_modules', 'dist', 'build', 'cover', 'doc', 'priv/static', '.cache', 'tmp', 'log'}
+EXTS = {'.ex', '.exs', '.eex', '.heex', '.leex', '.sface'}
+VAR_RE = r'[a-z_][A-Za-z0-9_?!]*'
+ASSIGN_RE = re.compile(rf'^\s*({VAR_RE})\s*=\s*(.+)')
+REQUEST_SOURCE_RE = re.compile(
+    r'\b(?:conn|socket)\.(?:params|path_info|request_path|query_string)\b|'
+    r'\bparams\s*(?:\[|\|>)|'
+    r'\bMap\.(?:get|fetch!?|take)\s*\(\s*(?:params|conn\.params)\b|'
+    r'\bget_in\s*\(\s*(?:params|conn\.params)\b|'
+    r'\b[A-Za-z_][A-Za-z0-9_?!]*\.filename\b|'
+    r'%Plug\.Upload\{[^}]*filename\s*:',
+    re.IGNORECASE,
+)
+PATHISH_NAME_RE = re.compile(r'(path|file|name|dir|folder|target|destination|download|upload|export|key)', re.IGNORECASE)
+SINK_RE = re.compile(
+    r'\bFile\.(?:read!?|write!?|open!?|rm!?|cp!?|rename!?|mkdir!?|mkdir_p!?|stat!?|'
+    r'ls!?|stream!?|exists\?)\s*\(|'
+    r'\b(?:Plug\.Conn\.)?send_file\s*\(|'
+    r'\b(?:Phoenix\.Controller\.)?send_download\s*\('
+)
+SAFE_NAMED_RE = re.compile(
+    r'\b(?:safe_path|safePath|safe_file_name|safeFileName|safe_filename|safeFilename|'
+    r'sanitize_filename|sanitizeFilename|sanitize_path|sanitizePath|validated_path|validatedPath|'
+    r'validate_path|validatePath|safe_under_root|safeUnderRoot|resolve_under_root|resolveUnderRoot|'
+    r'ensure_inside_root|ensureInsideRoot|inside_root\?|insideRoot\?|allowed_file|allowedFile|'
+    r'canonical_path_inside|canonicalPathInside)\b',
+    re.IGNORECASE,
+)
+
+def should_skip(path: Path) -> bool:
+    try:
+        parts = path.relative_to(BASE_DIR).parts
+    except ValueError:
+        parts = path.parts
+    return any(part in SKIP_DIRS for part in parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in EXTS:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in EXTS and not should_skip(path):
+            yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '#':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    balance = statement.count('(') + statement.count('[') + statement.count('{')
+    balance -= statement.count(')') + statement.count(']') + statement.count('}')
+    has_end = balance <= 0
+    lookahead = idx + 1
+    while (balance > 0 or not has_end) and lookahead < len(lines) and lookahead < idx + 8:
+        next_line = strip_line_comments(lines[lookahead]).strip()
+        statement += ' ' + next_line
+        balance += next_line.count('(') + next_line.count('[') + next_line.count('{')
+        balance -= next_line.count(')') + next_line.count(']') + next_line.count('}')
+        has_end = balance <= 0
+        lookahead += 1
+    return statement
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def context_around(lines, line_no):
+    start = max(0, line_no - 10)
+    end = min(len(lines), line_no + 12)
+    return '\n'.join(strip_line_comments(line) for line in lines[start:end])
+
+def is_pathish(variable: str) -> bool:
+    return bool(PATHISH_NAME_RE.search(variable))
+
+def has_source(statement: str, target_name: str = '') -> bool:
+    if REQUEST_SOURCE_RE.search(statement):
+        return True
+    return bool(target_name and is_pathish(target_name) and re.search(r'\bparams\b', statement))
+
+def is_safe_expression(statement: str) -> bool:
+    return bool(SAFE_NAMED_RE.search(statement) or re.search(r'\bPath\.basename\s*\(', statement))
+
+def has_containment_context(context: str) -> bool:
+    lower = context.lower()
+    has_canonical = 'path.expand' in lower or 'path.relative_to' in lower
+    has_anchor = 'string.starts_with?' in lower or 'path.relative_to' in lower
+    rejects_escape = 'raise ' in lower or '{:error' in lower or 'halt(' in lower or 'send_resp(' in lower
+    return has_canonical and has_anchor and rejects_escape
+
+def contains_tainted_path(statement: str, tainted: set[str]) -> bool:
+    if has_source(statement):
+        return True
+    return any(re.search(rf'\b{re.escape(var)}\b', statement) for var in tainted)
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip().replace('\t', ' ')
+    return ''
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not re.search(r'\b(?:conn|params|Plug\.Upload|filename|send_file|send_download)\b', text):
+        return
+    lines = text.splitlines()
+    tainted = set()
+    seen = set()
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        statement = logical_statement(lines, idx).strip()
+        if not statement:
+            continue
+
+        assignment = ASSIGN_RE.search(statement)
+        if assignment:
+            variable, rhs = assignment.group(1), assignment.group(2)
+            if is_safe_expression(rhs):
+                tainted.discard(variable)
+            elif has_source(rhs, variable) or contains_tainted_path(rhs, tainted):
+                tainted.add(variable)
+            else:
+                tainted.discard(variable)
+
+        if not SINK_RE.search(statement):
+            continue
+        if is_safe_expression(statement):
+            continue
+        if not contains_tainted_path(statement, tainted):
+            continue
+        if has_containment_context(context_around(lines, idx)):
+            continue
+        key = (relpath(path), idx)
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append((relpath(path), idx, source_line(lines, idx)))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:5]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 persist_metric_json() {
   local key=$1; local payload=$2
   [[ -n "$key" && -n "$payload" ]] || return 0
@@ -827,7 +1046,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if run_category 4; then
 print_header "4. SECURITY VULNERABILITIES"
-print_category "Detects: code injection, archive traversal, SQL injection, crypto misuse, hardcoded secrets" \
+print_category "Detects: code injection, request path traversal, archive traversal, SQL injection, crypto misuse, hardcoded secrets" \
   "Security issues in Elixir/Phoenix applications."
 
 print_subheader "Code execution via Code.eval_string / Code.eval_quoted"
@@ -862,6 +1081,7 @@ elif [ "$critical_count" -eq 0 ] && [ "$variable_count" -eq 0 ]; then
 fi
 
 run_archive_extraction_checks
+run_request_path_traversal_checks
 
 print_subheader "SQL injection: raw/fragment with interpolation in Ecto"
 count=$("${GREP_RN[@]}" -e 'fragment\(".*#\{' "$PROJECT_DIR" 2>/dev/null | count_lines || true)

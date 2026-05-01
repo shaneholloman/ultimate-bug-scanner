@@ -1,6 +1,6 @@
 # Ultimate Bug Scanner - Test Suite
 
-This suite now spans **every language UBS supports**. JavaScript remains the template, but each directory (`python/`, `golang/`, `cpp/`, `rust/`, `java/`, `ruby/`, `swift/`, `csharp/`) contains mirrored buggy/clean fixtures so we can regression-test the language modules with the same discipline.
+This suite now spans **every language UBS supports**. JavaScript remains the template, but each directory (`python/`, `golang/`, `cpp/`, `rust/`, `java/`, `ruby/`, `swift/`, `csharp/`, `elixir/`) contains mirrored buggy/clean fixtures so we can regression-test the language modules with the same discipline.
 
 ## 📁 Directory Structure
 
@@ -62,6 +62,7 @@ test-suite/
 ├── ruby/                       # Ruby fixtures + manifest cases
 ├── swift/                      # Swift security + type narrowing fixtures and manifest cases
 ├── csharp/                     # C# fixtures + manifest cases
+├── elixir/                     # Elixir security fixtures + manifest cases
 └── README.md                   # This file
 ```
 
@@ -109,6 +110,7 @@ This keeps the JS module maintainable and ensures future contributors extend str
 | Ruby | `test-suite/ruby/buggy/`, `test-suite/ruby/path_traversal_buggy/`, `test-suite/ruby/archive_extraction_buggy/` | `test-suite/ruby/clean/`, `test-suite/ruby/path_traversal_clean/`, `test-suite/ruby/archive_extraction_clean/` | eval/YAML problems, thread leaks, file cleanup, request path traversal, archive extraction |
 | Swift | `test-suite/swift/buggy/`, `test-suite/swift/archive_extraction_buggy/`, `test-suite/swift/path_traversal_buggy/`, `test-suite/swift/type_narrowing/buggy/` | `test-suite/swift/clean/`, `test-suite/swift/archive_extraction_clean/`, `test-suite/swift/path_traversal_clean/`, `test-suite/swift/type_narrowing/clean/` | Shell-backed process execution, request path traversal, archive extraction, optional guard fallthrough |
 | C# | `test-suite/csharp/buggy/`, `test-suite/csharp/security/` | `test-suite/csharp/clean/`, `test-suite/csharp/security/` | Task blocking, weak crypto, request path traversal, archive extraction, `throw ex`, `TryParse` vs `Parse`, null/type narrowing fallthrough, helper-backed resource lifecycle, unobserved `Task.Run`/`StartNew` handles |
+| Elixir | `test-suite/elixir/buggy/` | `test-suite/elixir/clean/` | Shell-backed command execution, request path traversal, archive extraction |
 
 Every directory has its own README summarizing the files and the scanner categories they exercise (security, async error coverage, resource lifecycle, math/precision, etc.).
 
@@ -259,6 +261,8 @@ Each file contains **intentional bugs** that the scanner should detect:
 | `swift-request-path-traversal-clean` | `test-suite/swift/path_traversal_clean` | Swift fixtures that use `lastPathComponent` or standardized root containment before touching file sinks. |
 | `swift-type-narrowing-buggy` | `test-suite/swift/type_narrowing/buggy` | Swift guard lets, Objective-C bridging casts, and optional-chain bridges that log/continue instead of returning before force-unwrapping, so the helper flags unsafe paths. |
 | `swift-type-narrowing-clean` | `test-suite/swift/type_narrowing/clean` | Swift counterexamples that return/throw or fully bind optionals before use so the analyzer stays quiet on correct patterns. |
+| `elixir-request-path-traversal-buggy` | `test-suite/elixir/buggy/path_traversal.ex` | Plug/Phoenix params, request paths, and upload filenames flow into `File.*`, `send_file`, and `send_download` sinks without basename or root containment checks. |
+| `elixir-request-path-traversal-clean` | `test-suite/elixir/clean/path_traversal.ex` | Elixir fixtures that use `Path.basename` or `Path.expand` plus `String.starts_with?` containment before touching file sinks. |
 
 ### Realistic Scenarios
 
@@ -783,7 +787,7 @@ ubs test-suite/buggy/03-async-await.js test-suite/clean/03-async-await-clean.js
 
 In addition to ad-hoc scans you can execute a curated manifest of cases that
 assert exit semantics and severity thresholds across the repo. The manifest
-(`test-suite/manifest.json`) now includes **every language** (JS core + frameworks, Python, Go, C++, Rust, Java, Ruby, Swift, C#, and the JS edge-case directories).
+(`test-suite/manifest.json`) now includes **every language** (JS core + frameworks, Python, Go, C++, Rust, Java, Ruby, Swift, C#, Elixir, and the JS edge-case directories).
 
 ```bash
 cd test-suite

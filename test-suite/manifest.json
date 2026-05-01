@@ -7387,6 +7387,65 @@
       }
     },
     {
+      "id": "elixir-request-path-traversal-buggy",
+      "description": "Elixir conn params, request paths, and upload filenames should not flow into file read/write/serve/delete sinks without validation.",
+      "path": "test-suite/elixir/buggy/path_traversal.ex",
+      "language": "elixir",
+      "tags": [
+        "elixir",
+        "security",
+        "path-traversal",
+        "buggy"
+      ],
+      "args": [
+        "--only=elixir",
+        "--fail-on-warning",
+        "--skip=1,2,3,5,6,7,8,9,10,11,12,13,14"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-derived path reaches file read/write/serve sink"
+        ]
+      }
+    },
+    {
+      "id": "elixir-request-path-traversal-clean",
+      "description": "Elixir request-derived file paths using Path.basename or Path.expand containment should stay clean.",
+      "path": "test-suite/elixir/clean/path_traversal.ex",
+      "language": "elixir",
+      "tags": [
+        "elixir",
+        "security",
+        "path-traversal",
+        "clean"
+      ],
+      "args": [
+        "--only=elixir",
+        "--fail-on-warning",
+        "--skip=1,2,3,5,6,7,8,9,10,11,12,13,14"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-derived path reaches file read/write/serve sink"
+        ]
+      }
+    },
+    {
       "id": "toon-format-js-buggy",
       "description": "TOON format output for JS buggy fixtures (validates TOON encoding works).",
       "path": "test-suite/buggy",

@@ -9,7 +9,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue.svg)](https://github.com/Dicklesworthstone/ultimate_bug_scanner)
-[![Version](https://img.shields.io/badge/version-5.1.93-blue.svg)](https://github.com/Dicklesworthstone/ultimate_bug_scanner)
+[![Version](https://img.shields.io/badge/version-5.1.94-blue.svg)](https://github.com/Dicklesworthstone/ultimate_bug_scanner)
 
 <div align="center">
 
@@ -102,7 +102,7 @@ const zipCode = parseInt(userInput);  // 💥 "08" becomes 0 in old browsers (oc
 ## 🎯 **The Solution: Your 24/7 Bug Hunting Partner**
 
 ### 🧠 Language-Aware Meta-Runner
-- `ubs` auto-detects **JavaScript/TypeScript, Python, C/C++, Rust, Go, Java, Ruby, Swift, and C#** in the same repo and fans out to per-language scanners.
+- `ubs` auto-detects **JavaScript/TypeScript, Python, C/C++, Rust, Go, Java, Ruby, Swift, C#, and Elixir** in the same repo and fans out to per-language scanners.
 - Each scanner lives under `modules/ubs-<lang>.sh`, ships independently, and supports `--format text|json|jsonl|sarif|toon` for consistent downstream tooling.
 - Modules download lazily (PATH → repo `modules/` → cached under `${XDG_DATA_HOME:-$HOME/.local/share}/ubs/modules`) and are validated before execution.
 - Results from every language merge into one text/JSON/SARIF report via `jq`, so CI systems and AI agents only have to parse a single artifact.
@@ -594,9 +594,9 @@ Drop this into `.claude/hooks/on-file-write.sh`:
 
 ```bash
 #!/bin/bash
-# Auto-scan UBS-supported languages (JS/TS, Python, C/C++, Rust, Go, Java, Ruby, Swift, C#) on save
+# Auto-scan UBS-supported languages (JS/TS, Python, C/C++, Rust, Go, Java, Ruby, Swift, C#, Elixir) on save
 
-if [[ "$FILE_PATH" =~ \.(js|jsx|ts|tsx|mjs|cjs|py|pyw|pyi|c|cc|cpp|cxx|h|hh|hpp|hxx|rs|go|java|rb|cs|csx)$ ]]; then
+if [[ "$FILE_PATH" =~ \.(js|jsx|ts|tsx|mjs|cjs|py|pyw|pyi|c|cc|cpp|cxx|h|hh|hpp|hxx|rs|go|java|rb|cs|csx|ex|exs|eex|heex|leex|sface)$ ]]; then
   echo "🔬 Quality check running..."
 
   if ubs "${PROJECT_DIR}" --ci 2>&1 | head -30; then
@@ -1275,7 +1275,7 @@ eval(safe_string)  # ubs:ignore
 
 **Suppression Rules:**
 - Must appear on the **same line** as the flagged code
-- Works across all 9 supported languages
+- Works across all 10 supported languages
 - Suppresses all findings on that line (use sparingly)
 - Survives formatting tools that preserve trailing comments
 
@@ -1291,7 +1291,7 @@ eval(code);  // Still flagged!
 
 ### **Cross-Language Async Error Detection**
 
-UBS detects unhandled async errors consistently across all 9 languages. The patterns adapt to each language's idioms while providing equivalent coverage:
+UBS detects unhandled async errors consistently across all 10 languages. The patterns adapt to each language's idioms while providing equivalent coverage:
 
 | Language | Pattern | What UBS Detects |
 |----------|---------|------------------|
@@ -1366,7 +1366,7 @@ If a helper is modified or corrupted, the scanner fails safely with remediation 
 
 ### **Unified Severity Normalization**
 
-All 9 language modules normalize their findings to a consistent severity scale, ensuring predictable output regardless of source language:
+All 10 language modules normalize their findings to a consistent severity scale, ensuring predictable output regardless of source language:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -1515,7 +1515,7 @@ Traditional linters were designed for **human developers** in **single-language 
 
 | Traditional Linting (Human-First) | UBS Approach (LLM-First) |
 |---|---|
-| **Goal:** Comprehensive coverage + auto-fix<br>**Speed:** 15-60 seconds acceptable<br>**Setup:** 30 min config per language<br>**Languages:** One tool per language<br>**False positives:** Must be <1% (frustrates humans)<br>**Output:** Human-readable prose | **Goal:** Critical bug detection + fast feedback<br>**Speed:** <5 seconds required<br>**Setup:** Zero config (instant start)<br>**Languages:** One scan for all 9 languages<br>**False positives:** 10-20% OK (LLMs filter instantly)<br>**Output:** Structured file:line for LLM parsing |
+| **Goal:** Comprehensive coverage + auto-fix<br>**Speed:** 15-60 seconds acceptable<br>**Setup:** 30 min config per language<br>**Languages:** One tool per language<br>**False positives:** Must be <1% (frustrates humans)<br>**Output:** Human-readable prose | **Goal:** Critical bug detection + fast feedback<br>**Speed:** <5 seconds required<br>**Setup:** Zero config (instant start)<br>**Languages:** One scan for all 10 languages<br>**False positives:** 10-20% OK (LLMs filter instantly)<br>**Output:** Structured file:line for LLM parsing |
 
 ### **2. LLMs Don't Need Auto-Fix—They ARE the Auto-Fix Engine**
 
@@ -1585,7 +1585,7 @@ pip install pylint black mypy
 curl -fsSL https://raw.githubusercontent.com/.../install.sh | bash
 ubs .
 
-# Done. All 9 languages scanned, unified report.
+# Done. All 10 languages scanned, unified report.
 ```
 
 **This matters because:**
@@ -1606,7 +1606,7 @@ ubs .
 - **Python** – `modules/helpers/resource_lifecycle_py.py` now reasons over the AST, tracking `with`/`async with`, alias imports, and `.open()`/`.connect()` calls so `ubs-python` warns only when a handle is truly leaking. Pathlib `Path.open()` and similar patterns are handled without brittle regexes.
 - **Java** – New ast-grep rules (`java.resource.executor-no-shutdown`, `java.resource.thread-no-join`, `java.resource.jdbc-no-close`, `java.resource.resultset-no-close`, `java.resource.statement-no-close`) ensure ExecutorServices, raw `Thread`s, `java.sql.Connection`s, `Statement`/`PreparedStatement`/`CallableStatement`, and `ResultSet` handles all get proper shutdown/close semantics before the regex fallback ever runs.
 - **C#** – `modules/helpers/resource_lifecycle_csharp.py`, `modules/helpers/type_narrowing_csharp.py`, and `modules/helpers/async_task_handles_csharp.py` now catch disposable-handle leaks (`CancellationTokenSource`, stream-like readers/writers, `HttpRequestMessage`), null/`TryGetValue` guards that log but still fall through into dereferences, and `Task.Run`/`Task.Factory.StartNew` handles that are created but never observed. The C# security pass also tracks ASP.NET request/query/path values and upload filenames into file read/write/serve/delete sinks unless they go through `Path.GetFileName` or `Path.GetFullPath` containment checks.
-- **C++ / Rust / Ruby** – These modules already relied on ast-grep rule packs; the “Universal AST Adoption” epic is now complete with every language module (JS, Python, Go, C++, Rust, Java, Ruby, Swift, C#) running semantic detectors instead of fragile grep-only heuristics. Ruby's security pass now also tracks Rack/Rails params and upload filenames into file read/write/serve/delete sinks unless the path is reduced to `File.basename` or guarded by `File.expand_path` containment checks.
+- **C++ / Rust / Ruby / Elixir** – These modules already relied on ast-grep rule packs or language-tailored context passes; the “Universal AST Adoption” epic is now complete with every language module (JS, Python, Go, C++, Rust, Java, Ruby, Swift, C#, Elixir) running semantic detectors instead of fragile grep-only heuristics. Ruby's security pass now also tracks Rack/Rails params and upload filenames into file read/write/serve/delete sinks unless the path is reduced to `File.basename` or guarded by `File.expand_path` containment checks. Elixir's security pass tracks Plug/Phoenix params, request paths, and upload filenames into `File.*`, `send_file`, and `send_download` sinks unless the path is reduced to `Path.basename` or guarded by `Path.expand` containment checks.
 
 #### Python – AST helper in action
 
@@ -1789,7 +1789,7 @@ Layer 4: Metrics collection  → Time-series quality tracking
 **This combination of speed + semantic understanding + correlation is unique.**
 
 **Unified multi-language runner:**
-- Auto-detects 9 languages in one scan
+- Auto-detects 10 languages in one scan
 - Parallel execution (Go + Python + Rust simultaneously)
 - Unified JSON/SARIF output for tooling
 - Module system with lazy download/caching
@@ -1920,7 +1920,7 @@ You wouldn't use a truck for a Formula 1 race. You wouldn't use a sports car to 
 These are fundamentally incompatible goals. ESLint would never accept "10-20% false positives are fine" or "skip auto-fix entirely."
 
 **2. Multi-language meta-runner**
-- The unified runner that auto-detects 9 languages is the core innovation
+- The unified runner that auto-detects 10 languages is the core innovation
 - This doesn't fit into any single linter's architecture
 - Each linter project has different maintainers, philosophies, release cycles
 
@@ -2083,14 +2083,13 @@ Use both.
 
 **A:** Probably! The module system makes it easy to add languages.
 
-**Current:** JavaScript/TypeScript, Python, Go, Rust, Java, C++, Ruby, Swift, C# (9 languages)
+**Current:** JavaScript/TypeScript, Python, Go, Rust, Java, C++, Ruby, Swift, C#, Elixir (10 languages)
 
 **Roadmap considerations:**
 - **PHP** - High demand, lots of legacy code
-- **Swift** - iOS development
 - **Kotlin** - Android development
 - **Scala** - JVM ecosystem
-- **Elixir** - Growing adoption
+- **Shell** - DevOps and installer scripts
 
 **How we prioritize:**
 1. Community demand (GitHub issues)
@@ -2125,7 +2124,7 @@ But the core tool will always be free and open source.
 
 **This isn't trying to replace ESLint.** It's solving a different problem:
 
-> **"How do I give LLM coding agents the ability to self-audit across 9 languages with zero configuration overhead and sub-5-second feedback?"**
+> **"How do I give LLM coding agents the ability to self-audit across 10 languages with zero configuration overhead and sub-5-second feedback?"**
 
 No existing tool does this because:
 - Traditional linters are human-first (need auto-fix, low FP tolerance)
@@ -2196,7 +2195,7 @@ coverage/
 
 ## 🧭 **Language Coverage Comparison**
 
-UBS ships nine language-focused analyzers. The comparison below focuses on the longest-standing modules; Swift is called out separately where relevant. Each category below is scored using the following scale:
+UBS ships ten language-focused analyzers. The comparison below focuses on the longest-standing modules; Swift and Elixir are called out separately where relevant. Each category below is scored using the following scale:
 
 - **0 – Not covered**
 - **1 – Simple heuristics/regex only**
