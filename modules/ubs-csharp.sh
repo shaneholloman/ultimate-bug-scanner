@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2002,SC2015,SC2034,SC2317
-# UBS C# ULTIMATE BUG SCANNER v3.0
+# UBS C# ULTIMATE BUG SCANNER v3.0.1
 # Industrial-grade bug & footgun scanner for C#/.NET codebases.
 # Inspired by UBS rust/cpp scanners: uses ripgrep + ast-grep + dotnet CLI (optional).
 #
@@ -26,7 +26,7 @@ fi
 set -Eeuo pipefail
 shopt -s lastpipe 2>/dev/null || true
 
-VERSION="3.0"
+VERSION="3.0.1"
 SCRIPT_NAME="$(basename "$0")"
 SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -1802,6 +1802,252 @@ PY
   fi
 }
 
+run_request_outbound_url_checks() {
+  local cat=8
+  [[ "$HAS_PYTHON" -eq 1 ]] || return 0
+  [[ -n "$FILELIST_NUL" && -f "$FILELIST_NUL" ]] || build_file_list "$FILELIST_NUL"
+  local report="$TMP_DIR/cat8.request-outbound-url.txt"
+
+  python3 - "$PROJECT_DIR" "$FILELIST_NUL" >"$report" <<'PY' 2>/dev/null || true
+import re
+import sys
+from pathlib import Path
+
+PROJECT_DIR = Path(sys.argv[1]).resolve()
+BASE_DIR = PROJECT_DIR if PROJECT_DIR.is_dir() else PROJECT_DIR.parent
+FILELIST = Path(sys.argv[2])
+URL_KEY = r'(?:url|uri|host|origin|callback|webhook|redirect|endpoint|target|remote|link|location|referer|referrer)'
+
+SOURCE_RE = re.compile(
+    rf'\b(?:HttpContext\.)?Request\.(?:Query|Form|RouteValues|Headers)\s*\[[^\]]*{URL_KEY}[^\]]*\]'
+    rf'|\b(?:HttpContext\.)?Request\.(?:Query|Form|RouteValues|Headers)\.(?:TryGetValue|ContainsKey)\s*\([^)]*{URL_KEY}[^)]*\)'
+    r'|\b(?:HttpContext\.)?Request\.(?:Host|Path|PathBase|RawTarget|QueryString)\b(?:\.Value\b)?'
+    r'|\b(?:ControllerContext|ActionContext)\.HttpContext\.Request\.(?:Host|Path|RawTarget|QueryString)\b',
+    re.IGNORECASE,
+)
+REQUEST_COLLECTION_RE = re.compile(
+    r'\b(?:HttpContext\.)?Request\.(?:Query|Form|RouteValues|Headers)\s*\[[^\]]+\]'
+    r'|\b(?:HttpContext\.)?Request\.(?:Query|Form|RouteValues|Headers)\.(?:TryGetValue|ContainsKey)\s*\(',
+    re.IGNORECASE,
+)
+URLISH_NAME_RE = re.compile(URL_KEY, re.IGNORECASE)
+SAFE_EXPR_RE = re.compile(
+    r'\b(?:Safe(?:Outbound)?Url|Safe(?:Outbound)?Uri|Validated(?:Outbound)?Url|Validate(?:Outbound)?Url|'
+    r'Allowed(?:Outbound)?Url|AllowlistedUrl|TrustedUrl|SanitizeUrl|SanitizeUri|'
+    r'ResolveAllowedUrl|RequireAllowedHost|IsAllowedHost|AllowedHost)\b',
+    re.IGNORECASE,
+)
+URI_PARSE_RE = re.compile(r'\b(?:Uri\.TryCreate|new\s+Uri)\s*\(')
+HOST_CHECK_RE = re.compile(
+    r'\.(?:Scheme|Host)\b'
+    r'|\b(?:AllowedHosts|AllowedHost|HostAllowlist|TrustedHosts|ALLOWED_HOSTS)\b'
+    r'|\.Contains\s*\('
+    r'|\bUri\.UriSchemeHttps\b',
+    re.IGNORECASE,
+)
+REJECT_RE = re.compile(r'\b(?:throw|return\s+(?:null|false)|BadRequest|Forbid|Unauthorized)\b', re.IGNORECASE)
+SINK_RE = re.compile(
+    r'\b[A-Za-z_][A-Za-z0-9_]*\.(?:GetAsync|GetStringAsync|GetByteArrayAsync|PostAsync|PutAsync|PatchAsync|DeleteAsync|SendAsync)\s*\('
+    r'|\bnew\s+HttpRequestMessage\s*\('
+    r'|\b(?:WebRequest|HttpWebRequest)\.Create(?:Http)?\s*\('
+    r'|\b[A-Za-z_][A-Za-z0-9_]*\.(?:DownloadString|DownloadData|OpenRead|UploadString|UploadData)\s*\('
+    r'|\bRestClient\.(?:Get|Post|Put|Patch|Delete|Execute)\s*\('
+    r'|\b[A-Za-z_][A-Za-z0-9_]*\.(?:Get|Post|Put|Patch|Delete|Execute)\s*\([^;]*(?:url|uri|endpoint|request)',
+    re.IGNORECASE,
+)
+ASSIGN_RE = re.compile(
+    r'^\s*(?:var|string|String|Uri|UriBuilder|HttpRequestMessage|HttpRequest|HttpResponseMessage)?\s*'
+    r'(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<rhs>.+)$'
+)
+OUT_PARAM_RE = re.compile(
+    rf'\b(?:HttpContext\.)?Request\.(?:Query|Form|RouteValues|Headers)\.TryGetValue\s*\([^)]*{URL_KEY}[^)]*,\s*out\s+(?:var\s+)?(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)',
+    re.IGNORECASE,
+)
+PATH_LIMIT = 4
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    paren_balance = statement.count('(') - statement.count(')')
+    has_end = ';' in statement or '{' in statement or '}' in statement
+    lookahead = idx + 1
+    while (paren_balance > 0 or not has_end) and lookahead < len(lines) and lookahead < idx + 10:
+        next_line = strip_line_comments(lines[lookahead]).strip()
+        statement += ' ' + next_line
+        paren_balance += next_line.count('(') - next_line.count(')')
+        has_end = has_end or ';' in next_line or '{' in next_line or '}' in next_line
+        lookahead += 1
+    return statement
+
+def relpath(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def load_paths():
+    try:
+        data = FILELIST.read_bytes().split(b'\0')
+    except OSError:
+        return []
+    return [Path(raw.decode('utf-8', 'ignore')) for raw in data if raw]
+
+def is_safe_expr(expr):
+    return bool(SAFE_EXPR_RE.search(expr))
+
+def refs_in_expr(expr, tainted):
+    refs = []
+    for name in tainted:
+        if re.search(rf'\b{re.escape(name)}\b', expr):
+            refs.append(name)
+    return refs
+
+def has_source(expr, target_name=''):
+    if SOURCE_RE.search(expr):
+        return True
+    return bool(target_name and URLISH_NAME_RE.search(target_name) and REQUEST_COLLECTION_RE.search(expr))
+
+def taint_from_expr(expr, tainted, target_name=''):
+    if is_safe_expr(expr):
+        return None
+    direct = has_source(expr, target_name)
+    if direct:
+        source = SOURCE_RE.search(expr)
+        return {'path': [(source.group(0) if source else target_name or 'request value').strip()]}
+    refs = refs_in_expr(expr, tainted)
+    if not refs:
+        return None
+    ref = refs[0]
+    path = list(tainted.get(ref, {}).get('path', [ref]))
+    if len(path) >= PATH_LIMIT:
+        path = path[-(PATH_LIMIT - 1):]
+    path.append(ref)
+    return {'path': path}
+
+def has_allowlist_context(lines, line_no, refs):
+    if not refs:
+        return False
+    start = max(0, line_no - 24)
+    context = '\n'.join(strip_line_comments(line) for line in lines[start:line_no])
+    if not any(re.search(rf'\b{re.escape(ref)}\b', context) for ref in refs):
+        return False
+    for line in context.splitlines():
+        if SAFE_EXPR_RE.search(line) and any(re.search(rf'\b{re.escape(ref)}\b', line) for ref in refs):
+            return True
+    return bool(URI_PARSE_RE.search(context) and HOST_CHECK_RE.search(context) and REJECT_RE.search(context))
+
+def analyze(path: Path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not (re.search(r'\b(?:Request|HttpContext)\b', text) and SINK_RE.search(text)):
+        return
+    lines = text.splitlines()
+    tainted = {}
+    seen = set()
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        statement = logical_statement(lines, idx).strip()
+        if not statement:
+            continue
+        out_param = OUT_PARAM_RE.search(statement)
+        if out_param:
+            tainted[out_param.group('lhs')] = {'path': [out_param.group(0).strip()]}
+        assign = ASSIGN_RE.match(statement)
+        if assign:
+            name = assign.group('lhs')
+            rhs = assign.group('rhs')
+            taint = taint_from_expr(rhs, tainted, name)
+            if taint:
+                tainted[name] = taint
+            elif name in tainted and is_safe_expr(rhs):
+                tainted.pop(name, None)
+        if not SINK_RE.search(statement):
+            continue
+        if is_safe_expr(statement):
+            continue
+        direct = has_source(statement)
+        refs = refs_in_expr(statement, tainted)
+        if not direct and not refs:
+            continue
+        if has_allowlist_context(lines, idx, refs):
+            continue
+        key = (relpath(path), idx)
+        if key in seen:
+            continue
+        seen.add(key)
+        if direct:
+            source = SOURCE_RE.search(statement)
+            path_desc = f"{(source.group(0) if source else 'request source').strip()} -> outbound HTTP"
+        else:
+            ref = refs[0]
+            seq = list(tainted.get(ref, {}).get('path', [ref]))
+            if len(seq) >= PATH_LIMIT:
+                seq = seq[-(PATH_LIMIT - 1):]
+            seq.append('outbound HTTP')
+            path_desc = ' -> '.join(seq)
+        issues.append((relpath(path), idx, f"{source_line(lines, idx)}  [{path_desc}]"))
+
+issues = []
+for file_path in load_paths():
+    analyze(file_path, issues)
+for file_name, line_no, code in issues:
+    print(f"{file_name}:{line_no}:{code}")
+PY
+
+  local hits
+  hits=$(cat "$report" | count_lines)
+  if [[ $hits -gt 0 ]]; then
+    bump_counter critical "$hits"
+    [[ "$FORMAT" == "text" ]] && echo "${RED}${ICON_CRIT} Request-derived URL reaches outbound HTTP client ($hits) - validate with Uri parsing plus explicit https scheme and host allow-list checks${RESET}"
+    [[ "$FORMAT" == "text" ]] && head -n "$DETAIL_LIMIT" "$report" | print_matches "Request-derived URL reaches outbound HTTP client" "request outbound URL" "critical" "$cat" || true
+  fi
+}
+
 category_8_security() {
   local cat=8
   category_enabled "$cat" || return 0
@@ -1866,6 +2112,7 @@ search '\b(api[_-]?key|secret|password|token)\b\s*=\s*"[^"]{8,}"' "$tmp"
 
   run_archive_extraction_checks
   run_request_path_traversal_checks
+  run_request_outbound_url_checks
 }
 
 category_9_quality_markers() {
