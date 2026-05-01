@@ -3845,7 +3845,7 @@
     },
     {
       "id": "js-typescript-path-traversal-buggy",
-      "description": "TypeScript file read/download/write/upload sinks should not use request-derived paths without containment or filename sanitization.",
+      "description": "TypeScript file read/download/write/upload sinks should not use request/header-derived or framework headers() paths without containment or filename sanitization.",
       "path": "test-suite/js/security/path-traversal-buggy.ts",
       "language": "js",
       "tags": [
@@ -3874,7 +3874,7 @@
     },
     {
       "id": "js-typescript-path-traversal-clean",
-      "description": "TypeScript file read/download/write/upload sinks with basename sanitization or resolved-root containment checks should stay clean.",
+      "description": "TypeScript file read/download/write/upload sinks with basename sanitization or resolved-root containment checks, including header-derived and headers() paths, should stay clean.",
       "path": "test-suite/js/security/path-traversal-clean.ts",
       "language": "js",
       "tags": [

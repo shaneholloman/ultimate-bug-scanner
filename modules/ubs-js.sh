@@ -5653,6 +5653,9 @@ source_re = re.compile(
     r'(?:'
     r'\b(?:req|request|ctx|context|event)\s*\.\s*(?:query|body|params|headers|cookies|files?|nextUrl|url)\b|'
     r'\b(?:req|request|ctx|context|event)\s*\[\s*[\'"`](?:query|body|params|headers|cookies|files?|url)[\'"`]\s*\]|'
+    r'\b(?:req|request|ctx|context|event)\s*\.\s*(?:get|header)\s*\(\s*[\'"`][^\'"`]+[\'"`]\s*\)|'
+    r'\b(?:headers|cookies)\s*\(\s*\)\s*\.\s*get\s*\(\s*[\'"`][^\'"`]+[\'"`]\s*\)|'
+    r'\b(?:await\s+)?(?:headers|cookies)\s*\(\s*\)|'
     r'\b(?:query|body|params|headers|cookies|files|searchParams|queryParams|formData)\s*\.\s*get\s*\(|'
     r'\b(?:searchParams|queryParams)\s*\.\s*get\s*\(|'
     r'\bnew\s+URL\s*\([^)]*\)\s*\.\s*searchParams\s*\.\s*get\s*\('
@@ -5716,8 +5719,39 @@ def code_line(source_line):
     stripped = source_line.strip()
     if not stripped or stripped.startswith(("//", "/*", "*")):
         return ""
-    without_block_comments = re.sub(r'/\*.*?\*/', '', source_line)
-    return re.sub(r'//.*', '', without_block_comments)
+    result = []
+    quote = ""
+    escaped = False
+    idx = 0
+    while idx < len(source_line):
+        ch = source_line[idx]
+        nxt = source_line[idx + 1] if idx + 1 < len(source_line) else ""
+        if quote:
+            result.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == quote:
+                quote = ""
+            idx += 1
+            continue
+        if ch in ('"', "'", '`'):
+            quote = ch
+            result.append(ch)
+            idx += 1
+            continue
+        if ch == '/' and nxt == '/':
+            break
+        if ch == '/' and nxt == '*':
+            idx += 2
+            while idx + 1 < len(source_line) and not (source_line[idx] == '*' and source_line[idx + 1] == '/'):
+                idx += 1
+            idx += 2
+            continue
+        result.append(ch)
+        idx += 1
+    return ''.join(result)
 
 def statement_from(lines, idx, max_lines=16):
     parts = []

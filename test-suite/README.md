@@ -239,6 +239,8 @@ Each file contains **intentional bugs** that the scanner should detect:
 |----------------|------|---------|
 | `js-taint-buggy` | `test-suite/js/buggy/taint_analysis.js` | Unsanitized req.body/req.query/window.location flows into `innerHTML`, `res.send`, `db.query`, and `child_process.exec` so taint analysis should emit CRITICAL findings. |
 | `js-taint-clean` | `test-suite/js/clean/taint_analysis.js` | Mirrors the buggy flows but sanitizes with DOMPurify/escapeHtml/shellescape/parameterized SQL to prove the helper suppresses safe code. |
+| `js-typescript-path-traversal-buggy` | `test-suite/js/security/path-traversal-buggy.ts` | Request query, params, body, upload filenames, Express header accessors, and framework `headers()` values flow into Node file read/download/write/upload sinks without containment checks. |
+| `js-typescript-path-traversal-clean` | `test-suite/js/security/path-traversal-clean.ts` | Uses `path.resolve`/`path.relative` containment or basename filename sanitization before file sinks, including header-derived and `headers()` paths. |
 | `python-taint-buggy` | `test-suite/python/buggy/taint_analysis.py` | Flask `request.args` hits HTML, `cursor.execute`, and `subprocess.run(shell=True)` without sanitization so new helper must warn. |
 | `python-taint-clean` | `test-suite/python/clean/taint_analysis.py` | Same flows but escaped via `html.escape`, parameterized SQL, and `shlex.quote`, proving the helper stays quiet on safe code. |
 | `golang-taint-buggy` | `test-suite/golang/buggy/taint_analysis.go` | `r.FormValue` is written to `fmt.Fprintf`, concatenated into SQL, and passed to `exec.Command("sh","-c", ...)`. |

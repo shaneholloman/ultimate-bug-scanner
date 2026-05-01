@@ -5,6 +5,8 @@ type RequestLike = {
   query: Record<string, string | undefined>;
   params: Record<string, string | undefined>;
   body: Record<string, string | undefined>;
+  get(name: string): string | undefined;
+  header(name: string): string | undefined;
   file?: UploadedFile;
 };
 
@@ -18,6 +20,12 @@ type UploadedFile = {
   originalname: string;
   mv(destination: string): Promise<void>;
 };
+
+type HeaderBag = {
+  get(name: string): string | null;
+};
+
+declare function headers(): Promise<HeaderBag>;
 
 const UPLOAD_ROOT = path.resolve("/srv/app/uploads");
 
@@ -63,4 +71,20 @@ export function bodyPathWrite(req: RequestLike): void {
 
 export function directDownload(req: RequestLike, res: ResponseLike): void {
   res.download(validatePath(req.query.archive));
+}
+
+export function headerPathRead(req: RequestLike): Buffer {
+  const requested = req.get("x-file-path");
+  return fs.readFileSync(validatePath(requested));
+}
+
+export function headerPathWrite(req: RequestLike): void {
+  const destination = validatePath(req.header("x-output-path"));
+  fs.writeFileSync(destination, "generated report");
+}
+
+export async function nextHeaderPathRead(): Promise<Buffer> {
+  const incomingHeaders = await headers();
+  const requested = incomingHeaders.get("x-file-path");
+  return fs.readFileSync(validatePath(requested ?? undefined));
 }
