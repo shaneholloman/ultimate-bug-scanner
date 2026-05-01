@@ -9,7 +9,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue.svg)](https://github.com/Dicklesworthstone/ultimate_bug_scanner)
-[![Version](https://img.shields.io/badge/version-5.1.92-blue.svg)](https://github.com/Dicklesworthstone/ultimate_bug_scanner)
+[![Version](https://img.shields.io/badge/version-5.1.93-blue.svg)](https://github.com/Dicklesworthstone/ultimate_bug_scanner)
 
 <div align="center">
 
@@ -1599,7 +1599,7 @@ ubs .
 - **TypeScript** – UBS shells out to `tsserver` (via the bundled helper) whenever Node.js + the `typescript` package are available. The installer surfaces a "Type narrowing readiness" diagnostic so you immediately know if tsserver-powered guards are running.
 - **Rust** – A Python helper inspects `if let Some/Ok` guard clauses and flags subsequent `.unwrap()`/`.expect()` calls outside of exiting blocks. The Rust security pass also catches archive member paths flowing into extraction destinations without `enclosed_name()`/`unpack_in()`-style containment, plus predictable temp-file writes that use shared temp paths without `tempfile` or `create_new(true)`. Fixtures and manifest cases keep these regressions tested.
 - **Kotlin** – The Java-family module scans `.kt`/`.kts` sources for `if (value == null)` guards that merely log and keep running before hitting `value!!`, and its security pass now catches zip extraction that writes `entry.name` / `entry.path` into destination paths without containment checks.
-- **Swift** – The dedicated `ubs-swift` module now ships the guard-`let` helper directly, so optional chaining/Objective‑C bridging heuristics fire even when you run `ubs --only=swift` locally (no piggybacking on the Java module). It catches cases where code logs and keeps going before force-unwrapping `value!`, protecting iOS/macOS pipelines that blend Swift + ObjC.
+- **Swift** – The dedicated `ubs-swift` module now ships the guard-`let` helper directly, so optional chaining/Objective‑C bridging heuristics fire even when you run `ubs --only=swift` locally (no piggybacking on the Java module). It catches cases where code logs and keeps going before force-unwrapping `value!`, protecting iOS/macOS pipelines that blend Swift + ObjC. The Swift security pass also tracks request query, route, URL path, and upload filename values into file read/write/serve/delete sinks unless they are reduced to a basename or pass a standardized root-containment check.
 
 ### **Resource Lifecycle AST Coverage**
 

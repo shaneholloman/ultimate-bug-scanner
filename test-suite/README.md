@@ -60,7 +60,7 @@ test-suite/
 ├── rust/                       # Rust fixtures + manifest cases (includes type narrowing demo)
 ├── java/                       # Java fixtures + manifest cases
 ├── ruby/                       # Ruby fixtures + manifest cases
-├── swift/                      # Swift type narrowing fixtures + manifest cases
+├── swift/                      # Swift security + type narrowing fixtures and manifest cases
 ├── csharp/                     # C# fixtures + manifest cases
 └── README.md                   # This file
 ```
@@ -107,6 +107,7 @@ This keeps the JS module maintainable and ensures future contributors extend str
 | Java | `test-suite/java/buggy/`, `test-suite/java/security/` | `test-suite/java/clean/`, `test-suite/java/security/` | Executor leaks, blocking I/O, SQL/command injection, request path traversal, archive extraction |
 | Kotlin (Java-family scanner) | `test-suite/kotlin/security_buggy/`, `test-suite/kotlin/archive_extraction_buggy/`, `test-suite/kotlin/type_narrowing/buggy/` | `test-suite/kotlin/security_clean/`, `test-suite/kotlin/archive_extraction_clean/`, `test-suite/kotlin/type_narrowing/clean/` | ProcessBuilder shell injection, archive extraction path traversal, nullable guard fallthrough |
 | Ruby | `test-suite/ruby/buggy/`, `test-suite/ruby/path_traversal_buggy/`, `test-suite/ruby/archive_extraction_buggy/` | `test-suite/ruby/clean/`, `test-suite/ruby/path_traversal_clean/`, `test-suite/ruby/archive_extraction_clean/` | eval/YAML problems, thread leaks, file cleanup, request path traversal, archive extraction |
+| Swift | `test-suite/swift/buggy/`, `test-suite/swift/archive_extraction_buggy/`, `test-suite/swift/path_traversal_buggy/`, `test-suite/swift/type_narrowing/buggy/` | `test-suite/swift/clean/`, `test-suite/swift/archive_extraction_clean/`, `test-suite/swift/path_traversal_clean/`, `test-suite/swift/type_narrowing/clean/` | Shell-backed process execution, request path traversal, archive extraction, optional guard fallthrough |
 | C# | `test-suite/csharp/buggy/`, `test-suite/csharp/security/` | `test-suite/csharp/clean/`, `test-suite/csharp/security/` | Task blocking, weak crypto, request path traversal, archive extraction, `throw ex`, `TryParse` vs `Parse`, null/type narrowing fallthrough, helper-backed resource lifecycle, unobserved `Task.Run`/`StartNew` handles |
 
 Every directory has its own README summarizing the files and the scanner categories they exercise (security, async error coverage, resource lifecycle, math/precision, etc.).

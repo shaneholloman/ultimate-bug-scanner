@@ -6166,6 +6166,65 @@
       }
     },
     {
+      "id": "swift-request-path-traversal-buggy",
+      "description": "Swift request query/url/upload filenames should not flow into file read/write/serve/delete sinks without validation.",
+      "path": "test-suite/swift/path_traversal_buggy",
+      "language": "swift",
+      "tags": [
+        "swift",
+        "security",
+        "path-traversal",
+        "buggy"
+      ],
+      "args": [
+        "--only=swift",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-derived path reaches file read/write/serve sink"
+        ]
+      }
+    },
+    {
+      "id": "swift-request-path-traversal-clean",
+      "description": "Swift request-derived file paths that use basename reduction or standardized root containment should stay clean.",
+      "path": "test-suite/swift/path_traversal_clean",
+      "language": "swift",
+      "tags": [
+        "swift",
+        "security",
+        "path-traversal",
+        "clean"
+      ],
+      "args": [
+        "--only=swift",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-derived path reaches file read/write/serve sink"
+        ]
+      }
+    },
+    {
       "id": "swift-type-narrowing-buggy",
       "description": "Swift guard let clauses that log but continue execution, leading to unsafe optional usage.",
       "path": "test-suite/swift/type_narrowing/buggy",
