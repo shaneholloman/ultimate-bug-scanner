@@ -5083,6 +5083,172 @@ if [ "$fetch_cancellation_count" -gt 0 ]; then
   done <<<"$fetch_cancellation_samples"
 fi
 
+print_subheader "SSRF-prone outbound request targets"
+ssrf_request_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+assignment_re = re.compile(r'\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b[^=]*=\s*(.*)')
+urlish_name_re = re.compile(
+    r'(?:url|uri|target|callback|webhook|endpoint|image|feed|proxy|remote|avatar|next[_-]?hop)',
+    re.IGNORECASE,
+)
+source_re = re.compile(
+    r'(?:'
+    r'\b(?:req|request|ctx|context|event)\s*\.\s*(?:query|body|params|headers|cookies|nextUrl|url)\b|'
+    r'\b(?:req|request|ctx|context|event)\s*\[\s*[\'"`](?:query|body|params|headers|url)[\'"`]\s*\]|'
+    r'\b(?:query|body|params|headers|searchParams|queryParams)\s*\.\s*get\s*\(|'
+    r'\b(?:searchParams|queryParams)\s*\.\s*get\s*\(|'
+    r'\bheaders\s*\(\s*\)\s*\.\s*get\s*\('
+    r')',
+    re.IGNORECASE,
+)
+sink_re = re.compile(
+    r'(?:'
+    r'(?<![\w$.])(?:window\s*\.\s*|globalThis\s*\.\s*)?fetch\s*\(|'
+    r'\baxios\s*(?:\.\s*(?:get|post|put|patch|delete|head|request))?\s*\(|'
+    r'\bgot\s*(?:\.\s*(?:get|post|put|patch|delete|head))?\s*\(|'
+    r'\brequest\s*(?:\.\s*(?:get|post|put|patch|delete|head))?\s*\(|'
+    r'\b(?:http|https)\s*\.\s*(?:get|request)\s*\(|'
+    r'\b(?:client|httpClient|requestClient|apiClient|transport)\s*\.\s*(?:get|post|put|patch|delete|head|request)\s*\('
+    r')'
+)
+safe_re = re.compile(
+    r'(?:'
+    r'\b(?:validate|assert|ensure|require|check)[A-Za-z0-9_$]*(?:Url|URL|Host|Origin|Outbound|Allowed|Trusted)[A-Za-z0-9_$]*\s*\(|'
+    r'\b(?:is|has)[A-Za-z0-9_$]*(?:Allowed|Trusted|Safe)[A-Za-z0-9_$]*(?:Url|URL|Host|Origin)?[A-Za-z0-9_$]*\s*\(|'
+    r'\ballow(?:ed|list)[A-Za-z0-9_$]*(?:Url|URL|Host|Origin|Target)?[A-Za-z0-9_$]*\s*\(|'
+    r'\bALLOWED_(?:HOSTS|ORIGINS|URLS)\b|\ballowed(?:Hosts|Origins|Urls)\b'
+    r')',
+    re.IGNORECASE,
+)
+
+def code_line(source_line):
+    stripped = source_line.strip()
+    if not stripped or stripped.startswith(("//", "/*", "*")):
+        return ""
+    without_block_comments = re.sub(r'/\*.*?\*/', '', source_line)
+    return re.sub(r'//.*', '', without_block_comments)
+
+def statement_from(lines, idx, max_lines=14):
+    parts = []
+    paren_balance = 0
+    brace_balance = 0
+    saw_code = False
+    for line_idx in range(idx, min(len(lines), idx + max_lines)):
+        current = code_line(lines[line_idx]).strip()
+        if not current:
+            continue
+        parts.append(current)
+        saw_code = True
+        paren_balance += current.count('(') - current.count(')')
+        brace_balance += current.count('{') - current.count('}')
+        if line_idx > idx and paren_balance <= 0 and brace_balance <= 0:
+            break
+        if ';' in current and paren_balance <= 0 and brace_balance <= 0:
+            break
+    return ' '.join(parts) if saw_code else ""
+
+def context_from(lines, idx, max_lines=8):
+    start = max(0, idx - max_lines)
+    for line_idx in range(idx - 1, start - 1, -1):
+        if not lines[line_idx].strip():
+            start = line_idx + 1
+            break
+    return '\n'.join(
+        clean
+        for source_line in lines[start:idx + 1]
+        for clean in [code_line(source_line)]
+        if clean.strip()
+    )
+
+def has_safe_validation(text, var_name=""):
+    if not safe_re.search(text):
+        return False
+    return not var_name or re.search(rf'\b{re.escape(var_name)}\b', text)
+
+issues = []
+if root.is_file():
+    candidates = [root]
+    sample_root = root.parent
+else:
+    candidates = []
+    sample_root = root
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            candidates.append(Path(dirpath) / fname)
+
+for path in candidates:
+    if path.suffix.lower() not in exts:
+        continue
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        continue
+    tainted_vars = {}
+    seen_lines = set()
+    for idx, line in enumerate(lines):
+        stripped = code_line(line).strip()
+        if not stripped or 'ubs:ignore' in stripped:
+            continue
+        statement = statement_from(lines, idx)
+        assignment = assignment_re.search(stripped)
+        if assignment:
+            name = assignment.group(1)
+            if (
+                urlish_name_re.search(name)
+                and source_re.search(statement)
+                and not has_safe_validation(statement)
+            ):
+                tainted_vars[name] = idx
+        if not sink_re.search(stripped):
+            continue
+        if not statement or 'ubs:ignore' in statement or has_safe_validation(statement):
+            continue
+        unsafe = bool(source_re.search(statement))
+        if not unsafe:
+            context = context_from(lines, idx)
+            for name, source_idx in tainted_vars.items():
+                if source_idx <= idx and re.search(rf'\b{re.escape(name)}\b', statement):
+                    if not has_safe_validation(context, name):
+                        unsafe = True
+                    break
+        if not unsafe:
+            continue
+        if idx in seen_lines:
+            continue
+        seen_lines.add(idx)
+        try:
+            rel = path.relative_to(sample_root)
+        except ValueError:
+            rel = path
+        issues.append((str(rel), idx + 1, stripped.replace('\t', ' ')))
+
+print(len(issues))
+for entry in issues[:25]:
+    print('\t'.join(str(part) for part in entry))
+PY
+)
+ssrf_request_count=$(printf '%s\n' "$ssrf_request_report" | head -n1 | awk 'END{print $0+0}')
+ssrf_request_samples=$(printf '%s\n' "$ssrf_request_report" | tail -n +2)
+if [ "$ssrf_request_count" -gt 0 ]; then
+  print_finding "warning" "$ssrf_request_count" "Request-derived URL reaches outbound HTTP client" "Validate outbound URLs with an allow-list and block private/link-local hosts before fetching"
+  sample_limit=3
+  while IFS=$'\t' read -r sample_path sample_line sample_text; do
+    [ -z "$sample_path" ] && continue
+    print_code_sample "$sample_path" "$sample_line" "$sample_text"
+    sample_limit=$((sample_limit - 1))
+    [ "$sample_limit" -le 0 ] && break
+  done <<<"$ssrf_request_samples"
+fi
+
 print_subheader "Archive/upload entry paths joined into destinations"
 archive_entry_path_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
 import os
