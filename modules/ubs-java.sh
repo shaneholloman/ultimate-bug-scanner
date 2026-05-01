@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-# JAVA ULTIMATE BUG SCANNER v1.2 - Industrial-Grade Java 21+ Code Analysis
+# JAVA ULTIMATE BUG SCANNER v1.2.1 - Industrial-Grade Java 21+ Code Analysis
 # ═══════════════════════════════════════════════════════════════════════════
 # Comprehensive static analysis for Java using ast-grep + semantic patterns
 # + build-tool checks (Maven/Gradle), formatting/lint integrations (optional)
@@ -863,9 +863,12 @@ SOURCE_RE = re.compile(
     r'(?:getParameter|getParameterValues|getQueryString|getPathInfo|getRequestURI|getServletPath|'
     r'getRequestPath|getPath|getHeader|queryParam|queryParams|pathParam|pathParams|formParam|formParams|'
     r'uploadedFile|fileUpload)\s*\('
+    r'|\b(?:call|routingCall|context|ctx)\.(?:parameters|pathParameters|queryParameters)\s*(?:\[|\.get\b)'
+    r'|\b(?:call|routingCall)\.request\.(?:path|uri|local|queryParameters)\s*(?:\(|\[|\b)'
+    r'|\b(?:parameters|params|queryParameters|pathParameters)\s*\['
     r'|\b(?:request|req)\.(?:path|uri|url|target)\b'
-    r'|\b[A-Za-z_][A-Za-z0-9_]*\.(?:getSubmittedFileName|getOriginalFilename|fileName|filename)\s*\('
-    r'|\b[A-Za-z_][A-Za-z0-9_]*\.(?:submittedFileName|originalFilename|fileName|filename)\b',
+    r'|\b[A-Za-z_][A-Za-z0-9_]*\.(?:getSubmittedFileName|getOriginalFilename|fileName|filename|originalFileName|originalFilename)\s*\('
+    r'|\b[A-Za-z_][A-Za-z0-9_]*\.(?:submittedFileName|originalFilename|originalFileName|fileName|filename)\b',
     re.IGNORECASE,
 )
 SAFE_EXPR_RE = re.compile(
@@ -874,6 +877,8 @@ SAFE_EXPR_RE = re.compile(
     r'sanitize(?:Path|Filename|FileName)|cleanFilename|validate(?:Path|Filename|FileName)|'
     r'resolveUnderRoot|withinRoot|insideRoot|isSafePath|allowedFile|safeUnderRoot)\b'
     r'|\b(?:Path\.of|Paths\.get|new\s+File)\s*\([^;\n]*\)\s*\.\s*(?:getFileName|getName)\s*\('
+    r'|\b(?:Path|Paths\.get|Path\.of)\s*\([^;\n]*\)\s*\.\s*fileName\b'
+    r'|\bFile\s*\([^;\n]*\)\s*\.\s*name\b'
     r'|\.\s*(?:getFileName|getName)\s*\(',
     re.IGNORECASE,
 )
@@ -887,14 +892,14 @@ CONTAINMENT_GUARD_RE = re.compile(
 )
 SINK_RE = re.compile(
     r'\b(?:new\s+)?(?:FileInputStream|FileOutputStream|FileReader|FileWriter|RandomAccessFile)\s*\('
-    r'|\b(?:new\s+File|Paths\.get|Path\.of)\s*\('
+    r'|\b(?:new\s+File|File|Paths\.get|Path\.of)\s*\('
     r'|\.\s*resolve\s*\('
     r'|\bFiles\.(?:readAllBytes|readString|readAllLines|write|writeString|copy|move|delete|deleteIfExists|'
     r'newInputStream|newOutputStream|createDirectories|createFile|size|exists)\s*\('
-    r'|\b(?:sendFile|send_file|serveFile|serve_file|writeFileResponse)\s*\(',
+    r'|\b(?:sendFile|send_file|serveFile|serve_file|writeFileResponse|respondFile|respondLocalFile)\s*\(',
 )
 ASSIGN_RE = re.compile(
-    r'^\s*(?:final\s+)?(?:var|String|Path|File|MultipartFile|Part|UploadedFile|FileUpload|Object)?\s*'
+    r'^\s*(?:final\s+)?(?:val|var|String|Path|File|MultipartFile|Part|UploadedFile|FileUpload|Object)?\s*'
     r'(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<rhs>.+)$'
 )
 PATH_LIMIT = 4
@@ -952,13 +957,22 @@ def logical_statement(lines, line_no):
     idx = line_no - 1
     statement = strip_line_comments(lines[idx])
     balance = statement.count('(') - statement.count(')')
-    has_end = ';' in statement or '{' in statement or '}' in statement
+    stripped = statement.strip()
+    has_kotlin_line_end = balance <= 0 and bool(
+        re.match(r'(?:val|var|return|throw)\b', stripped) or
+        (re.match(r'[A-Za-z_][A-Za-z0-9_]*\s*=', stripped) is not None)
+    )
+    has_end = ';' in statement or '{' in statement or '}' in statement or has_kotlin_line_end
     lookahead = idx + 1
     while (balance > 0 or not has_end) and lookahead < len(lines) and lookahead < idx + 8:
         next_line = strip_line_comments(lines[lookahead]).strip()
         statement += ' ' + next_line
         balance += next_line.count('(') - next_line.count(')')
-        has_end = has_end or ';' in next_line or '{' in next_line or '}' in next_line
+        has_kotlin_line_end = balance <= 0 and bool(
+            re.match(r'(?:val|var|return|throw)\b', next_line) or
+            (re.match(r'[A-Za-z_][A-Za-z0-9_]*\s*=', next_line) is not None)
+        )
+        has_end = has_end or ';' in next_line or '{' in next_line or '}' in next_line or has_kotlin_line_end
         lookahead += 1
     return statement
 
