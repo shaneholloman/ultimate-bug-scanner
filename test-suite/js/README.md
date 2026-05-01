@@ -26,6 +26,7 @@
 - `security/message-event-origin-*.ts` covers TypeScript cross-origin message receivers that trust `event.data` without validating `event.origin`.
 - `security/open-redirect-*.tsx` covers TypeScript/Next.js redirects that route URL/query-derived targets without validating same-origin relative paths or an allowlist.
 - `security/random-security-*.ts` covers TypeScript token/session/OTP generation that accidentally uses `Math.random()`.
+- `security/tls-verification-*.ts` covers TypeScript/Node HTTP/TLS clients that disable certificate verification.
 - `security/archive-extraction-*.ts` covers TypeScript/Node archive extraction that writes entry paths into destination paths without containment validation.
 - `security/post-message-*.ts` covers TypeScript cross-origin messaging leaks from wildcard `postMessage` target origins.
 - `security/target-blank-*.tsx` covers TypeScript/React reverse-tabnabbing protection for JSX `target="_blank"` links.
