@@ -29,3 +29,8 @@ func fetchByHostPath(r *http.Request) (*http.Response, error) {
 	target := fmt.Sprintf("http://%s/internal/status", host)
 	return http.Get(target)
 }
+
+func fetchInboundHost(r *http.Request) (*http.Response, error) {
+	target := "https://" + r.Host + "/internal/status"
+	return http.Get(target)
+}

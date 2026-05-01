@@ -243,8 +243,8 @@ Each file contains **intentional bugs** that the scanner should detect:
 | `python-taint-clean` | `test-suite/python/clean/taint_analysis.py` | Same flows but escaped via `html.escape`, parameterized SQL, and `shlex.quote`, proving the helper stays quiet on safe code. |
 | `golang-taint-buggy` | `test-suite/golang/buggy/taint_analysis.go` | `r.FormValue` is written to `fmt.Fprintf`, concatenated into SQL, and passed to `exec.Command("sh","-c", ...)`. |
 | `golang-taint-clean` | `test-suite/golang/clean/taint_analysis.go` | Escapes comments with `html.EscapeString`, uses positional args in `db.Exec`, and passes cleaned paths into `exec.Command`. |
-| `golang-ssrf-buggy` | `test-suite/golang/security/ssrf_buggy.go` | Request query/form/header/route values flow into `http.Get`, `http.Post`, and `client.Do` without scheme and host allow-list validation. |
-| `golang-ssrf-clean` | `test-suite/golang/security/ssrf_clean.go` | Uses a named `safeOutboundURL` helper with URL parsing and host allow-list checks before outbound HTTP calls. |
+| `golang-ssrf-buggy` | `test-suite/golang/security/ssrf_buggy.go` | Request query/form/header/route/host values flow into `http.Get`, `http.Post`, and `client.Do` without scheme and host allow-list validation. |
+| `golang-ssrf-clean` | `test-suite/golang/security/ssrf_clean.go` | Uses a named `safeOutboundURL` helper with URL parsing and host allow-list checks before outbound HTTP calls, including URLs assembled from inbound host values. |
 | `golang-request-path-traversal-buggy` | `test-suite/golang/security/path_traversal_buggy.go` | Request/query/route/upload filenames flow into `http.ServeFile` and `os.*` sinks without containment checks. |
 | `golang-request-path-traversal-clean` | `test-suite/golang/security/path_traversal_clean.go` | Uses `filepath.Rel`/`filepath.IsAbs` containment and `filepath.Base` filename sanitization before file sinks. |
 | `cpp-request-path-traversal-buggy` | `test-suite/cpp/security/path_traversal_buggy.cpp` | Request/query/path filenames flow into C and C++ file read/write/delete sinks without containment checks. |

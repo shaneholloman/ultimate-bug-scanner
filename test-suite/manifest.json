@@ -4455,7 +4455,7 @@
     },
     {
       "id": "golang-ssrf-buggy",
-      "description": "Go request/query/form/header/route values should not reach outbound HTTP clients without scheme and host allow-list validation.",
+      "description": "Go request/query/form/header/route/host values should not reach outbound HTTP clients without scheme and host allow-list validation.",
       "path": "test-suite/golang/security/ssrf_buggy.go",
       "language": "golang",
       "tags": [

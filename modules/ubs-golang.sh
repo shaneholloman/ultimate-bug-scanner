@@ -44,7 +44,7 @@ shopt -s extglob
 RED=""; GREEN=""; YELLOW=""; BLUE=""; MAGENTA=""; CYAN=""; WHITE=""; GRAY=""
 BOLD=""; DIM=""; RESET=""
 
-VERSION="7.1.1"
+VERSION="7.1.2"
 
 # Color-safe error trap (works before colors are initialized)
 on_err() {
@@ -1397,9 +1397,12 @@ SOURCE_RE = re.compile(
     r'\br\.URL\.Query\(\)\.Get\s*\('
     r'|\br\.(?:FormValue|PostFormValue|PathValue)\s*\('
     r'|\br\.Header\.Get\s*\('
+    r'|\br\.(?:Host|RequestURI)\b'
     r'|\br\.URL\.(?:Path|RawPath|RawQuery)\b'
     r'|\b(?:chi\.URLParam|mux\.Vars)\s*\('
     r'|\b(?:c|ctx|context)\.(?:Param|Query|QueryParam|FormValue|PostForm|GetHeader)\s*\('
+    r'|\b(?:c|ctx|context)\.Request\(\)\.(?:Host|RequestURI)\b'
+    r'|\b(?:c|ctx|context)\.Request\(\)\.URL\.(?:Path|RawPath|RawQuery)\b'
 )
 SAFE_EXPR_RE = re.compile(
     r'\b(?:safe(?:URL|OutboundURL|WebhookURL|CallbackURL|FetchURL)|'

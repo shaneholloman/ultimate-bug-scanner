@@ -49,3 +49,11 @@ func fetchAllowedRequest(r *http.Request, client *http.Client) (*http.Response, 
 	}
 	return client.Do(req)
 }
+
+func fetchAllowedHost(r *http.Request) (*http.Response, error) {
+	target, err := safeOutboundURL("https://" + r.Host + "/status")
+	if err != nil {
+		return nil, err
+	}
+	return http.Get(target)
+}
