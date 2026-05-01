@@ -736,7 +736,9 @@ SOURCE_RE = re.compile(
     r'\b(?:params|request\.params)\s*(?:\[[^\]]+\]|\.fetch\s*\(|\.dig\s*\()'
     r'|\b(?:request|req|rack_request)\.(?:path|path_info|fullpath|original_fullpath|query_string|url)\b'
     r'|\b(?:request|req|rack_request)\.(?:get|post|params|query|POST|GET)\s*(?:\[[^\]]+\]|\.fetch\s*\(|\.dig\s*\()'
-    r'|\b(?:env|request\.env)\s*\[\s*[\'"](?:PATH_INFO|REQUEST_URI|QUERY_STRING|SCRIPT_NAME|HTTP_REFERER)[\'"]\s*\]'
+    r'|\b(?:request|req|rack_request)\.(?:headers|env)\s*(?:\[[^\]]+\]|\.fetch\s*\(|\.dig\s*\()'
+    r'|\b(?:request|req|rack_request)\.get_header\s*\('
+    r'|\b(?:env|request\.env)\s*\[\s*[\'"](?:PATH_INFO|REQUEST_URI|QUERY_STRING|SCRIPT_NAME|HTTP_[A-Z0-9_]+)[\'"]\s*\]'
     r'|\bRack::Request\.new\s*\([^)]*\)\.params\s*(?:\[[^\]]+\]|\.fetch\s*\(|\.dig\s*\()'
     r'|\b[A-Za-z_][A-Za-z0-9_]*(?:\.|\[)[A-Za-z_"\':][A-Za-z0-9_"\'\]:]*\]?\.(?:original_filename|filename)\b'
     r'|\b[A-Za-z_][A-Za-z0-9_]*\.(?:original_filename|filename)\b',

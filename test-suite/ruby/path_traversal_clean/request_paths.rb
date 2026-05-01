@@ -28,3 +28,13 @@ def delete_export(request)
   target = safe_under_root(ROOT, request.params["delete"])
   FileUtils.rm(target)
 end
+
+def read_header_file(request)
+  target = safe_under_root(ROOT, request.headers["X-File-Path"])
+  File.read(target)
+end
+
+def serve_env_header(env)
+  target = safe_under_root(ROOT, env["HTTP_X_REPORT_PATH"])
+  send_file target
+end

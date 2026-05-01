@@ -26,3 +26,13 @@ def delete_export(request)
   target = File.join(ROOT, request.params["delete"])
   FileUtils.rm(target)
 end
+
+def read_header_file(request)
+  requested = request.headers["X-File-Path"]
+  File.read(File.join(ROOT, requested))
+end
+
+def serve_env_header(env)
+  requested = env["HTTP_X_REPORT_PATH"]
+  send_file File.join(ROOT, requested)
+end

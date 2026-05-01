@@ -6871,7 +6871,7 @@
     },
     {
       "id": "ruby-path-traversal-buggy",
-      "description": "Ruby request params and upload filenames should not flow into file read/write/serve/delete sinks without validation.",
+      "description": "Ruby request params, headers, Rack env values, and upload filenames should not flow into file read/write/serve/delete sinks without validation.",
       "path": "test-suite/ruby/path_traversal_buggy",
       "language": "ruby",
       "tags": [
@@ -6899,7 +6899,7 @@
     },
     {
       "id": "ruby-path-traversal-clean",
-      "description": "Ruby File.basename upload names and expanded containment checks should suppress request path traversal warnings.",
+      "description": "Ruby File.basename upload names and expanded containment checks should suppress request/header path traversal warnings.",
       "path": "test-suite/ruby/path_traversal_clean",
       "language": "ruby",
       "tags": [
