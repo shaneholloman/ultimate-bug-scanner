@@ -13,6 +13,7 @@ struct FileIO {
 
 struct Request {
     let query: [String: String]
+    let headers: [String: String]
     let url: URL
     let file: UploadedFile
     let fileio: FileIO
@@ -52,6 +53,18 @@ func saveUpload(req: Request) throws {
 
 func deleteRequestedExport(req: Request) throws {
     let requested = req.query["delete"] ?? ""
+    let target = try safeUnderRoot(documentRoot, requested)
+    try FileManager.default.removeItem(at: target)
+}
+
+func readHeaderSelectedFile(request: Request) throws -> String {
+    let requested = request.headers["X-File-Path"] ?? "index.html"
+    let target = try safeUnderRoot(documentRoot, requested)
+    return try String(contentsOfFile: target.path)
+}
+
+func deleteHeaderSelectedFile(request: Request) throws {
+    let requested = request.headers["X-Delete-Path"] ?? ""
     let target = try safeUnderRoot(documentRoot, requested)
     try FileManager.default.removeItem(at: target)
 }

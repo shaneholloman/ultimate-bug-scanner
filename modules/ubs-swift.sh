@@ -1897,6 +1897,7 @@ name_re = r'[A-Za-z_][A-Za-z0-9_]*'
 assign_re = re.compile(rf'\b(?:let|var)\s+({name_re})\s*(?::[^=]+)?=\s*(.+)')
 request_source = re.compile(
     r'\b(?:req|request)\s*\.\s*(?:query|parameters|params)\b|'
+    r'\b(?:req|request)\s*\.\s*headers\s*(?:\[[^\]]+\]|\.\s*(?:get|first)\s*\([^)]*\))|'
     r'\b(?:req|request)\s*\.\s*url\s*\.\s*(?:path|string)\b|'
     r'\b[A-Za-z_][A-Za-z0-9_]*\s*\.\s*(?:filename|fileName|originalFilename|originalFileName)\b'
 )

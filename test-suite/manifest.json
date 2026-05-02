@@ -6285,7 +6285,7 @@
     },
     {
       "id": "swift-request-path-traversal-buggy",
-      "description": "Swift request query/url/upload filenames should not flow into file read/write/serve/delete sinks without validation.",
+      "description": "Swift request query/header/url/upload filenames should not flow into file read/write/serve/delete sinks without validation.",
       "path": "test-suite/swift/path_traversal_buggy",
       "language": "swift",
       "tags": [
@@ -6313,7 +6313,7 @@
     },
     {
       "id": "swift-request-path-traversal-clean",
-      "description": "Swift request-derived file paths that use basename reduction or standardized root containment should stay clean.",
+      "description": "Swift request/header-derived file paths that use basename reduction or standardized root containment should stay clean.",
       "path": "test-suite/swift/path_traversal_clean",
       "language": "swift",
       "tags": [
