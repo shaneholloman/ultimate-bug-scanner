@@ -1364,6 +1364,258 @@ PY
 )
 }
 
+run_open_redirect_checks() {
+  print_subheader "Request-derived open redirects"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable request-derived open redirect checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Unvalidated redirect from request data" "Validate redirect targets with same-origin relative paths or an explicit host allow-list before redirecting or setting Location"
+        else
+          print_finding "good" "No request-derived open redirect sinks detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', 'vendor', 'node_modules', '.cache', 'bin', 'build', 'dist'}
+
+SOURCE_RE = re.compile(
+    r'\br\.URL\.Query\(\)\.Get\s*\('
+    r'|\br\.(?:FormValue|PostFormValue|PathValue)\s*\('
+    r'|\br\.(?:Form|PostForm)\.Get\s*\('
+    r'|\b(?:r|req|request)\.Header\.(?:Get|Values)\s*\('
+    r'|\b(?:r|req|request)\.Header\s*\['
+    r'|\b(?:r|req|request)\.Referer\s*\('
+    r'|\br\.(?:Host|Referer|RequestURI)\b'
+    r'|\br\.URL\.(?:Path|RawPath|RawQuery)\b'
+    r'|\b(?:chi\.URLParam|mux\.Vars)\s*\('
+    r'|\b(?:c|ctx|context)\.(?:Param|Query|QueryParam|FormValue|PostForm|GetHeader)\s*\('
+    r'|\b(?:c|ctx|context)\.Request\(\)\.(?:Host|Referer|RequestURI)\b'
+    r'|\b(?:c|ctx|context)\.Request\(\)\.Header\.(?:Get|Values)\s*\('
+    r'|\b(?:c|ctx|context)\.Request\(\)\.URL\.(?:Path|RawPath|RawQuery)\b'
+)
+SAFE_EXPR_RE = re.compile(
+    r'\b(?:safe(?:Redirect|RedirectURL|RedirectTarget|Location|ReturnTo)|'
+    r'secure(?:Redirect|RedirectURL|RedirectTarget|Location|ReturnTo)|'
+    r'validate(?:Redirect|RedirectURL|RedirectTarget|Location|ReturnTo)|'
+    r'sanitize(?:Redirect|RedirectURL|RedirectTarget|Location|ReturnTo)|'
+    r'allow(?:Redirect|RedirectURL|RedirectTarget|Location|ReturnTo)|'
+    r'allowed(?:Redirect|RedirectURL|RedirectTarget|Location|ReturnTo)|'
+    r'is(?:Safe|Allowed)(?:Redirect|RedirectURL|RedirectTarget|Location|ReturnTo)|'
+    r'sameOrigin(?:Redirect|RedirectURL|URL)?|localRedirect|relativeRedirect|urlFor)\b',
+    re.IGNORECASE,
+)
+REDIRECT_SINK_RE = re.compile(
+    r'\bhttp\.Redirect\s*\('
+    r'|\b[A-Za-z_][A-Za-z0-9_]*\.Redirect\s*\('
+)
+LOCATION_SINK_RE = re.compile(
+    r'\b[A-Za-z_][A-Za-z0-9_]*\.Header\(\)\.(?:Set|Add)\s*\(\s*"Location"\s*,'
+    r'|\bHeader\(\)\.(?:Set|Add)\s*\(\s*"Location"\s*,'
+)
+ASSIGN_RE = re.compile(r'^\s*(?:var\s+)?(?P<lhs>[A-Za-z_][A-Za-z0-9_,\s]*)\s*(?::=|=)\s*(?P<rhs>.+)$')
+IDENT_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\b')
+PATH_LIMIT = 4
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() == '.go':
+            yield root
+        return
+    for path in root.rglob('*.go'):
+        if path.is_file() and not should_skip(path):
+            yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'", '`'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    balance = statement.count('(') - statement.count(')')
+    lookahead = idx + 1
+    while balance > 0 and lookahead < len(lines) and lookahead < idx + 8:
+        next_line = strip_line_comments(lines[lookahead])
+        statement += ' ' + next_line.strip()
+        balance += next_line.count('(') - next_line.count(')')
+        lookahead += 1
+    return statement
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def lhs_names(lhs):
+    names = []
+    for part in lhs.split(','):
+        name = part.strip()
+        if name and name != '_' and IDENT_RE.fullmatch(name):
+            names.append(name)
+    return names
+
+def is_safe_expr(expr):
+    return bool(SAFE_EXPR_RE.search(expr))
+
+def refs_in_expr(expr, tainted):
+    refs = []
+    for name in tainted:
+        if re.search(rf'\b{re.escape(name)}\b', expr):
+            refs.append(name)
+    return refs
+
+def taint_from_expr(expr, tainted):
+    if is_safe_expr(expr):
+        return None
+    direct = SOURCE_RE.search(expr)
+    if direct:
+        return {'path': [direct.group(0).strip('(')]}
+    refs = refs_in_expr(expr, tainted)
+    if not refs:
+        return None
+    ref = refs[0]
+    path = list(tainted.get(ref, {}).get('path', [ref]))
+    if len(path) >= PATH_LIMIT:
+        path = path[-(PATH_LIMIT - 1):]
+    path.append(ref)
+    return {'path': path}
+
+def has_safe_redirect_context(lines, line_no, refs):
+    if not refs:
+        return False
+    start = max(0, line_no - 24)
+    context_lines = [strip_line_comments(line) for line in lines[start:line_no + 1]]
+    ref_lines = [
+        line for line in context_lines
+        if any(re.search(rf'\b{re.escape(ref)}\b', line) for ref in refs)
+    ]
+    if not ref_lines:
+        return False
+    ref_context = '\n'.join(ref_lines)
+    full_context = '\n'.join(context_lines)
+    has_blocking_action = re.search(r'\b(?:return|http\.Error|errors\.New|fmt\.Errorf|panic)\b', full_context)
+    return bool(SAFE_EXPR_RE.search(ref_context) and has_blocking_action)
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not (SOURCE_RE.search(text) and (REDIRECT_SINK_RE.search(text) or LOCATION_SINK_RE.search(text))):
+        return
+    lines = text.splitlines()
+    tainted = {}
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        line = logical_statement(lines, idx).strip()
+        if not line:
+            continue
+
+        assign = ASSIGN_RE.match(line)
+        if assign:
+            names = lhs_names(assign.group('lhs'))
+            rhs = assign.group('rhs')
+            taint = taint_from_expr(rhs, tainted)
+            if taint:
+                for name in names:
+                    tainted[name] = taint
+            else:
+                for name in names:
+                    if name in tainted and is_safe_expr(rhs):
+                        tainted.pop(name, None)
+
+        if not (REDIRECT_SINK_RE.search(line) or LOCATION_SINK_RE.search(line)):
+            continue
+        if is_safe_expr(line):
+            continue
+        direct = SOURCE_RE.search(line)
+        refs = refs_in_expr(line, tainted)
+        if not direct and not refs:
+            continue
+        if has_safe_redirect_context(lines, idx, refs):
+            continue
+        if direct:
+            path_desc = f"{direct.group(0).strip('(')} -> redirect sink"
+        else:
+            ref = refs[0]
+            seq = list(tainted.get(ref, {}).get('path', [ref]))
+            if len(seq) >= PATH_LIMIT:
+                seq = seq[-(PATH_LIMIT - 1):]
+            seq.append('redirect sink')
+            path_desc = ' -> '.join(seq)
+        issues.append((relpath(path), idx, f"{source_line(lines, idx)}  [{path_desc}]"))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:25]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 run_outbound_url_checks() {
   print_subheader "Request-derived outbound HTTP URLs"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -4169,7 +4421,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_skip 9; then
 print_header "9. CRYPTOGRAPHY & SECURITY"
-print_category "Detects: weak hashes, math/rand for security, InsecureSkipVerify, shell exec, dynamic SQL strings, request path traversal, outbound URL SSRF, unsafe archive extraction" \
+print_category "Detects: weak hashes, math/rand for security, InsecureSkipVerify, shell exec, dynamic SQL strings, request path traversal, open redirects, outbound URL SSRF, unsafe archive extraction" \
   "Security footguns are easy to miss and costly to fix"
 
 print_subheader "Weak hashes (md5/sha1) and RC4"
@@ -4208,6 +4460,7 @@ count=$([[ "$HAS_AST_GREP" -eq 1 && -f "$AST_JSON" ]] && ast_count "go.sql-dynam
 if [ "$count" -gt 0 ]; then print_finding "warning" "$count" "Potential dynamic SQL strings reaching Exec/Query"; fi
 
 run_path_traversal_checks
+run_open_redirect_checks
 run_outbound_url_checks
 run_archive_extraction_checks
 run_taint_analysis_checks

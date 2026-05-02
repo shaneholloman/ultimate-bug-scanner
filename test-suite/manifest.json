@@ -4513,6 +4513,65 @@
       }
     },
     {
+      "id": "golang-open-redirect-buggy",
+      "description": "Go request query/header/framework redirect targets should not reach redirect sinks without same-origin or host allow-list validation.",
+      "path": "test-suite/golang/security/open_redirect_buggy.go",
+      "language": "golang",
+      "tags": [
+        "golang",
+        "security",
+        "open-redirect",
+        "buggy"
+      ],
+      "args": [
+        "--only=golang",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,7,8,10,11,12,13,14,15,16,17,18,19,20,21,22"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Unvalidated redirect from request data"
+        ]
+      }
+    },
+    {
+      "id": "golang-open-redirect-clean",
+      "description": "Go redirect targets that pass through same-origin or explicit host allow-list helpers should stay clean.",
+      "path": "test-suite/golang/security/open_redirect_clean.go",
+      "language": "golang",
+      "tags": [
+        "golang",
+        "security",
+        "open-redirect",
+        "clean"
+      ],
+      "args": [
+        "--only=golang",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,7,8,10,11,12,13,14,15,16,17,18,19,20,21,22"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Unvalidated redirect from request data"
+        ]
+      }
+    },
+    {
       "id": "golang-request-path-traversal-buggy",
       "description": "Go request/query/path/header/upload filenames should not reach filesystem read/write/serve sinks without containment checks.",
       "path": "test-suite/golang/security/path_traversal_buggy.go",
