@@ -7,8 +7,8 @@
 | `buggy/resource_lifecycle.cpp` | FILE* leaks, missing `close()` |
 | `buggy/security_overflow.cpp` | `strcpy`, `system()` usage, leaks |
 | `buggy/math_precision.cpp` | Integer overflow + float equality |
-| `security/path_traversal_buggy.cpp` | Request/query/path filenames joined into file read/write/delete sinks without containment checks |
-| `security/path_traversal_clean.cpp` | Request paths passed through canonical root checks or reduced to a basename before file sinks |
+| `security/path_traversal_buggy.cpp` | Request/query/header/path filenames joined into file read/write/delete sinks without containment checks |
+| `security/path_traversal_clean.cpp` | Request/header paths passed through canonical root checks or reduced to a basename before file sinks |
 | `archive_extraction_buggy/zip_slip.cpp` | libarchive/libzip/minizip/miniz entry names joined to destination paths without containment checks |
 | `archive_extraction_clean/zip_slip_safe.cpp` | Archive entries canonicalized and checked against the extraction root before writes |
 | Clean files (`clean/*.cpp`) | RAII, smart pointers, bounded math |

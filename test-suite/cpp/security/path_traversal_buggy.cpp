@@ -37,3 +37,9 @@ void delete_cgi_selected_file(const fs::path& upload_root) {
     auto target = upload_root / selected;
     fs::remove(target);
 }
+
+void read_header_selected_file(const fs::path& document_root) {
+    const char* selected = getenv("HTTP_X_FILE_PATH");
+    auto target = document_root / selected;
+    std::ifstream input(target);
+}

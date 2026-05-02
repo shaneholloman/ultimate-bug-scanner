@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -29,4 +30,10 @@ void download_checked_file(const Request& req, const fs::path& document_root) {
 void save_checked_upload(const Request& req, const fs::path& upload_root) {
     auto filename = fs::path(req.get_param_value("filename")).filename();
     std::ofstream output(upload_root / filename, std::ios::binary);
+}
+
+void read_checked_header_file(const fs::path& document_root) {
+    const char* selected = getenv("HTTP_X_FILE_PATH");
+    auto target = safe_under_root(document_root, selected == nullptr ? "" : selected);
+    std::ifstream input(target);
 }
