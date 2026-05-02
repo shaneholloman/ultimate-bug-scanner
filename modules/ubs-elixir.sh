@@ -561,6 +561,8 @@ REQUEST_SOURCE_RE = re.compile(
     r'\bparams\s*(?:\[|\|>)|'
     r'\bMap\.(?:get|fetch!?|take)\s*\(\s*(?:params|conn\.params)\b|'
     r'\bget_in\s*\(\s*(?:params|conn\.params)\b|'
+    r'\b(?:Plug\.Conn\.)?get_req_header\s*\(\s*(?:conn|socket)\s*,|'
+    r'\b(?:conn|socket)\s*\|>\s*(?:Plug\.Conn\.)?get_req_header\s*\(|'
     r'\b[A-Za-z_][A-Za-z0-9_?!]*\.filename\b|'
     r'%Plug\.Upload\{[^}]*filename\s*:',
     re.IGNORECASE,

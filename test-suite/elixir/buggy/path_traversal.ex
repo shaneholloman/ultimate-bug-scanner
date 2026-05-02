@@ -21,4 +21,10 @@ defmodule BuggyRequestPathTraversal do
     target = Path.join("/srv/app/exports", conn.params["delete"])
     File.rm!(target)
   end
+
+  def read_header_file(conn) do
+    requested = Plug.Conn.get_req_header(conn, "x-file-path") |> List.first()
+    target = Path.join("/srv/app/files", requested)
+    File.read!(target)
+  end
 end

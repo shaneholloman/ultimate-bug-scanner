@@ -34,4 +34,10 @@ defmodule CleanRequestPathTraversal do
     target = safe_under_root("/srv/app/exports", requested)
     File.rm!(target)
   end
+
+  def read_header_file(conn) do
+    requested = Plug.Conn.get_req_header(conn, "x-file-path") |> List.first() || ""
+    target = safe_under_root("/srv/app/files", requested)
+    File.read!(target)
+  end
 end

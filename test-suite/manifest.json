@@ -7744,7 +7744,7 @@
     },
     {
       "id": "elixir-request-path-traversal-buggy",
-      "description": "Elixir conn params, request paths, and upload filenames should not flow into file read/write/serve/delete sinks without validation.",
+      "description": "Elixir conn params, request paths, headers, and upload filenames should not flow into file read/write/serve/delete sinks without validation.",
       "path": "test-suite/elixir/buggy/path_traversal.ex",
       "language": "elixir",
       "tags": [
@@ -7772,7 +7772,7 @@
     },
     {
       "id": "elixir-request-path-traversal-clean",
-      "description": "Elixir request-derived file paths using Path.basename or Path.expand containment should stay clean.",
+      "description": "Elixir request/header-derived file paths using Path.basename or Path.expand containment should stay clean.",
       "path": "test-suite/elixir/clean/path_traversal.ex",
       "language": "elixir",
       "tags": [
