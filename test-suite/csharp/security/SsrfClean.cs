@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Primitives;
 
 public sealed class SsrfClean
 {
@@ -37,6 +38,13 @@ public sealed class SsrfClean
     {
         var callback = SafeOutboundUrl(context.Request.Headers["X-Callback-Url"]!);
         return _httpClient.GetAsync(callback);
+    }
+
+    public Task<HttpResponseMessage> FetchTypedHeaderCallback(HttpContext context)
+    {
+        context.Request.Headers.TryGetValue("X-Callback-Url", out StringValues callback);
+        var target = SafeOutboundUrl(callback.ToString());
+        return _httpClient.GetAsync(target);
     }
 
     public Task<HttpResponseMessage> SendRouteEndpoint(HttpRequest request)

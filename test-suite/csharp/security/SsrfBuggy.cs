@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Primitives;
 
 public sealed class SsrfBuggy
 {
@@ -18,6 +19,12 @@ public sealed class SsrfBuggy
     {
         var callback = context.Request.Headers["X-Callback-Url"];
         return _httpClient.GetAsync(callback!);
+    }
+
+    public Task<HttpResponseMessage> FetchTypedHeaderCallback(HttpContext context)
+    {
+        context.Request.Headers.TryGetValue("X-Callback-Url", out StringValues callback);
+        return _httpClient.GetAsync(callback.ToString());
     }
 
     public Task<HttpResponseMessage> SendRouteEndpoint(HttpRequest request)

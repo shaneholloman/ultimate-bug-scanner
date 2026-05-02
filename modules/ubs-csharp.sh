@@ -1875,7 +1875,8 @@ ASSIGN_RE = re.compile(
     r'(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<rhs>.+)$'
 )
 OUT_PARAM_RE = re.compile(
-    rf'\b(?:HttpContext\.)?Request\.(?:Query|Form|RouteValues|Headers)\.TryGetValue\s*\([^)]*{URL_KEY}[^)]*,\s*out\s+(?:var\s+)?(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)',
+    rf'\b(?:HttpContext\.)?Request\.(?:Query|Form|RouteValues|Headers)\.TryGetValue\s*\([^)]*{URL_KEY}[^)]*,\s*out\s+'
+    r'(?:var\s+|[A-Za-z_][A-Za-z0-9_.<>, ?\[\]]*\s+)?(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)',
     re.IGNORECASE,
 )
 PATH_LIMIT = 4
@@ -2011,7 +2012,10 @@ def analyze(path: Path, issues):
             continue
         out_param = OUT_PARAM_RE.search(statement)
         if out_param:
-            tainted[out_param.group('lhs')] = {'path': [out_param.group(0).strip()]}
+            out_source = out_param.group(0).strip()
+            if not out_source.endswith(')'):
+                out_source += ')'
+            tainted[out_param.group('lhs')] = {'path': [out_source]}
         assign = ASSIGN_RE.match(statement)
         if assign:
             name = assign.group('lhs')
