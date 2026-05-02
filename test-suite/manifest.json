@@ -7693,6 +7693,67 @@
       }
     },
     {
+      "id": "csharp-open-redirect-buggy",
+      "description": "C# ASP.NET request query, header, cookie, and route redirect targets should not reach redirect sinks without local-url or host allow-list validation.",
+      "path": "test-suite/csharp/security/OpenRedirectBuggy.cs",
+      "language": "csharp",
+      "tags": [
+        "csharp",
+        "security",
+        "open-redirect",
+        "buggy"
+      ],
+      "args": [
+        "--only=csharp",
+        "--fail-on-warning",
+        "--no-dotnet",
+        "--skip=1,2,3,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Unvalidated redirect from request data"
+        ]
+      }
+    },
+    {
+      "id": "csharp-open-redirect-clean",
+      "description": "C# redirects guarded by LocalRedirect, Url.IsLocalUrl, safe helper validation, or URI host allow-lists should stay clean.",
+      "path": "test-suite/csharp/security/OpenRedirectClean.cs",
+      "language": "csharp",
+      "tags": [
+        "csharp",
+        "security",
+        "open-redirect",
+        "clean"
+      ],
+      "args": [
+        "--only=csharp",
+        "--fail-on-warning",
+        "--no-dotnet",
+        "--skip=1,2,3,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Unvalidated redirect from request data"
+        ]
+      }
+    },
+    {
       "id": "csharp-ssrf-buggy",
       "description": "C# ASP.NET request/header values should not reach outbound HTTP clients without scheme and host allow-list validation.",
       "path": "test-suite/csharp/security/SsrfBuggy.cs",

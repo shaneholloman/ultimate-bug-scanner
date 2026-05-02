@@ -3,6 +3,7 @@
 - `buggy/` contains intentionally unsafe patterns for `ubs-csharp.sh`.
 - `clean/` provides counterexamples that should stay free of critical/warning findings.
 - `security/ArchiveExtractionBuggy.cs` and `security/ArchiveExtractionClean.cs` cover zip/tar archive entry path containment.
+- `security/OpenRedirectBuggy.cs` and `security/OpenRedirectClean.cs` cover ASP.NET request/header/cookie/route values flowing into redirect and `Location` header sinks.
 - `security/RequestPathTraversalBuggy.cs` and `security/RequestPathTraversalClean.cs` cover ASP.NET request/header/upload values flowing into file read/write/serve/delete sinks.
 - `security/SsrfBuggy.cs` and `security/SsrfClean.cs` cover ASP.NET request/header values flowing into outbound HTTP clients.
 - `tests/test_helper_scanners.py` covers the helper-backed type narrowing, resource lifecycle, and async task-handle analyzers directly.
