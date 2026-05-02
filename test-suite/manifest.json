@@ -5049,6 +5049,65 @@
       }
     },
     {
+      "id": "cpp-ssrf-buggy",
+      "description": "C/C++ request/query/header URL values should not reach libcurl URL sinks without scheme and host allow-list validation.",
+      "path": "test-suite/cpp/security/ssrf_buggy.cpp",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "security",
+        "ssrf",
+        "buggy"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-derived URL reaches outbound HTTP client"
+        ]
+      }
+    },
+    {
+      "id": "cpp-ssrf-clean",
+      "description": "C/C++ request-derived outbound URLs validated through a safe helper and host allow-list should stay clean.",
+      "path": "test-suite/cpp/security/ssrf_clean.cpp",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "security",
+        "ssrf",
+        "clean"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-derived URL reaches outbound HTTP client"
+        ]
+      }
+    },
+    {
       "id": "cpp-archive-extraction-buggy",
       "description": "C++ archive extraction fixture with unvalidated entry-name path joins.",
       "path": "test-suite/cpp/archive_extraction_buggy",
