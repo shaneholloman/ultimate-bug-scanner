@@ -5108,6 +5108,65 @@
       }
     },
     {
+      "id": "cpp-open-redirect-buggy",
+      "description": "C/C++ request/query/header redirect targets should not reach redirects or Location headers without local-url or host allow-list validation.",
+      "path": "test-suite/cpp/security/open_redirect_buggy.cpp",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "security",
+        "open-redirect",
+        "buggy"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Unvalidated redirect from request data"
+        ]
+      }
+    },
+    {
+      "id": "cpp-open-redirect-clean",
+      "description": "C/C++ request-derived redirect targets validated through safe helpers, local paths, or redirect host allow-lists should stay clean.",
+      "path": "test-suite/cpp/security/open_redirect_clean.cpp",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "security",
+        "open-redirect",
+        "clean"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Unvalidated redirect from request data"
+        ]
+      }
+    },
+    {
       "id": "cpp-ssrf-buggy",
       "description": "C/C++ request/query/header URL values should not reach libcurl URL sinks without scheme and host allow-list validation.",
       "path": "test-suite/cpp/security/ssrf_buggy.cpp",
