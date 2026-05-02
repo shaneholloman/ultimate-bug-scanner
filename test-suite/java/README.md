@@ -14,6 +14,8 @@
 | `security/OpenRedirectClean.java` | redirect targets routed through same-origin/allow-list helpers before servlet/Spring redirect sinks |
 | `security/HeaderInjectionBuggy.java` | request parameters, headers, and annotated params reaching servlet/Spring response headers without CR/LF safety |
 | `security/HeaderInjectionClean.java` | CR/LF stripping, URL-encoded filename fragments, and reject-on-newline guards before response headers |
+| `security/HeaderInjectionMultilineBuggy.java` | multiline-only servlet response header sink fed by request data |
+| `security/HeaderInjectionMultilineClean.java` | multiline-only servlet response header sink after CR/LF stripping |
 | `security/ArchiveExtractionBuggy.java` | Archive extraction security |
 | `security/ArchiveExtractionClean.java` | normalize + startsWith destination checks |
 | Clean files | try-with-resources, prepared statements, ProcessBuilder argv |

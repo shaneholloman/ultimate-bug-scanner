@@ -1614,7 +1614,7 @@ def analyze(path, issues):
     except OSError:
         return
     if not ((SOURCE_RE.search(text) or ANNOTATED_PARAM_RE.search(text)) and (
-        HEADER_CALL_RE.search(text) or HEADER_CONST_CALL_RE.search(text) or
+        HEADER_START_RE.search(text) or HEADER_CALL_RE.search(text) or HEADER_CONST_CALL_RE.search(text) or
         HEADER_INDEX_ASSIGN_RE.search(text) or HEADERS_OF_RE.search(text)
     )):
         return
