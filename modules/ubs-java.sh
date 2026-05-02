@@ -1136,7 +1136,7 @@ SOURCE_RE = re.compile(
     r'getPathInfo|getHeader|getServerName|getServerPort|getRemoteHost|getRemoteAddr|'
     r'getLocalName|getLocalAddr|queryParam|queryParams|pathParam|pathParams|formParam|formParams)\s*\('
     r'|\b(?:call|routingCall|context|ctx)\.(?:parameters|pathParameters|queryParameters|headers)\s*(?:\[|\.get\b)'
-    r'|\b(?:call|routingCall)\.request\.(?:path|uri|local|host|port|origin|queryParameters)\s*(?:\(|\[|\b)'
+    r'|\b(?:call|routingCall)\.request\.(?:path|uri|local|host|port|origin|queryParameters|headers|header)\s*(?:\(|\[|\b|\.get\b)'
     r'|\b(?:parameters|params|queryParameters|pathParameters|headers)\s*\['
     r'|\b(?:request|req)\.(?:path|uri|url|target)\b',
     re.IGNORECASE,
@@ -1171,6 +1171,9 @@ SINK_RE = re.compile(
     r'\bHttpRequest\.newBuilder\s*\('
     r'|\b[A-Za-z_][A-Za-z0-9_]*\.(?:send|newCall|getForObject|getForEntity|postForObject|'
     r'postForEntity|exchange|execute)\s*\('
+    r'|\b(?:client|httpClient|ktorClient|webClient|restClient|okHttpClient|'
+    r'[A-Za-z_][A-Za-z0-9_]*(?:Client|Http|Rest|Web|Ktor)[A-Za-z0-9_]*)\.'
+    r'(?:get|post|put|patch|delete|head|request|prepareGet|preparePost)\s*\('
     r'|\b(?:Jsoup\.connect|Unirest\.(?:get|post|put|delete|patch|head)|Request\.(?:Get|Post|Put|Delete))\s*\('
     r'|\.\s*(?:openConnection|openStream|uri|url)\s*\(',
 )
