@@ -18,6 +18,13 @@ public final class HeaderInjectionBuggy {
         response.addHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
     }
 
+    public void multilineServletHeader(HttpServletRequest request, HttpServletResponse response) {
+        String segment = request.getParameter("segment");
+        response.setHeader(
+                "X-Segment",
+                segment);
+    }
+
     public ResponseEntity<Void> springHeader(HttpServletRequest request) {
         String trace = request.getHeader("X-Trace-Id");
         return ResponseEntity.ok().header("X-Upstream-Trace", trace).build();

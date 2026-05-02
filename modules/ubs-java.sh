@@ -1444,6 +1444,11 @@ HEADER_CALL_RE = re.compile(
     r'(?P<quote>["\'])(?P<name>[^"\']+)(?P=quote)\s*,',
     re.IGNORECASE,
 )
+HEADER_START_RE = re.compile(
+    r'\.\s*(?:setHeader|addHeader|header|add|set|append)\s*\('
+    r'|\bheadersOf\s*\(',
+    re.IGNORECASE,
+)
 HEADER_CONST_CALL_RE = re.compile(
     r'\.\s*(?:setHeader|addHeader|header|add|set|append)\s*\(\s*'
     r'(?:HttpHeaders\.)?(?P<name>CONTENT_DISPOSITION|CONTENT_TYPE|CACHE_CONTROL|ETAG|SET_COOKIE)\s*,',
@@ -1591,6 +1596,9 @@ def header_sink(statement):
             return match
     return None
 
+def starts_header_sink(line):
+    return bool(HEADER_START_RE.search(line) or HEADER_INDEX_ASSIGN_RE.search(line))
+
 def has_crlf_reject_context(lines, line_no, refs):
     if not refs:
         return False
@@ -1629,7 +1637,7 @@ def analyze(path, issues):
                 tainted[name] = taint
             elif name in tainted and is_safe_expr(rhs):
                 tainted.pop(name, None)
-        if not header_sink(current_line):
+        if not starts_header_sink(current_line):
             continue
         if not header_sink(statement):
             continue

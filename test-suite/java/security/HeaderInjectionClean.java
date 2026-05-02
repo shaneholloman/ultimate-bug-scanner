@@ -28,6 +28,13 @@ public final class HeaderInjectionClean {
         response.addHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
     }
 
+    public void multilineServletHeader(HttpServletRequest request, HttpServletResponse response) {
+        String segment = safeHeaderValue(request.getParameter("segment"));
+        response.setHeader(
+                "X-Segment",
+                segment);
+    }
+
     public ResponseEntity<Void> springHeader(HttpServletRequest request) {
         String trace = request.getHeader("X-Trace-Id");
         if (trace.indexOf('\r') >= 0 || trace.indexOf('\n') >= 0) {
