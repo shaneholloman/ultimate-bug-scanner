@@ -8,6 +8,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 final class PathTraversalBuggy {
+    @interface RequestHeader {
+        String value();
+    }
+
+    @interface HeaderParam {
+        String value();
+    }
+
     interface Request {
         String getParameter(String name);
         String getPathInfo();
@@ -41,4 +49,15 @@ final class PathTraversalBuggy {
         Files.deleteIfExists(target);
     }
 
+    byte[] downloadHeaderSelectedFile(@RequestHeader("X-File-Path") String requested, Path documentRoot)
+            throws IOException {
+        Path target = documentRoot.resolve(requested);
+        return Files.readAllBytes(target);
+    }
+
+    String renderHeaderTemplate(@HeaderParam("X-Template") String template, Path templateRoot)
+            throws IOException {
+        Path target = templateRoot.resolve(template);
+        return Files.readString(target);
+    }
 }

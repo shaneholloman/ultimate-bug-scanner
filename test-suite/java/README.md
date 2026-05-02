@@ -6,8 +6,8 @@
 | `buggy/BuggyConcurrency.java` | ExecutorService leaks, missing shutdown |
 | `buggy/ResourceLifecycle.java` | Streams not closed |
 | `buggy/BuggySecurity.java` | SQL/command injection |
-| `security/path_traversal_buggy.java` | request parameters and upload filenames reaching file read/write/delete sinks without containment checks |
-| `security/path_traversal_clean.java` | canonical root containment and basename extraction before file sinks |
+| `security/path_traversal_buggy.java` | request parameters, annotated headers, and upload filenames reaching file read/write/delete sinks without containment checks |
+| `security/path_traversal_clean.java` | canonical root containment and basename extraction before file sinks, including annotated header paths |
 | `security/SsrfBuggy.java` | request parameters, headers, and servlet host accessors reaching outbound HTTP clients |
 | `security/SsrfClean.java` | safe outbound URL helpers with scheme and host allow-list validation |
 | `security/ArchiveExtractionBuggy.java` | Archive extraction security |

@@ -872,6 +872,13 @@ SOURCE_RE = re.compile(
     r'|\b[A-Za-z_][A-Za-z0-9_]*\.(?:submittedFileName|originalFilename|originalFileName|fileName|filename)\b',
     re.IGNORECASE,
 )
+ANNOTATED_PARAM_RE = re.compile(
+    r'@(?:RequestParam|PathVariable|RequestHeader|CookieValue|RequestBody|QueryParam|PathParam|HeaderParam|'
+    r'FormParam|MatrixParam)\b(?:\s*\([^)]*\))?(?:\s+@[A-Za-z_][A-Za-z0-9_.]*(?:\([^)]*\))?)*\s+'
+    r'(?:final\s+)?(?:String|Path|File|Object|MultipartFile|Part|UploadedFile|FileUpload|'
+    r'[A-Za-z_][A-Za-z0-9_<>, ?]*)\s+([A-Za-z_][A-Za-z0-9_]*)',
+    re.IGNORECASE,
+)
 SAFE_EXPR_RE = re.compile(
     r'\b(?:safe(?:Path|Join|File|Filename|UploadPath|DownloadPath|UnderRoot)|'
     r'secure(?:Path|Join|File|Filename|UploadPath|DownloadPath)|'
@@ -989,6 +996,13 @@ def relpath(path):
     except ValueError:
         return str(path)
 
+def annotated_sources(text):
+    sources = {}
+    for match in ANNOTATED_PARAM_RE.finditer(text):
+        name = match.group(1)
+        sources[name] = {'path': [f'@request {name}']}
+    return sources
+
 def is_safe_expr(expr):
     return bool(SAFE_EXPR_RE.search(expr))
 
@@ -1029,10 +1043,10 @@ def analyze(path, issues):
         text = path.read_text(encoding='utf-8', errors='ignore')
     except OSError:
         return
-    if not (SOURCE_RE.search(text) and SINK_RE.search(text)):
+    if not ((SOURCE_RE.search(text) or ANNOTATED_PARAM_RE.search(text)) and SINK_RE.search(text)):
         return
     lines = text.splitlines()
-    tainted = {}
+    tainted = annotated_sources(text)
     seen = set()
     for idx, _ in enumerate(lines, start=1):
         if has_ignore(lines, idx):

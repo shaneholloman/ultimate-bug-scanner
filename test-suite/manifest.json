@@ -6506,7 +6506,7 @@
     },
     {
       "id": "java-request-path-traversal-buggy",
-      "description": "Java request parameters and upload filenames should not reach file read/write/delete sinks without containment checks.",
+      "description": "Java request parameters, annotated headers, and upload filenames should not reach file read/write/delete sinks without containment checks.",
       "path": "test-suite/java/security/path_traversal_buggy.java",
       "language": "java",
       "tags": [
@@ -6534,7 +6534,7 @@
     },
     {
       "id": "java-request-path-traversal-clean",
-      "description": "Java request-derived paths with canonical containment or basename sanitization should stay clean.",
+      "description": "Java request/header-derived paths with canonical containment or basename sanitization should stay clean.",
       "path": "test-suite/java/security/path_traversal_clean.java",
       "language": "java",
       "tags": [

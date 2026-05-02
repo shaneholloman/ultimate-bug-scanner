@@ -7,6 +7,14 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 
 final class PathTraversalClean {
+    @interface RequestHeader {
+        String value();
+    }
+
+    @interface HeaderParam {
+        String value();
+    }
+
     interface Request {
         String getParameter(String name);
         Part getPart(String name);
@@ -34,5 +42,17 @@ final class PathTraversalClean {
         Part avatar = request.getPart("avatar");
         Path fileName = Paths.get(avatar.getSubmittedFileName()).getFileName();
         Files.write(uploadRoot.resolve(fileName), "avatar".getBytes(StandardCharsets.UTF_8));
+    }
+
+    byte[] downloadCheckedHeaderFile(@RequestHeader("X-File-Path") String requested, Path documentRoot)
+            throws IOException {
+        Path target = safeUnderRoot(documentRoot, requested);
+        return Files.readAllBytes(target);
+    }
+
+    String renderCheckedHeaderTemplate(@HeaderParam("X-Template") String template, Path templateRoot)
+            throws IOException {
+        Path target = safeUnderRoot(templateRoot, template);
+        return Files.readString(target);
     }
 }
