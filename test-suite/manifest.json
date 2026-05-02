@@ -6140,6 +6140,66 @@
       }
     },
     {
+      "id": "rust-header-injection-buggy",
+      "description": "Rust request and header values should not reach non-Location response headers without CR/LF validation or header-safe encoding.",
+      "path": "test-suite/rust/buggy/header_injection.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "response-header-injection",
+        "buggy"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-controlled value reaches HTTP response header"
+        ]
+      }
+    },
+    {
+      "id": "rust-header-injection-clean",
+      "description": "Rust response headers fed by stripped, encoded, HeaderValue-validated, or reject-on-newline request values should stay clean.",
+      "path": "test-suite/rust/clean/header_injection.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "response-header-injection",
+        "clean"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-controlled value reaches HTTP response header"
+        ]
+      }
+    },
+    {
       "id": "rust-ssrf-buggy",
       "description": "Rust request, header, env, and CLI URL values should not reach outbound HTTP clients or request builders without scheme and host allow-list validation.",
       "path": "test-suite/rust/buggy/ssrf.rs",
