@@ -10,7 +10,10 @@ class ApplicationCall(
     fun respondFile(file: File) {}
 }
 
-class Request(private val rawPath: String) {
+class Request(
+    private val rawPath: String,
+    val headers: Map<String, String> = emptyMap()
+) {
     fun path(): String = rawPath
 }
 
@@ -50,5 +53,11 @@ class CleanKotlinRequestPaths {
         val requested = call.parameters["delete"] ?: ""
         val target = safeUnderRoot(exportRoot, requested)
         Files.deleteIfExists(target)
+    }
+
+    fun readHeaderFile(call: ApplicationCall, root: Path): String {
+        val requested = call.request.headers["X-File-Path"] ?: "index.html"
+        val target = safeUnderRoot(root, requested)
+        return Files.readString(target)
     }
 }

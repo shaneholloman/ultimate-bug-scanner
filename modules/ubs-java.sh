@@ -864,6 +864,7 @@ SOURCE_RE = re.compile(
     r'getRequestPath|getPath|getHeader|queryParam|queryParams|pathParam|pathParams|formParam|formParams|'
     r'uploadedFile|fileUpload)\s*\('
     r'|\b(?:call|routingCall|context|ctx)\.(?:parameters|pathParameters|queryParameters)\s*(?:\[|\.get\b)'
+    r'|\b(?:call|routingCall|context|ctx)\.request\.(?:headers|header)\s*(?:\(|\[|\.get\b|\b)'
     r'|\b(?:call|routingCall)\.request\.(?:path|uri|local|queryParameters)\s*(?:\(|\[|\b)'
     r'|\b(?:parameters|params|queryParameters|pathParameters)\s*\['
     r'|\b(?:request|req)\.(?:path|uri|url|target)\b'

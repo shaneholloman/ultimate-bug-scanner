@@ -6069,7 +6069,7 @@
     },
     {
       "id": "kotlin-request-path-traversal-buggy",
-      "description": "Kotlin Ktor-style params, request paths, and upload filenames should not reach file read/write/serve/delete sinks without validation.",
+      "description": "Kotlin Ktor-style params, request paths, headers, and upload filenames should not reach file read/write/serve/delete sinks without validation.",
       "path": "test-suite/kotlin/path_traversal_buggy",
       "language": "java",
       "tags": [
@@ -6097,7 +6097,7 @@
     },
     {
       "id": "kotlin-request-path-traversal-clean",
-      "description": "Kotlin request-derived paths using safe root containment or file-name reduction should stay clean.",
+      "description": "Kotlin request/header-derived paths using safe root containment or file-name reduction should stay clean.",
       "path": "test-suite/kotlin/path_traversal_clean",
       "language": "java",
       "tags": [
