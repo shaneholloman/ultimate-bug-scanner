@@ -9,9 +9,10 @@
 | `buggy/security_injection.rs` | Command injection + exposed secrets |
 | `buggy/archive_extraction.rs` | Archive member paths joined into extraction destinations |
 | `buggy/temp_file_race.rs` | Predictable temp-file writes in shared temp directories |
+| `buggy/open_redirect.rs` | Request/header/host redirect targets sent to redirects or Location headers |
 | `buggy/ssrf.rs` | Request/header/env/CLI URL values sent through outbound HTTP clients |
 | `buggy/math_precision.rs` | Float equality for money |
-| Clean files (`clean/*.rs`) | `Result` handling, JoinHandle waiting, integer cents, safe temp-file creation, safe outbound URL validation |
+| Clean files (`clean/*.rs`) | `Result` handling, JoinHandle waiting, integer cents, safe temp-file creation, safe redirect validation, safe outbound URL validation |
 
 ```bash
 ubs --only=rust --fail-on-warning test-suite/rust/buggy

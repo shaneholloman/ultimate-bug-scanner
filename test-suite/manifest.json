@@ -6021,6 +6021,66 @@
       }
     },
     {
+      "id": "rust-open-redirect-buggy",
+      "description": "Rust request, header, and host redirect targets should not reach redirect responses or Location headers without local-path or redirect host allow-list validation.",
+      "path": "test-suite/rust/buggy/open_redirect.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "open-redirect",
+        "buggy"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Unvalidated redirect from request data"
+        ]
+      }
+    },
+    {
+      "id": "rust-open-redirect-clean",
+      "description": "Rust redirects validated through named safe helpers, local path guards, or redirect host allow-lists should stay clean.",
+      "path": "test-suite/rust/clean/open_redirect.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "open-redirect",
+        "clean"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Unvalidated redirect from request data"
+        ]
+      }
+    },
+    {
       "id": "rust-ssrf-buggy",
       "description": "Rust request, header, env, and CLI URL values should not reach outbound HTTP clients or request builders without scheme and host allow-list validation.",
       "path": "test-suite/rust/buggy/ssrf.rs",
