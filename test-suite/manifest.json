@@ -7278,7 +7278,7 @@
     },
     {
       "id": "csharp-request-path-traversal-buggy",
-      "description": "C# ASP.NET request params, request paths, and upload filenames should not reach file read/write/serve/delete sinks without validation.",
+      "description": "C# ASP.NET request params, headers, request paths, and upload filenames should not reach file read/write/serve/delete sinks without validation.",
       "path": "test-suite/csharp/security/RequestPathTraversalBuggy.cs",
       "language": "csharp",
       "tags": [
@@ -7307,7 +7307,7 @@
     },
     {
       "id": "csharp-request-path-traversal-clean",
-      "description": "C# Path.GetFileName upload names and Path.GetFullPath containment checks should suppress request path traversal warnings.",
+      "description": "C# Path.GetFileName upload names and Path.GetFullPath containment checks should suppress request/header path traversal warnings.",
       "path": "test-suite/csharp/security/RequestPathTraversalClean.cs",
       "language": "csharp",
       "tags": [

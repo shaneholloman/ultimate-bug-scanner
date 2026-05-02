@@ -45,4 +45,11 @@ public sealed class RequestPathTraversalClean : ControllerBase
         var target = SafeUnderRoot(Root, request.Form["delete"]!);
         System.IO.File.Delete(target);
     }
+
+    public string ReadHeaderSelection(HttpContext context)
+    {
+        context.Request.Headers.TryGetValue("X-File-Path", out var requested);
+        var target = SafeUnderRoot(Root, requested!);
+        return System.IO.File.ReadAllText(target);
+    }
 }

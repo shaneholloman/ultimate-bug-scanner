@@ -32,4 +32,11 @@ public sealed class RequestPathTraversalBuggy : ControllerBase
         var target = Path.Combine(Root, request.Form["delete"]);
         System.IO.File.Delete(target);
     }
+
+    public string ReadHeaderSelection(HttpContext context)
+    {
+        context.Request.Headers.TryGetValue("X-File-Path", out var requested);
+        var target = Path.Combine(Root, requested!);
+        return System.IO.File.ReadAllText(target);
+    }
 }

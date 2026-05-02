@@ -1598,6 +1598,11 @@ SOURCE_RE = re.compile(
     r'|\b[A-Za-z_][A-Za-z0-9_]*\.FileName\b',
     re.IGNORECASE,
 )
+TRYGET_SOURCE_RE = re.compile(
+    r'\b(?:HttpContext\.)?Request\.(?:Query|Form|RouteValues|Headers|Cookies)\.TryGetValue\s*\('
+    r'[^)]*,\s*out\s+(?:var\s+|[A-Za-z_][A-Za-z0-9_<>, ?]*\s+)?(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)',
+    re.IGNORECASE,
+)
 SAFE_EXPR_RE = re.compile(
     r'\bPath\.GetFileName(?:WithoutExtension)?\s*\('
     r'|\b(?:Safe(?:Path|File|Filename|UploadPath|DownloadPath|UnderRoot)|'
@@ -1725,6 +1730,13 @@ def taint_from_expr(expr, tainted):
     path.append(ref)
     return {'path': path}
 
+def taint_from_tryget(statement):
+    match = TRYGET_SOURCE_RE.search(statement)
+    if not match:
+        return None
+    lhs = match.group('lhs')
+    return lhs, {'path': [match.group(0).split(',')[0].strip() + ')']}
+
 def has_containment_context(lines, line_no, refs):
     if not refs:
         return False
@@ -1741,7 +1753,7 @@ def analyze(path: Path, issues):
         text = path.read_text(encoding='utf-8', errors='ignore')
     except OSError:
         return
-    if not (SOURCE_RE.search(text) and SINK_RE.search(text)):
+    if not ((SOURCE_RE.search(text) or TRYGET_SOURCE_RE.search(text)) and SINK_RE.search(text)):
         return
     lines = text.splitlines()
     tainted = {}
@@ -1752,6 +1764,9 @@ def analyze(path: Path, issues):
         statement = logical_statement(lines, idx).strip()
         if not statement:
             continue
+        tryget = taint_from_tryget(statement)
+        if tryget:
+            tainted[tryget[0]] = tryget[1]
         assign = ASSIGN_RE.match(statement)
         if assign:
             name = assign.group('lhs')
