@@ -1982,6 +1982,286 @@ collect_samples_archive_entry_path() {
   printf ']'
 }
 
+rust_request_url_matches() {
+  [[ "$have_python3" -eq 1 ]] || return 1
+  python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+
+skip_dirs = {".git", "target", ".cargo", "node_modules"}
+path_limit = 4
+
+source_re = re.compile(
+    r'\b(?:std::)?env::(?:var|var_os)\s*\(\s*"[^"]*(?:URL|URI|HOST|CALLBACK|WEBHOOK|REDIRECT|TARGET|ENDPOINT|REMOTE)[^"]*"\s*\)'
+    r'|\b(?:std::)?env::args(?:_os)?\s*\('
+    r'|\b(?:req|request|http_request)\s*\.\s*(?:query_string|uri|headers|header|host)\s*\('
+    r'|\b(?:headers|header_map)\s*\.\s*get\s*\(\s*"[^"]*(?:url|uri|host|callback|webhook|redirect|target|endpoint|origin|referer|referrer|location)[^"]*"\s*\)'
+    r'|\b(?:params|query|form|body|json|payload|headers)\s*\.\s*get\s*\(\s*"[^"]*(?:url|uri|host|callback|webhook|redirect|target|endpoint|origin|remote)[^"]*"\s*\)'
+    r'|\b(?:params|query|form|body|json|payload)\s*\.\s*(?:url|uri|host|callback_url|webhook_url|redirect_url|target_url|endpoint|remote_url)\b',
+    re.IGNORECASE,
+)
+sink_re = re.compile(
+    r'\breqwest(?:::blocking)?::(?:get|Client::new\(\)\.(?:get|post|put|patch|delete|head|request))\s*\('
+    r'|\bureq::(?:get|post|put|delete|patch|head|request)\s*\('
+    r'|\bsurf::(?:get|post|put|delete|patch|head|request)\s*\('
+    r'|\bisahc::(?:get|post|put|delete|patch|head|request)\s*\('
+    r'|\b(?:hyper|http)::Request::builder\s*\(\s*\)\s*\.\s*uri\s*\('
+    r'|\b(?:client|http_client|reqwest_client|rest_client|web_client|agent|request_builder|builder|api_client|webhook_client)\s*\.\s*(?:get|post|put|patch|delete|head|request|uri)\s*\(',
+    re.IGNORECASE,
+)
+assign_re = re.compile(
+    r'^\s*(?:let\s+(?:mut\s+)?|const\s+|static\s+)?'
+    r'(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=;]+)?=\s*(?P<rhs>.+)$'
+)
+safe_expr_re = re.compile(
+    r'\b(?:safe(?:URL|Url|Uri|URI|OutboundURL|OutboundUrl|OutboundURI|WebhookURL|CallbackURL|HttpURL)|'
+    r'safe_(?:url|uri|outbound_url|webhook_url|callback_url|http_url)|'
+    r'validated?(?:URL|Url|Uri|URI|Host|OutboundURL|WebhookURL|CallbackURL)|'
+    r'validate_(?:url|uri|host|outbound_url|webhook_url|callback_url)|'
+    r'allowed?(?:URL|Url|Uri|URI|Host|OutboundURL)|'
+    r'allowlisted?(?:URL|Url|Uri|URI|Host|OutboundURL)|'
+    r'is_allowed_host|is_safe_url|allowed_hosts|host_allowlist|trusted_hosts)\b',
+    re.IGNORECASE,
+)
+parse_re = re.compile(r'\b(?:url::)?Url::parse\s*\(|\.parse\s*::\s*<\s*(?:hyper::)?Uri\s*>\s*\(')
+host_check_re = re.compile(
+    r'\b(?:host_str|domain|scheme|allowed_hosts|host_allowlist|trusted_hosts|is_allowed_host|is_safe_url)\b'
+)
+reject_re = re.compile(r'\b(?:return\s+Err|Err\s*\(|bail!\s*\(|ensure!\s*\(|anyhow!\s*\(|panic!\s*\()\b')
+
+
+def rust_files(path: Path):
+    if path.is_file():
+        if path.suffix == ".rs":
+            yield path
+        return
+    for child in path.rglob("*.rs"):
+        if skip_dirs.intersection(child.parts):
+            continue
+        yield child
+
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ""
+    raw_hashes = None
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        nxt = line[i + 1] if i + 1 < len(line) else ""
+        if raw_hashes is not None:
+            out.append(ch)
+            if ch == '"' and line.startswith("#" * raw_hashes, i + 1):
+                out.extend("#" * raw_hashes)
+                i += raw_hashes + 1
+                raw_hashes = None
+                continue
+            i += 1
+            continue
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch == "r":
+            j = i + 1
+            while j < len(line) and line[j] == "#":
+                j += 1
+            if j < len(line) and line[j] == '"':
+                raw_hashes = j - i - 1
+                out.extend(line[i : j + 1])
+                i = j + 1
+                continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            break
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    paren = statement.count("(") - statement.count(")")
+    has_end = ";" in statement or "{" in statement or "}" in statement
+    lookahead = idx + 1
+    while (paren > 0 or not has_end) and lookahead < len(lines) and lookahead < idx + 10:
+        nxt = strip_line_comments(lines[lookahead]).strip()
+        statement += " " + nxt
+        paren += nxt.count("(") - nxt.count(")")
+        has_end = has_end or ";" in nxt or "{" in nxt or "}" in nxt
+        lookahead += 1
+    return statement
+
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and "ubs:ignore" in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and "ubs:ignore" in lines[idx - 1]
+    )
+
+
+def is_safe_expr(expr: str) -> bool:
+    return bool(safe_expr_re.search(expr))
+
+
+def refs_in_expr(expr: str, tainted):
+    return [name for name in tainted if re.search(rf'\b{re.escape(name)}\b', expr)]
+
+
+def taint_from_expr(expr: str, tainted):
+    if is_safe_expr(expr):
+        return None
+    direct = source_re.search(expr)
+    if direct:
+        return {"path": [direct.group(0).strip()]}
+    refs = refs_in_expr(expr, tainted)
+    if not refs:
+        return None
+    ref = refs[0]
+    path = list(tainted.get(ref, {}).get("path", [ref]))
+    if len(path) >= path_limit:
+        path = path[-(path_limit - 1):]
+    path.append(ref)
+    return {"path": path}
+
+
+def has_allowlist_context(lines, line_no, refs):
+    if not refs:
+        return False
+    start = max(0, line_no - 24)
+    context = "\n".join(strip_line_comments(line) for line in lines[start:line_no + 1])
+    if not any(re.search(rf'\b{re.escape(ref)}\b', context) for ref in refs):
+        return False
+    for line in context.splitlines():
+        if safe_expr_re.search(line) and any(re.search(rf'\b{re.escape(ref)}\b', line) for ref in refs):
+            return True
+    return bool(parse_re.search(context) and host_check_re.search(context) and reject_re.search(context))
+
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip().replace("\t", " ")
+    return ""
+
+
+def analyze(path: Path, issues):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    if not (source_re.search(text) and sink_re.search(text)):
+        return
+    lines = text.splitlines()
+    tainted = {}
+    seen = set()
+    for line_no, _ in enumerate(lines, start=1):
+        if has_ignore(lines, line_no):
+            continue
+        statement = logical_statement(lines, line_no).strip()
+        if not statement:
+            continue
+        assign = assign_re.match(statement)
+        if assign:
+            name = assign.group("lhs")
+            rhs = assign.group("rhs")
+            taint = taint_from_expr(rhs, tainted)
+            if taint:
+                tainted[name] = taint
+            elif name in tainted and is_safe_expr(rhs):
+                tainted.pop(name, None)
+        if not sink_re.search(statement):
+            continue
+        if is_safe_expr(statement):
+            continue
+        direct = source_re.search(statement)
+        refs = refs_in_expr(statement, tainted)
+        if not direct and not refs:
+            continue
+        if has_allowlist_context(lines, line_no, refs):
+            continue
+        key = (path, line_no)
+        if key in seen:
+            continue
+        seen.add(key)
+        if direct:
+            path_desc = f"{direct.group(0).strip()} -> outbound HTTP"
+        else:
+            ref = refs[0]
+            seq = list(tainted.get(ref, {}).get("path", [ref]))
+            if len(seq) >= path_limit:
+                seq = seq[-(path_limit - 1):]
+            seq.append("outbound HTTP")
+            path_desc = " -> ".join(seq)
+        issues.append((path, line_no, f"{source_line(lines, line_no)}  [{path_desc}]"))
+
+
+issues = []
+for rust_file in rust_files(root):
+    analyze(rust_file, issues)
+
+for path, line_no, code in issues:
+    print(f"{path}:{line_no}:{code}")
+PY
+}
+
+count_request_url_matches() {
+  if [[ "$have_python3" -eq 1 ]]; then
+    rust_request_url_matches | count_lines || true
+  else
+    return 1
+  fi
+}
+
+show_request_url_examples() {
+  local limit="${1:-$DETAIL_LIMIT}"
+  local printed=0
+  [[ "$have_python3" -eq 1 ]] || return 1
+  while IFS= read -r rawline; do
+    [[ -z "$rawline" ]] && continue
+    parse_grep_line "$rawline" || continue
+    print_code_sample "$PARSED_FILE" "$PARSED_LINE" "$PARSED_CODE"
+    printed=$((printed + 1))
+    [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
+  done < <(rust_request_url_matches | head -n "$limit")
+  [[ "$printed" -gt 0 ]]
+}
+
+collect_samples_request_url() {
+  local limit="${1:-$DETAIL_LIMIT}"
+  if [[ "$have_python3" -ne 1 ]]; then
+    printf '[]'
+    return
+  fi
+  mapfile -t lines < <(rust_request_url_matches | head -n "$limit")
+  printf '['
+  local i=0
+  local line
+  for line in "${lines[@]}"; do
+    [[ $i -gt 0 ]] && printf ','
+    printf '"%s"' "$(printf '%s' "$line" | json_escape)"
+    i=$((i + 1))
+  done
+  printf ']'
+}
+
 rust_command_executable_matches() {
   [[ "$have_python3" -eq 1 ]] || return 1
   python3 - "$PROJECT_DIR" <<'PY'
@@ -4188,7 +4468,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if category_enabled 8; then
 print_header "8. SECURITY FINDINGS"
-print_category "Detects: TLS verification disabled, weak hash algos, shell command injection, HTTP URLs, secrets" \
+print_category "Detects: TLS verification disabled, weak hash algos, shell command injection, request-derived outbound URLs, HTTP URLs, secrets" \
   "Security misconfigurations can lead to credential leaks, command injection, and MITM attacks"
 
 print_subheader "Weak hash algorithms (MD5/SHA1)"
@@ -4273,6 +4553,17 @@ if [ "$temp_file_race_hits" -gt 0 ]; then
   print_finding "warning" "$temp_file_race_hits" "Predictable temp-file write race" "Use tempfile::NamedTempFile/tempfile::Builder or OpenOptions::create_new(true) with unpredictable names"
   show_temp_file_race_examples 3 || true
   add_finding "warning" "$temp_file_race_hits" "Predictable temp-file write race" "Use tempfile::NamedTempFile/tempfile::Builder or OpenOptions::create_new(true) with unpredictable names" "${CATEGORY_NAME[8]}" "$(collect_samples_temp_file_race 3)"
+fi
+
+print_subheader "Request-derived outbound HTTP URLs"
+request_url_hits=$(count_request_url_matches || echo 0)
+request_url_hits=$(printf '%s\n' "${request_url_hits:-0}" | awk 'END{print $0+0}')
+if [ "$request_url_hits" -gt 0 ]; then
+  print_finding "critical" "$request_url_hits" "Request-derived URL reaches outbound HTTP client" "Validate outbound URLs with explicit scheme and host allow-lists before sending client requests"
+  show_request_url_examples 3 || true
+  add_finding "critical" "$request_url_hits" "Request-derived URL reaches outbound HTTP client" "Validate outbound URLs with explicit scheme and host allow-lists before sending client requests" "${CATEGORY_NAME[8]}" "$(collect_samples_request_url 3)"
+else
+  print_finding "good" "No request-derived outbound HTTP URL sinks detected"
 fi
 
 print_subheader "Plain http:// URLs"

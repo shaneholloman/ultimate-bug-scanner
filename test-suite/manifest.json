@@ -5903,6 +5903,66 @@
       }
     },
     {
+      "id": "rust-ssrf-buggy",
+      "description": "Rust request, header, env, and CLI URL values should not reach outbound HTTP clients or request builders without scheme and host allow-list validation.",
+      "path": "test-suite/rust/buggy/ssrf.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "ssrf",
+        "buggy"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-derived URL reaches outbound HTTP client"
+        ]
+      }
+    },
+    {
+      "id": "rust-ssrf-clean",
+      "description": "Rust outbound request URLs validated through named safe helpers and host allow-lists should stay clean.",
+      "path": "test-suite/rust/clean/ssrf.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "ssrf",
+        "clean"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-derived URL reaches outbound HTTP client"
+        ]
+      }
+    },
+    {
       "id": "rust-async-errors-buggy",
       "description": "Rust awaits lacking ?/match handling + tokio::spawn handles dropped.",
       "path": "test-suite/rust/async_errors/buggy",
