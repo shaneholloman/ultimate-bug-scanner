@@ -7284,6 +7284,65 @@
       }
     },
     {
+      "id": "ruby-open-redirect-buggy",
+      "description": "Ruby Rack/Rails request params, headers, referers, and host values should not reach redirect sinks without local-url or host allow-list validation.",
+      "path": "test-suite/ruby/open_redirect_buggy",
+      "language": "ruby",
+      "tags": [
+        "ruby",
+        "security",
+        "open-redirect",
+        "buggy"
+      ],
+      "args": [
+        "--only=ruby",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Unvalidated redirect from request data"
+        ]
+      }
+    },
+    {
+      "id": "ruby-open-redirect-clean",
+      "description": "Ruby redirects guarded by safe helper validation, local path checks, url_from, or allow_other_host: false should stay clean.",
+      "path": "test-suite/ruby/open_redirect_clean",
+      "language": "ruby",
+      "tags": [
+        "ruby",
+        "security",
+        "open-redirect",
+        "clean"
+      ],
+      "args": [
+        "--only=ruby",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Unvalidated redirect from request data"
+        ]
+      }
+    },
+    {
       "id": "ruby-ssrf-buggy",
       "description": "Ruby request params, headers, and request host accessors should not reach outbound HTTP clients without scheme and host allow-list validation.",
       "path": "test-suite/ruby/ssrf_buggy",
