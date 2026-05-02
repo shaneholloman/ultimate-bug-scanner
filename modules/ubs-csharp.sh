@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2002,SC2015,SC2034,SC2317
-# UBS C# ULTIMATE BUG SCANNER v3.0.1
+# UBS C# ULTIMATE BUG SCANNER v3.0.2
 # Industrial-grade bug & footgun scanner for C#/.NET codebases.
 # Inspired by UBS rust/cpp scanners: uses ripgrep + ast-grep + dotnet CLI (optional).
 #
@@ -26,7 +26,7 @@ fi
 set -Eeuo pipefail
 shopt -s lastpipe 2>/dev/null || true
 
-VERSION="3.0.1"
+VERSION="3.0.2"
 SCRIPT_NAME="$(basename "$0")"
 SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -2072,6 +2072,306 @@ PY
   fi
 }
 
+run_response_header_injection_checks() {
+  local cat=8
+  [[ "$HAS_PYTHON" -eq 1 ]] || return 0
+  [[ -n "$FILELIST_NUL" && -f "$FILELIST_NUL" ]] || build_file_list "$FILELIST_NUL"
+  local report="$TMP_DIR/cat8.response-header-injection.txt"
+
+  python3 - "$PROJECT_DIR" "$FILELIST_NUL" >"$report" <<'PY' 2>/dev/null || true
+import re
+import sys
+from pathlib import Path
+
+PROJECT_DIR = Path(sys.argv[1]).resolve()
+BASE_DIR = PROJECT_DIR if PROJECT_DIR.is_dir() else PROJECT_DIR.parent
+FILELIST = Path(sys.argv[2])
+
+SOURCE_RE = re.compile(
+    r'\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?Request\.(?:Query|Form|RouteValues|Headers|Cookies)\s*\[[^\]]+\]'
+    r'|\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?Request\.(?:Query|Form|RouteValues|Headers|Cookies)\.(?:TryGetValue|ContainsKey)\s*\('
+    r'|\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?Request\.(?:Host|Path|PathBase|RawTarget|QueryString)\b(?:\.Value\b)?'
+    r'|\b(?:ControllerContext|ActionContext)\.HttpContext\.Request\.(?:Host|Path|RawTarget|QueryString)\b',
+    re.IGNORECASE,
+)
+ANNOTATED_PARAM_RE = re.compile(
+    r'\[(?:FromQuery|FromHeader|FromRoute|FromForm|FromBody|FromCookie)'
+    r'(?:\s*\([^]]*\))?\]\s*'
+    r'(?:[A-Za-z_][A-Za-z0-9_.<>, ?\[\]]+\s+)+'
+    r'(?P<name>[A-Za-z_][A-Za-z0-9_]*)',
+    re.IGNORECASE | re.MULTILINE,
+)
+OUT_PARAM_RE = re.compile(
+    r'\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?Request\.(?:Query|Form|RouteValues|Headers|Cookies)\.TryGetValue\s*\('
+    r'[^)]*,\s*out\s+(?:var\s+|[A-Za-z_][A-Za-z0-9_.<>, ?\[\]]*\s+)?(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)',
+    re.IGNORECASE,
+)
+SAFE_EXPR_RE = re.compile(
+    r'\b(?:Safe(?:Header|HeaderValue|ResponseHeader|Disposition|FileName|Filename)|'
+    r'Secure(?:Header|HeaderValue|ResponseHeader|Disposition|FileName|Filename)|'
+    r'Sanitize(?:Header|HeaderValue|ResponseHeader|Disposition|CRLF|CrLf|FileName|Filename)|'
+    r'Validate(?:Header|HeaderValue|ResponseHeader|FileName|Filename)|'
+    r'Clean(?:Header|HeaderValue|ResponseHeader|FileName|Filename)|'
+    r'Strip(?:CRLF|CrLf|Newlines)|Remove(?:CRLF|CrLf|Newlines)|'
+    r'HeaderSafe|CrlfSafe|CrLfSafe|ValidHeaderValue|IsSafeHeaderValue)\b'
+    r'|\b(?:Uri\.EscapeDataString|Uri\.EscapeUriString|WebUtility\.UrlEncode|HttpUtility\.UrlEncode|'
+    r'UrlEncoder\.Default\.Encode|HeaderUtilities\.SetHttpFileName|HeaderUtilities\.SetHttpFileNameStar)\s*\('
+    r'|\.Replace\s*\([^;\n]*(?:\\r|\\n|\\\\r|\\\\n|Environment\.NewLine)',
+    re.IGNORECASE,
+)
+CRLF_LITERAL_RE = re.compile(r'\\r|\\n|\\\\r|\\\\n|Environment\.NewLine|\[\\r\\n\]', re.IGNORECASE)
+BLOCK_RE = re.compile(
+    r'\b(?:throw|return|BadRequest|Status400BadRequest|Forbid|Unauthorized|'
+    r'ArgumentException|InvalidOperationException|SecurityException)\b',
+    re.IGNORECASE,
+)
+HEADER_CALL_RE = re.compile(
+    r'\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?Response\.Headers\.(?:Append|Add|Set)\s*\(\s*'
+    r'(?P<quote>["\'])(?P<name>[^"\']+)(?P=quote)\s*,',
+    re.IGNORECASE,
+)
+HEADER_INDEX_ASSIGN_RE = re.compile(
+    r'\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?Response\.Headers\s*\[\s*'
+    r'(?P<quote>["\'])(?P<name>[^"\']+)(?P=quote)\s*\]\s*=',
+    re.IGNORECASE,
+)
+HEADER_PROP_ASSIGN_RE = re.compile(
+    r'\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?Response\.Headers\.'
+    r'(?P<name>ContentDisposition|ContentType|CacheControl|ETag|SetCookie|WWWAuthenticate)\s*=',
+    re.IGNORECASE,
+)
+TYPED_HEADER_PROP_RE = re.compile(
+    r'\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?Response\.GetTypedHeaders\s*\(\s*\)\.'
+    r'(?P<name>ContentDisposition|CacheControl|ETag)\s*=',
+    re.IGNORECASE,
+)
+HEADER_START_RE = re.compile(
+    r'\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?Response\.Headers(?:\s*\[|\.(?:Append|Add|Set|'
+    r'ContentDisposition|ContentType|CacheControl|ETag|SetCookie|WWWAuthenticate)\b)'
+    r'|\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?Response\.GetTypedHeaders\s*\(\s*\)\.',
+    re.IGNORECASE,
+)
+ASSIGN_RE = re.compile(
+    r'^\s*(?:var|string|String|object|StringValues|IHeaderDictionary|ResponseHeaders|ContentDispositionHeaderValue)?\s*'
+    r'(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<rhs>.+)$'
+)
+PROP_HEADER_NAMES = {
+    'contentdisposition': 'content-disposition',
+    'contenttype': 'content-type',
+    'cachecontrol': 'cache-control',
+    'etag': 'etag',
+    'setcookie': 'set-cookie',
+    'wwwauthenticate': 'www-authenticate',
+}
+PATH_LIMIT = 4
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    paren_balance = statement.count('(') - statement.count(')')
+    bracket_balance = statement.count('[') - statement.count(']')
+    brace_balance = statement.count('{') - statement.count('}')
+    has_end = ';' in statement or '{' in statement or '}' in statement
+    lookahead = idx + 1
+    while (
+        paren_balance > 0 or bracket_balance > 0 or brace_balance > 0 or not has_end
+    ) and lookahead < len(lines) and lookahead < idx + 10:
+        next_line = strip_line_comments(lines[lookahead]).strip()
+        statement += ' ' + next_line
+        paren_balance += next_line.count('(') - next_line.count(')')
+        bracket_balance += next_line.count('[') - next_line.count(']')
+        brace_balance += next_line.count('{') - next_line.count('}')
+        has_end = has_end or ';' in next_line or '{' in next_line or '}' in next_line
+        lookahead += 1
+    return statement
+
+def relpath(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def load_paths():
+    try:
+        data = FILELIST.read_bytes().split(b'\0')
+    except OSError:
+        return []
+    return [Path(raw.decode('utf-8', 'ignore')) for raw in data if raw]
+
+def annotated_sources(text):
+    sources = {}
+    for match in ANNOTATED_PARAM_RE.finditer(text):
+        name = match.group('name')
+        sources[name] = {'path': [f'@request {name}']}
+    return sources
+
+def is_safe_expr(expr):
+    return bool(SAFE_EXPR_RE.search(expr))
+
+def refs_in_expr(expr, tainted):
+    refs = []
+    for name in tainted:
+        if re.search(rf'\b{re.escape(name)}\b', expr):
+            refs.append(name)
+    return refs
+
+def taint_from_expr(expr, tainted):
+    if is_safe_expr(expr):
+        return None
+    direct = SOURCE_RE.search(expr)
+    if direct:
+        return {'path': [direct.group(0).strip('(')]}
+    refs = refs_in_expr(expr, tainted)
+    if not refs:
+        return None
+    ref = refs[0]
+    path = list(tainted.get(ref, {}).get('path', [ref]))
+    if len(path) >= PATH_LIMIT:
+        path = path[-(PATH_LIMIT - 1):]
+    path.append(ref)
+    return {'path': path}
+
+def header_sink(statement):
+    for regex in (HEADER_CALL_RE, HEADER_INDEX_ASSIGN_RE, HEADER_PROP_ASSIGN_RE, TYPED_HEADER_PROP_RE):
+        match = regex.search(statement)
+        if not match:
+            continue
+        raw_name = match.group('name').lower().replace('_', '-').replace('-', '')
+        name = PROP_HEADER_NAMES.get(raw_name, raw_name)
+        if name == 'location':
+            return None
+        return match
+    return None
+
+def starts_header_sink(line):
+    return bool(HEADER_START_RE.search(line))
+
+def has_crlf_reject_context(lines, line_no, refs):
+    if not refs:
+        return False
+    start = max(0, line_no - 18)
+    context = '\n'.join(strip_line_comments(line) for line in lines[start:line_no + 1])
+    if not any(re.search(rf'\b{re.escape(ref)}\b', context) for ref in refs):
+        return False
+    return bool(CRLF_LITERAL_RE.search(context) and BLOCK_RE.search(context))
+
+def analyze(path: Path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not ((SOURCE_RE.search(text) or ANNOTATED_PARAM_RE.search(text)) and HEADER_START_RE.search(text)):
+        return
+    lines = text.splitlines()
+    tainted = annotated_sources(text)
+    seen = set()
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        current_line = strip_line_comments(lines[idx - 1]).strip()
+        statement = logical_statement(lines, idx).strip()
+        if not statement:
+            continue
+        out_param = OUT_PARAM_RE.search(statement)
+        if out_param:
+            out_source = out_param.group(0).strip()
+            if not out_source.endswith(')'):
+                out_source += ')'
+            tainted[out_param.group('lhs')] = {'path': [out_source]}
+        assign = ASSIGN_RE.match(statement)
+        if assign:
+            name = assign.group('lhs')
+            rhs = assign.group('rhs')
+            taint = taint_from_expr(rhs, tainted)
+            if taint:
+                tainted[name] = taint
+            elif name in tainted and is_safe_expr(rhs):
+                tainted.pop(name, None)
+        if not starts_header_sink(current_line):
+            continue
+        if not header_sink(statement):
+            continue
+        if is_safe_expr(statement):
+            continue
+        direct = SOURCE_RE.search(statement)
+        refs = refs_in_expr(statement, tainted)
+        if not direct and not refs:
+            continue
+        if has_crlf_reject_context(lines, idx, refs):
+            continue
+        key = (relpath(path), idx)
+        if key in seen:
+            continue
+        seen.add(key)
+        if direct:
+            path_desc = f"{direct.group(0).strip('(')} -> response header"
+        else:
+            ref = refs[0]
+            seq = list(tainted.get(ref, {}).get('path', [ref]))
+            if len(seq) >= PATH_LIMIT:
+                seq = seq[-(PATH_LIMIT - 1):]
+            seq.append('response header')
+            path_desc = ' -> '.join(seq)
+        issues.append((relpath(path), idx, f"{source_line(lines, idx)}  [{path_desc}]"))
+
+issues = []
+for file_path in load_paths():
+    analyze(file_path, issues)
+for file_name, line_no, code in issues:
+    print(f"{file_name}:{line_no}:{code}")
+PY
+
+  local hits
+  hits=$(cat "$report" | count_lines)
+  if [[ $hits -gt 0 ]]; then
+    bump_counter critical "$hits"
+    [[ "$FORMAT" == "text" ]] && echo "${RED}${ICON_CRIT} Request-controlled value reaches HTTP response header ($hits) - reject or strip CR/LF, URL-encode filename fragments, or route through a header-safe helper before writing response headers${RESET}"
+    [[ "$FORMAT" == "text" ]] && head -n "$DETAIL_LIMIT" "$report" | print_matches "Request-controlled value reaches HTTP response header" "response header injection" "critical" "$cat" || true
+  fi
+}
+
 run_request_outbound_url_checks() {
   local cat=8
   [[ "$HAS_PYTHON" -eq 1 ]] || return 0
@@ -2387,6 +2687,7 @@ search '\b(api[_-]?key|secret|password|token)\b\s*=\s*"[^"]{8,}"' "$tmp"
   run_archive_extraction_checks
   run_request_path_traversal_checks
   run_request_open_redirect_checks
+  run_response_header_injection_checks
   run_request_outbound_url_checks
 }
 
