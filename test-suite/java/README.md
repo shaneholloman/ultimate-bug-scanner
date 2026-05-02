@@ -8,8 +8,8 @@
 | `buggy/BuggySecurity.java` | SQL/command injection |
 | `security/path_traversal_buggy.java` | request parameters, annotated headers, and upload filenames reaching file read/write/delete sinks without containment checks |
 | `security/path_traversal_clean.java` | canonical root containment and basename extraction before file sinks, including annotated header paths |
-| `security/SsrfBuggy.java` | request parameters, headers, and servlet host accessors reaching outbound HTTP clients |
-| `security/SsrfClean.java` | safe outbound URL helpers with scheme and host allow-list validation |
+| `security/SsrfBuggy.java` | request parameters, headers, annotated request-header parameters, and servlet host accessors reaching outbound HTTP clients |
+| `security/SsrfClean.java` | safe outbound URL helpers with scheme and host allow-list validation, including annotated headers |
 | `security/ArchiveExtractionBuggy.java` | Archive extraction security |
 | `security/ArchiveExtractionClean.java` | normalize + startsWith destination checks |
 | Clean files | try-with-resources, prepared statements, ProcessBuilder argv |

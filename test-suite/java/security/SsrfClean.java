@@ -8,6 +8,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Set;
 import javax.servlet.http.HttpServletRequest;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.client.RestTemplate;
 
 public final class SsrfClean {
@@ -40,6 +41,12 @@ public final class SsrfClean {
     public Object fetchCallback(HttpServletRequest request) {
         String callback = safeOutboundUrl(request.getHeader("X-Callback-Url"));
         return restTemplate.getForObject(callback, String.class);
+    }
+
+    public Object fetchAnnotatedHeader(
+            @RequestHeader(name = "X-Callback-Url", required = false) String callback) {
+        String target = safeOutboundUrl(callback);
+        return restTemplate.getForObject(target, String.class);
     }
 
     public Object openStream(HttpServletRequest request) throws IOException {

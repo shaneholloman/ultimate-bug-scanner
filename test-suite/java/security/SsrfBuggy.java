@@ -7,6 +7,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import javax.servlet.http.HttpServletRequest;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.client.RestTemplate;
 
 public final class SsrfBuggy {
@@ -22,6 +23,11 @@ public final class SsrfBuggy {
 
     public Object fetchCallback(HttpServletRequest request) {
         String callback = request.getHeader("X-Callback-Url");
+        return restTemplate.getForObject(callback, String.class);
+    }
+
+    public Object fetchAnnotatedHeader(
+            @RequestHeader(name = "X-Callback-Url", required = false) String callback) {
         return restTemplate.getForObject(callback, String.class);
     }
 

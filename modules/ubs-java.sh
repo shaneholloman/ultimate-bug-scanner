@@ -1143,7 +1143,8 @@ SOURCE_RE = re.compile(
 )
 ANNOTATED_PARAM_RE = re.compile(
     r'@(?:RequestParam|PathVariable|RequestHeader|CookieValue|RequestBody|QueryParam|PathParam|HeaderParam)\b'
-    r'[^,\)]*\s+(?:final\s+)?(?:String|URI|URL|Object|[A-Za-z_][A-Za-z0-9_<>, ?]*)\s+([A-Za-z_][A-Za-z0-9_]*)',
+    r'(?:\s*\([^)]*\))?(?:\s+@[A-Za-z_][A-Za-z0-9_.]*(?:\([^)]*\))?)*\s+'
+    r'(?:final\s+)?(?:String|URI|URL|Object|[A-Za-z_][A-Za-z0-9_.<>, ?\[\]]*)\s+([A-Za-z_][A-Za-z0-9_]*)',
     re.IGNORECASE,
 )
 SAFE_EXPR_RE = re.compile(

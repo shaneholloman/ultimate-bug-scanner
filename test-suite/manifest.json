@@ -6565,7 +6565,7 @@
     },
     {
       "id": "java-ssrf-buggy",
-      "description": "Java request parameters, headers, and servlet host accessors should not reach outbound HTTP clients or request builders without scheme and host allow-list validation.",
+      "description": "Java request parameters, headers, annotated request-header parameters, and servlet host accessors should not reach outbound HTTP clients or request builders without scheme and host allow-list validation.",
       "path": "test-suite/java/security/SsrfBuggy.java",
       "language": "java",
       "tags": [
@@ -6593,7 +6593,7 @@
     },
     {
       "id": "java-ssrf-clean",
-      "description": "Java outbound request URLs validated through named safe helpers and host allow-lists should stay clean, including URLs assembled from inbound host values.",
+      "description": "Java outbound request URLs validated through named safe helpers and host allow-lists should stay clean, including annotated headers and URLs assembled from inbound host values.",
       "path": "test-suite/java/security/SsrfClean.java",
       "language": "java",
       "tags": [
