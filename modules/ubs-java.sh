@@ -1373,6 +1373,299 @@ PY
 )
 }
 
+run_response_header_injection_checks() {
+  print_subheader "Request-derived response headers"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable response header injection checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Request-controlled value reaches HTTP response header" "Reject or strip CR/LF, URL-encode filename fragments, or route values through a header-safe helper before setHeader/addHeader/header/headers.append"
+        else
+          print_finding "good" "No request-derived response header values detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.gradle', '.mvn', 'build', 'target', 'out', 'node_modules', '.cache'}
+
+SOURCE_RE = re.compile(
+    r'\b(?:request|req|ctx|context|exchange|routingContext)(?:\.|->)'
+    r'(?:getParameter|getParameterValues|getQueryString|getRequestURI|getRequestURL|getServletPath|'
+    r'getPathInfo|getHeader|getCookies|queryParam|queryParams|pathParam|pathParams|formParam|formParams)\s*\('
+    r'|\b(?:call|routingCall|context|ctx)\.(?:parameters|pathParameters|queryParameters|headers)\s*(?:\[|\.get\b)'
+    r'|\b(?:call|routingCall)\.request\.(?:headers|header|queryParameters|parameters)\s*(?:\(|\[|\b|\.get\b)'
+    r'|\b(?:parameters|params|queryParameters|pathParameters|headers)\s*\['
+    r'|\b(?:request|req)\.(?:path|uri|url|target)\b',
+    re.IGNORECASE,
+)
+ANNOTATED_PARAM_RE = re.compile(
+    r'@(?:RequestParam|PathVariable|RequestHeader|CookieValue|RequestBody|QueryParam|PathParam|HeaderParam|'
+    r'FormParam|MatrixParam)\b(?:\s*\([^)]*\))?(?:\s+@[A-Za-z_][A-Za-z0-9_.]*(?:\([^)]*\))?)*\s+'
+    r'(?:final\s+)?(?:String|Object|[A-Za-z_][A-Za-z0-9_.<>, ?\[\]]*)\s+([A-Za-z_][A-Za-z0-9_]*)',
+    re.IGNORECASE,
+)
+SAFE_EXPR_RE = re.compile(
+    r'\b(?:safe(?:Header|HeaderValue|ResponseHeader|Disposition|Filename|FileName)|'
+    r'secure(?:Header|HeaderValue|ResponseHeader|Disposition|Filename|FileName)|'
+    r'sanitize(?:Header|HeaderValue|ResponseHeader|Disposition|Filename|FileName|CRLF)|'
+    r'validate(?:Header|HeaderValue|ResponseHeader|Filename|FileName)|'
+    r'clean(?:Header|HeaderValue|Filename|FileName)|strip(?:CRLF|Newlines)|'
+    r'headerSafe|crlfSafe|validHeaderValue|isSafeHeaderValue)\b'
+    r'|\b(?:URLEncoder\.encode|UriUtils\.encode|UriUtils\.encodePathSegment|'
+    r'PercentEscaper|MimeUtility\.encodeText|ContentDisposition\.)\b'
+    r'|\.replace(?:All|First)?\s*\([^;\n]*(?:\\r|\\n|\\\\r|\\\\n)',
+    re.IGNORECASE,
+)
+CRLF_LITERAL_RE = re.compile(r'\\r|\\n|\\\\r|\\\\n|\[\\r\\n\]')
+BLOCK_RE = re.compile(
+    r'\b(?:throw|return|sendError|abort|badRequest|ResponseStatusException|'
+    r'IllegalArgumentException|SecurityException|require)\b',
+    re.IGNORECASE,
+)
+HEADER_CALL_RE = re.compile(
+    r'\.\s*(?:setHeader|addHeader|header|add|set|append)\s*\(\s*'
+    r'(?P<quote>["\'])(?P<name>[^"\']+)(?P=quote)\s*,',
+    re.IGNORECASE,
+)
+HEADER_CONST_CALL_RE = re.compile(
+    r'\.\s*(?:setHeader|addHeader|header|add|set|append)\s*\(\s*'
+    r'(?:HttpHeaders\.)?(?P<name>CONTENT_DISPOSITION|CONTENT_TYPE|CACHE_CONTROL|ETAG|SET_COOKIE)\s*,',
+    re.IGNORECASE,
+)
+HEADER_INDEX_ASSIGN_RE = re.compile(
+    r'\.\s*headers\s*\[\s*(?P<quote>["\'])(?P<name>[^"\']+)(?P=quote)\s*\]\s*=',
+    re.IGNORECASE,
+)
+HEADERS_OF_RE = re.compile(
+    r'\bheadersOf\s*\(\s*(?P<quote>["\'])(?P<name>[^"\']+)(?P=quote)\s*,',
+    re.IGNORECASE,
+)
+ASSIGN_RE = re.compile(
+    r'^\s*(?:final\s+)?(?:val|var|String|Object|HttpHeaders|HeadersBuilder|MutableHeaders|'
+    r'ResponseEntity|[A-Za-z_][A-Za-z0-9_.<>, ?\[\]]+)?\s*'
+    r'(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<rhs>.+)$'
+)
+PATH_LIMIT = 4
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in {'.java', '.kt', '.kts'}:
+            yield root
+        return
+    for suffix in ('*.java', '*.kt', '*.kts'):
+        for path in root.rglob(suffix):
+            if path.is_file() and not should_skip(path):
+                yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    balance = statement.count('(') - statement.count(')')
+    stripped = statement.strip()
+    has_kotlin_line_end = balance <= 0 and bool(
+        re.match(r'(?:val|var|return|throw)\b', stripped) or
+        (re.match(r'[A-Za-z_][A-Za-z0-9_]*\s*=', stripped) is not None)
+    )
+    has_end = ';' in statement or '{' in statement or '}' in statement or has_kotlin_line_end
+    lookahead = idx + 1
+    while (balance > 0 or not has_end) and lookahead < len(lines) and lookahead < idx + 8:
+        next_line = strip_line_comments(lines[lookahead]).strip()
+        statement += ' ' + next_line
+        balance += next_line.count('(') - next_line.count(')')
+        has_kotlin_line_end = balance <= 0 and bool(
+            re.match(r'(?:val|var|return|throw)\b', next_line) or
+            (re.match(r'[A-Za-z_][A-Za-z0-9_]*\s*=', next_line) is not None)
+        )
+        has_end = has_end or ';' in next_line or '{' in next_line or '}' in next_line or has_kotlin_line_end
+        lookahead += 1
+    return statement
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip()
+    return ''
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def annotated_sources(text):
+    sources = {}
+    for match in ANNOTATED_PARAM_RE.finditer(text):
+        name = match.group(1)
+        sources[name] = {'path': [f'@request {name}']}
+    return sources
+
+def is_safe_expr(expr):
+    return bool(SAFE_EXPR_RE.search(expr))
+
+def refs_in_expr(expr, tainted):
+    refs = []
+    for name in tainted:
+        if re.search(rf'\b{re.escape(name)}\b', expr):
+            refs.append(name)
+    return refs
+
+def taint_from_expr(expr, tainted):
+    if is_safe_expr(expr):
+        return None
+    direct = SOURCE_RE.search(expr)
+    if direct:
+        return {'path': [direct.group(0).strip('(')]}
+    refs = refs_in_expr(expr, tainted)
+    if not refs:
+        return None
+    ref = refs[0]
+    path = list(tainted.get(ref, {}).get('path', [ref]))
+    if len(path) >= PATH_LIMIT:
+        path = path[-(PATH_LIMIT - 1):]
+    path.append(ref)
+    return {'path': path}
+
+def header_sink(statement):
+    for regex in (HEADER_CALL_RE, HEADER_CONST_CALL_RE, HEADER_INDEX_ASSIGN_RE, HEADERS_OF_RE):
+        match = regex.search(statement)
+        if match:
+            name = match.group('name').lower().replace('_', '-')
+            if name == 'location':
+                return None
+            return match
+    return None
+
+def has_crlf_reject_context(lines, line_no, refs):
+    if not refs:
+        return False
+    start = max(0, line_no - 18)
+    context = '\n'.join(strip_line_comments(line) for line in lines[start:line_no + 1])
+    if not any(re.search(rf'\b{re.escape(ref)}\b', context) for ref in refs):
+        return False
+    return bool(CRLF_LITERAL_RE.search(context) and BLOCK_RE.search(context))
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not ((SOURCE_RE.search(text) or ANNOTATED_PARAM_RE.search(text)) and (
+        HEADER_CALL_RE.search(text) or HEADER_CONST_CALL_RE.search(text) or
+        HEADER_INDEX_ASSIGN_RE.search(text) or HEADERS_OF_RE.search(text)
+    )):
+        return
+    lines = text.splitlines()
+    tainted = annotated_sources(text)
+    seen = set()
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        current_line = strip_line_comments(lines[idx - 1]).strip()
+        statement = logical_statement(lines, idx).strip()
+        if not statement:
+            continue
+        assign = ASSIGN_RE.match(statement)
+        if assign:
+            name = assign.group('lhs')
+            rhs = assign.group('rhs')
+            taint = taint_from_expr(rhs, tainted)
+            if taint:
+                tainted[name] = taint
+            elif name in tainted and is_safe_expr(rhs):
+                tainted.pop(name, None)
+        if not header_sink(current_line):
+            continue
+        if not header_sink(statement):
+            continue
+        if is_safe_expr(statement):
+            continue
+        direct = SOURCE_RE.search(statement)
+        refs = refs_in_expr(statement, tainted)
+        if not direct and not refs:
+            continue
+        if has_crlf_reject_context(lines, idx, refs):
+            continue
+        key = (relpath(path), idx)
+        if key in seen:
+            continue
+        seen.add(key)
+        if direct:
+            path_desc = f"{direct.group(0).strip('(')} -> response header"
+        else:
+            ref = refs[0]
+            seq = list(tainted.get(ref, {}).get('path', [ref]))
+            if len(seq) >= PATH_LIMIT:
+                seq = seq[-(PATH_LIMIT - 1):]
+            seq.append('response header')
+            path_desc = ' -> '.join(seq)
+        issues.append((relpath(path), idx, f"{source_line(lines, idx)}  [{path_desc}]"))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:25]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 run_outbound_url_checks() {
   print_subheader "Request-derived outbound HTTP URLs"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -2846,7 +3139,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_run 4; then
 print_header "4. SECURITY"
-print_category "Detects: Insecure SSL, weak hashes, http://, insecure deserialization, shell command execution, Random for secrets, request path traversal, open redirects, outbound URL SSRF, unsafe archive extraction" \
+print_category "Detects: Insecure SSL, weak hashes, http://, insecure deserialization, shell command execution, Random for secrets, request path traversal, response header injection, open redirects, outbound URL SSRF, unsafe archive extraction" \
   "Security misconfigurations expose users to attacks and data breaches"
 
 print_subheader "SSL verification disabled (CRITICAL)"
@@ -2896,6 +3189,7 @@ if [ "$pb_shell" -gt 0 ]; then
 fi
 
 run_path_traversal_checks
+run_response_header_injection_checks
 run_open_redirect_checks
 run_outbound_url_checks
 run_archive_extraction_checks
