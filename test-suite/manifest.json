@@ -7817,6 +7817,65 @@
       }
     },
     {
+      "id": "ruby-header-injection-buggy",
+      "description": "Ruby Rack/Rails request params, headers, cookies, env values, and interpolated filenames should not reach non-Location response headers without CR/LF safety.",
+      "path": "test-suite/ruby/header_injection_buggy",
+      "language": "ruby",
+      "tags": [
+        "ruby",
+        "security",
+        "response-header-injection",
+        "buggy"
+      ],
+      "args": [
+        "--only=ruby",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-derived value reaches response header"
+        ]
+      }
+    },
+    {
+      "id": "ruby-header-injection-clean",
+      "description": "Ruby response headers protected by CR/LF stripping, CR/LF rejection, encoded filenames, or header-safe helpers should stay clean.",
+      "path": "test-suite/ruby/header_injection_clean",
+      "language": "ruby",
+      "tags": [
+        "ruby",
+        "security",
+        "response-header-injection",
+        "clean"
+      ],
+      "args": [
+        "--only=ruby",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-derived value reaches response header"
+        ]
+      }
+    },
+    {
       "id": "ruby-ssrf-buggy",
       "description": "Ruby request params, headers, and request host accessors should not reach outbound HTTP clients without scheme and host allow-list validation.",
       "path": "test-suite/ruby/ssrf_buggy",
