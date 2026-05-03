@@ -3408,7 +3408,6 @@ direct_unsafe_re = re.compile(
 predictable_source_re = re.compile(
     r"\b(?:std\s*::\s*time\s*::\s*)?SystemTime\s*::\s*now\s*\("
     r"|\b(?:std\s*::\s*time\s*::\s*)?Instant\s*::\s*now\s*\("
-    r"|\b(?:std\s*::\s*process\s*::\s*)?process\s*::\s*id\s*\("
     r"|\b(?:std\s*::\s*)?process\s*::\s*id\s*\("
     r"|\.finish\s*\(\s*\)",
 )
@@ -3462,7 +3461,7 @@ def strip_line_comments(line: str) -> str:
                 out.extend(line[i:j + 1])
                 i = j + 1
                 continue
-        if ch in ('"', "'"):
+        if ch == '"':
             quote = ch
             out.append(ch)
             i += 1
@@ -3512,7 +3511,7 @@ def without_string_literals(expr: str) -> str:
                 raw_hashes = j - i - 1
                 i = j + 1
                 continue
-        if ch in ('"', "'"):
+        if ch == '"':
             chars[i] = " "
             quote = ch
         i += 1
@@ -3579,8 +3578,6 @@ def update_insecure_rng_vars(statement: str, insecure_rng_vars):
 
 def unsafe_source(statement: str, insecure_rng_vars, sensitive: bool):
     visible = without_string_literals(statement)
-    if safe_random_re.search(visible):
-        return None
     direct = direct_unsafe_re.search(visible)
     if direct:
         return direct.group(0).strip()

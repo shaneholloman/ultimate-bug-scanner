@@ -3,7 +3,9 @@ use rand_core::{OsRng, RngCore};
 
 pub fn create_session_token() -> String {
     let mut bytes = [0_u8; 32];
-    getrandom::getrandom(&mut bytes).expect("OS randomness available");
+    if getrandom::getrandom(&mut bytes).is_err() {
+        return String::new();
+    }
     hex::encode(bytes)
 }
 
@@ -15,8 +17,10 @@ pub fn csrf_nonce() -> String {
 
 pub fn api_key_from_system_random() -> String {
     let rng = ring::rand::SystemRandom::new();
-    let generated = ring::rand::generate::<[u8; 32]>(&rng).expect("system randomness");
-    hex::encode(generated.expose())
+    match ring::rand::generate::<[u8; 32]>(&rng) {
+        Ok(generated) => hex::encode(generated.expose()),
+        Err(_) => String::new(),
+    }
 }
 
 pub fn request_id_for_logs() -> u32 {
