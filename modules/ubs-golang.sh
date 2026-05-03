@@ -4675,21 +4675,287 @@ count=$([[ "$HAS_AST_GREP" -eq 1 && -f "$AST_JSON" ]] && ast_count "go.close-err
 if [ "$count" -gt 0 ]; then print_finding "info" "$count" "Deferred Close() without checking error"; fi
 fi
 
+run_security_randomness_checks() {
+  print_subheader "Security-sensitive non-crypto randomness"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable security randomness checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Security token generated with non-cryptographic randomness" "Use crypto/rand with rand.Read, io.ReadFull(rand.Reader, ...), or a helper backed by crypto/rand for tokens, sessions, CSRF nonces, OTPs, salts, API keys, and secrets"
+        else
+          print_finding "good" "No security-sensitive non-crypto randomness detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', 'vendor', '.cache', 'bin', 'dist', '.idea'}
+EXTS = {'.go'}
+RAND_METHODS = (
+    'Int', 'Intn', 'Int31', 'Int31n', 'Int63', 'Int63n', 'Uint32', 'Uint64',
+    'Float32', 'Float64', 'NormFloat64', 'ExpFloat64', 'Perm', 'Shuffle',
+    'Read', 'Seed', 'New', 'NewSource',
+)
+RNG_METHODS = (
+    'Int', 'Intn', 'Int31', 'Int31n', 'Int63', 'Int63n', 'Uint32', 'Uint64',
+    'Float32', 'Float64', 'NormFloat64', 'ExpFloat64', 'Perm', 'Shuffle', 'Read',
+)
+SECURITY_TERMS = (
+    'apikey', 'accesskey', 'privatekey', 'publickey', 'clientsecret',
+    'secret', 'token', 'session', 'cookie', 'csrf', 'xsrf', 'otp', 'totp',
+    'mfa', 'nonce', 'salt', 'password', 'passwd', 'pwd', 'auth', 'bearer',
+    'credential', 'reset', 'invite', 'verification', 'verify', 'confirm',
+    'confirmation', 'magiclink', 'recovery', 'signature',
+)
+SAFE_RANDOM_RE = re.compile(
+    r'\b(?:cryptoRand|cryptorand|secureRand|secureRandom|cryptoRandom)\.(?:Read|Int)\s*\('
+    r'|\b(?:cryptoRand|cryptorand|secureRand|secureRandom|cryptoRandom)\.Reader\b'
+    r'|\brand\.Reader\b'
+    r'|\b(?:io\.)?ReadFull\s*\([^)]*\b(?:rand|cryptoRand|cryptorand|secureRand|secureRandom|cryptoRandom)\.Reader\b',
+    re.IGNORECASE,
+)
+PREDICTABLE_SOURCE_RE = re.compile(
+    r'\btime\.Now\s*\(\s*\)\.(?:Unix|UnixNano|UnixMilli|UnixMicro)\s*\('
+    r'|\bos\.Getpid\s*\('
+    r'|\buintptr\s*\('
+    r'|\bunsafe\.Pointer\s*\('
+    r'|\b(?:fnv|crc32|crc64|adler32)\.',
+    re.IGNORECASE,
+)
+TOKEN_MATERIAL_RE = re.compile(
+    r'\bfmt\.Sprintf\s*\('
+    r'|\bstrconv\.(?:FormatInt|FormatUint|Itoa)\s*\('
+    r'|\b(?:hex|base64)\.'
+    r'|\.String\s*\('
+    r'|\[\]byte\s*\(',
+    re.IGNORECASE,
+)
+IMPORT_LINE_RE = re.compile(r'^\s*(?:(?P<alias>[A-Za-z_][A-Za-z0-9_]*|\.)\s+)?["`]math/rand["`]')
+IMPORT_ONE_RE = re.compile(r'^\s*import\s+(?:(?P<alias>[A-Za-z_][A-Za-z0-9_]*|\.)\s+)?["`]math/rand["`]')
+ASSIGN_RE = re.compile(r'^\s*(?:var\s+)?(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=)\s*(?P<rhs>.+)')
+FUNC_RE = re.compile(r'^\s*func\s+(?:\([^)]*\)\s*)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(')
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in EXTS:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in EXTS and not should_skip(path):
+            yield path
+
+def strip_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'", '`'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < len(line):
+            nxt = line[i + 1]
+            if nxt == '/':
+                break
+            if nxt == '*':
+                end = line.find('*/', i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip().replace('\t', ' ')
+    return ''
+
+def find_math_rand_aliases(lines):
+    aliases = set()
+    in_block = False
+    for raw in lines:
+        line = strip_comments(raw).strip()
+        if not line:
+            continue
+        if line.startswith('import ('):
+            in_block = True
+            continue
+        if in_block and line == ')':
+            in_block = False
+            continue
+        match = IMPORT_ONE_RE.match(line) if not in_block else IMPORT_LINE_RE.match(line)
+        if not match:
+            continue
+        alias = match.group('alias')
+        if alias == '.':
+            aliases.add('.')
+        elif alias:
+            aliases.add(alias)
+        else:
+            aliases.add('rand')
+    return aliases
+
+def normalized(text: str) -> str:
+    return re.sub(r'[^a-z0-9]+', '', text.lower())
+
+def has_security_context(statement: str, func_name: str) -> bool:
+    text = f'{statement} {func_name or ""}'
+    compact = normalized(text)
+    if any(term in compact for term in SECURITY_TERMS):
+        return True
+    return bool(re.search(r'(?<![A-Za-z0-9_])(?:key|sig)(?![A-Za-z0-9_])', text, re.IGNORECASE))
+
+def method_pattern(alias: str, methods) -> re.Pattern:
+    method_alt = '|'.join(re.escape(method) for method in methods)
+    if alias == '.':
+        return re.compile(rf'(?<![A-Za-z0-9_.])(?:{method_alt})\s*\(')
+    return re.compile(rf'\b{re.escape(alias)}\.(?:{method_alt})\s*\(')
+
+def unsafe_source(statement: str, math_aliases, insecure_rng_vars, sensitive: bool, line_sensitive: bool):
+    if SAFE_RANDOM_RE.search(statement):
+        return None
+    for alias in math_aliases:
+        match = method_pattern(alias, RAND_METHODS).search(statement)
+        if match:
+            return match.group(0).strip()
+    for name in sorted(insecure_rng_vars):
+        match = re.search(
+            rf'\b{re.escape(name)}\.(?:{"|".join(re.escape(method) for method in RNG_METHODS)})\s*\(',
+            statement,
+        )
+        if match:
+            return match.group(0).strip()
+    predictable = PREDICTABLE_SOURCE_RE.search(statement)
+    if predictable and sensitive and (line_sensitive or TOKEN_MATERIAL_RE.search(statement)):
+        return predictable.group(0).strip()
+    return None
+
+def starts_function(statement: str):
+    match = FUNC_RE.match(statement)
+    return match.group('name') if match else None
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not ('math/rand' in text or any(token in text for token in ('time.Now()', 'os.Getpid()', 'unsafe.Pointer', 'fnv.', 'crc32.', 'crc64.', 'adler32.'))):
+        return
+    lines = text.splitlines()
+    math_aliases = find_math_rand_aliases(lines)
+    has_predictable = any(token in text for token in ('time.Now()', 'os.Getpid()', 'unsafe.Pointer', 'fnv.', 'crc32.', 'crc64.', 'adler32.'))
+    if not math_aliases and not has_predictable:
+        return
+    insecure_rng_vars = set()
+    func_stack = []
+    brace_depth = 0
+    seen = set()
+    for idx, raw in enumerate(lines, start=1):
+        statement = strip_comments(raw).strip()
+        while func_stack and brace_depth < func_stack[-1][1]:
+            func_stack.pop()
+        func_name = starts_function(statement)
+        opens = statement.count('{')
+        closes = statement.count('}')
+        if func_name:
+            func_stack.append((func_name, brace_depth + max(opens, 1)))
+        current_func = func_stack[-1][0] if func_stack else ''
+        if has_ignore(lines, idx) or not statement:
+            brace_depth += opens - closes
+            continue
+        assign = ASSIGN_RE.match(statement)
+        if assign:
+            name = assign.group('lhs')
+            rhs = assign.group('rhs')
+            if SAFE_RANDOM_RE.search(rhs):
+                insecure_rng_vars.discard(name)
+            else:
+                for alias in math_aliases:
+                    if method_pattern(alias, ('New',)).search(rhs):
+                        insecure_rng_vars.add(name)
+                        break
+        line_sensitive = has_security_context(statement, '')
+        sensitive = line_sensitive or has_security_context('', current_func)
+        source = unsafe_source(statement, math_aliases, insecure_rng_vars, sensitive, line_sensitive)
+        if source and sensitive:
+            key = (relpath(path), idx, source)
+            if key not in seen:
+                seen.add(key)
+                issues.append((relpath(path), idx, f"{source_line(lines, idx)}  [{source} in security-sensitive generation context]"))
+        brace_depth += opens - closes
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:25]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+  )
+}
+
 # ═══════════════════════════════════════════════════════════════════════════
 # CATEGORY 9: CRYPTOGRAPHY & SECURITY
 # ═══════════════════════════════════════════════════════════════════════════
 if should_skip 9; then
 print_header "9. CRYPTOGRAPHY & SECURITY"
-print_category "Detects: weak hashes, math/rand for security, InsecureSkipVerify, shell exec, dynamic SQL strings, request path traversal, response header injection, open redirects, outbound URL SSRF, unsafe archive extraction" \
+print_category "Detects: weak hashes, security-sensitive non-crypto randomness, InsecureSkipVerify, shell exec, dynamic SQL strings, request path traversal, response header injection, open redirects, outbound URL SSRF, unsafe archive extraction" \
   "Security footguns are easy to miss and costly to fix"
 
 print_subheader "Weak hashes (md5/sha1) and RC4"
 count=$(grep_count_scoped "md5|sha1|rc4")
 if [ "$count" -gt 0 ]; then print_finding "warning" "$count" "Weak crypto primitives detected - use SHA-256/512, AES-GCM, etc."; fi
 
-print_subheader "math/rand used for secrets"
-rand_count=$(grep_count_scoped "\bmath/rand\b|\brand\.Seed\(|\brand\.Read\(")
-if [ "$rand_count" -gt 0 ]; then print_finding "info" "$rand_count" "math/rand present - avoid for secrets; prefer crypto/rand"; fi
+run_security_randomness_checks
 
 print_subheader "TLS InsecureSkipVerify=true"
 count=$([[ "$HAS_AST_GREP" -eq 1 && -f "$AST_JSON" ]] && ast_count "go.tls-insecure-skip" || echo 0)
