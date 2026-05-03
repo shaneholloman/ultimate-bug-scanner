@@ -5226,6 +5226,65 @@
       }
     },
     {
+      "id": "cpp-header-injection-buggy",
+      "description": "C/C++ request/query/header/cookie values should not reach non-Location response headers without CR/LF-safe validation or encoding.",
+      "path": "test-suite/cpp/security/header_injection_buggy.cpp",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "security",
+        "response-header-injection",
+        "buggy"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-controlled value reaches HTTP response header"
+        ]
+      }
+    },
+    {
+      "id": "cpp-header-injection-clean",
+      "description": "C/C++ response headers protected by CR/LF stripping, encoding, or reject-on-newline guards should stay clean.",
+      "path": "test-suite/cpp/security/header_injection_clean.cpp",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "security",
+        "response-header-injection",
+        "clean"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-controlled value reaches HTTP response header"
+        ]
+      }
+    },
+    {
       "id": "cpp-ssrf-buggy",
       "description": "C/C++ request/query/header URL values should not reach libcurl URL sinks without scheme and host allow-list validation.",
       "path": "test-suite/cpp/security/ssrf_buggy.cpp",
