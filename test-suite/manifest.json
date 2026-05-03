@@ -6198,6 +6198,67 @@
       }
     },
     {
+      "id": "rust-security-randomness-buggy",
+      "description": "Rust security tokens, session secrets, CSRF nonces, API keys, password resets, and OTPs should not use rand, fastrand, deterministic seeds, timestamps, hashes, or process IDs.",
+      "path": "test-suite/rust/buggy/security_randomness.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "randomness",
+        "buggy"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Security token generated with non-cryptographic randomness"
+        ]
+      }
+    },
+    {
+      "id": "rust-security-randomness-clean",
+      "description": "Rust getrandom, OsRng, and ring::rand security-token helpers should stay clean while harmless display randomness and documentation mentions remain allowed.",
+      "path": "test-suite/rust/clean/security_randomness.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "randomness",
+        "clean"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Security token generated with non-cryptographic randomness"
+        ]
+      }
+    },
+    {
       "id": "rust-open-redirect-buggy",
       "description": "Rust request, header, and host redirect targets should not reach redirect responses or Location headers without local-path or redirect host allow-list validation.",
       "path": "test-suite/rust/buggy/open_redirect.rs",
