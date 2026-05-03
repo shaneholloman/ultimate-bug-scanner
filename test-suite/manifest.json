@@ -6995,6 +6995,65 @@
       }
     },
     {
+      "id": "swift-header-injection-buggy",
+      "description": "Swift request query/header/cookie/content values should not reach non-Location response headers without CR/LF-safe validation or encoding.",
+      "path": "test-suite/swift/header_injection_buggy",
+      "language": "swift",
+      "tags": [
+        "swift",
+        "security",
+        "response-header-injection",
+        "buggy"
+      ],
+      "args": [
+        "--only=swift",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request-controlled value reaches HTTP response header"
+        ]
+      }
+    },
+    {
+      "id": "swift-header-injection-clean",
+      "description": "Swift response headers protected by CR/LF stripping, encoding, or reject-on-newline guards should stay clean.",
+      "path": "test-suite/swift/header_injection_clean",
+      "language": "swift",
+      "tags": [
+        "swift",
+        "security",
+        "response-header-injection",
+        "clean"
+      ],
+      "args": [
+        "--only=swift",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request-controlled value reaches HTTP response header"
+        ]
+      }
+    },
+    {
       "id": "swift-ssrf-buggy",
       "description": "Swift request query/header/parameter/content values should not reach outbound HTTP clients without scheme and host allow-list validation.",
       "path": "test-suite/swift/ssrf_buggy",
