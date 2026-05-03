@@ -1780,6 +1780,302 @@ PY
   )
 }
 
+run_security_randomness_checks() {
+  print_subheader "Security-sensitive non-crypto randomness"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable security-sensitive randomness checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Security token generated with non-cryptographic randomness" "Use SecureRandom.hex/base64/urlsafe_base64/uuid/random_bytes/alphanumeric for tokens, sessions, CSRF nonces, API keys, OTPs, salts, and secrets"
+        else
+          print_finding "good" "No security-sensitive non-crypto randomness detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.bundle', 'vendor', 'node_modules', 'tmp', 'log', 'coverage', '.cache', 'dist', 'build'}
+EXTS = {'.rb', '.rake', '.ru', '.gemspec', '.erb', '.haml', '.slim', '.rbi', '.rbs', '.jbuilder'}
+
+SECURITY_CONTEXT_RE = re.compile(
+    r'(?:^|[^A-Za-z0-9])(?:api[_-]?key|access[_-]?key|private[_-]?key|public[_-]?key|secret|client[_-]?secret|'
+    r'token|session|cookie|csrf|xsrf|otp|totp|mfa|nonce|salt|password|passwd|pwd|auth|bearer|credential|'
+    r'reset|invite|verification|verify|confirm|confirmation|magic[_-]?link|recovery|signature|sig|key)(?:[^A-Za-z0-9]|$)',
+    re.IGNORECASE,
+)
+SAFE_RANDOM_RE = re.compile(
+    r'\bSecureRandom\.(?:hex|base64|urlsafe_base64|uuid|random_bytes|alphanumeric)\s*\('
+    r'|\bOpenSSL::Random\.random_bytes\s*\('
+    r'|\b(?:secure|crypto|cryptographic|random_bytes|secure_token|safe_token|csrf_token|signed_token|generate_secure_token)\b',
+    re.IGNORECASE,
+)
+UNSAFE_RANDOM_RE = re.compile(
+    r'(?<![A-Za-z0-9_:])(?:Kernel\.)?rand\s*\('
+    r'|\bRandom\.rand\s*\('
+    r'|\bRandom\.new(?:\s*\([^)]*\))?\.rand\s*\('
+    r'|\bRandom\.new\s*\('
+    r'|(?<![A-Za-z0-9_:])srand\s*\(',
+    re.IGNORECASE,
+)
+PREDICTABLE_SOURCE_RE = re.compile(
+    r'\bTime\.(?:now|new)\b'
+    r'|\bDateTime\.now\b'
+    r'|\bProcess\.pid\b'
+    r'|(?<![A-Za-z0-9_:])(?:object_id|__id__)\b'
+    r'|(?<![A-Za-z0-9_])hash\s*\('
+    r'|\.[A-Za-z0-9_]*hash\b',
+    re.IGNORECASE,
+)
+TOKEN_MATERIAL_RE = re.compile(
+    r'#\{'
+    r'|\.to_(?:s|i)\b'
+    r'|\.strftime\s*\('
+    r'|\bDigest::(?:MD5|SHA1|SHA256|SHA512)\.'
+    r'|\bBase64\.'
+    r'|\.pack\s*\('
+    r'|\.join\s*\(',
+    re.IGNORECASE,
+)
+ASSIGN_RE = re.compile(r'^\s*(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<rhs>.+)$')
+DEF_RE = re.compile(r'^\s*def\s+(?:self\.)?(?P<name>[A-Za-z_][A-Za-z0-9_!?=]*)')
+BLOCK_RE = re.compile(r'^\s*(?:class|module|if|unless|case|begin|for|while|until)\b|\bdo(?:\s*\|[^|]*\|)?\s*(?:#.*)?$')
+END_TOKEN_RE = re.compile(r'(?:^|[;\s])end(?:[;\s]|$)')
+ENDLESS_DEF_RE = re.compile(r'^\s*def\s+(?:self\.)?[A-Za-z_][A-Za-z0-9_!?]*(?:\s*\([^)]*\))?\s*=')
+
+def should_skip(path: Path) -> bool:
+    try:
+        parts = path.relative_to(BASE_DIR).parts
+    except ValueError:
+        parts = path.parts
+    return any(part in SKIP_DIRS for part in parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in EXTS:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in EXTS and not should_skip(path):
+            yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '#':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def identifier_search_text(expr: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(expr):
+        ch = expr[i]
+        if quote:
+            if escape:
+                escape = False
+                i += 1
+                continue
+            if ch == '\\':
+                escape = True
+                i += 1
+                continue
+            if quote == '"' and ch == '#' and i + 1 < len(expr) and expr[i + 1] == '{':
+                depth = 1
+                j = i + 2
+                interpolation = []
+                while j < len(expr) and depth > 0:
+                    current = expr[j]
+                    if current == '{':
+                        depth += 1
+                    elif current == '}':
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    interpolation.append(current)
+                    j += 1
+                out.append(' ')
+                out.append(''.join(interpolation))
+                out.append(' ')
+                i = j + 1
+                continue
+            if ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    balance = statement.count('(') - statement.count(')')
+    lookahead = idx + 1
+    while balance > 0 and lookahead < len(lines) and lookahead < idx + 8:
+        next_line = strip_line_comments(lines[lookahead])
+        statement += ' ' + next_line.strip()
+        balance += next_line.count('(') - next_line.count(')')
+        lookahead += 1
+    return statement
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip().replace('\t', ' ')
+    return ''
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def is_sensitive_context(statement, method_stack):
+    context = identifier_search_text(statement)
+    if method_stack:
+        context += ' ' + ' '.join(name for name in method_stack if name)
+    return bool(SECURITY_CONTEXT_RE.search(context))
+
+def unsafe_source(statement, insecure_rng_vars, sensitive):
+    if SAFE_RANDOM_RE.search(statement):
+        return None
+    direct = UNSAFE_RANDOM_RE.search(statement)
+    if direct:
+        return direct.group(0).strip()
+    for name in sorted(insecure_rng_vars):
+        match = re.search(rf'\b{re.escape(name)}\.rand\s*\(', statement)
+        if match:
+            return match.group(0).strip()
+    predictable = PREDICTABLE_SOURCE_RE.search(statement)
+    if predictable and sensitive and TOKEN_MATERIAL_RE.search(statement):
+        return predictable.group(0).strip()
+    return None
+
+def push_blocks(statement, block_stack):
+    stripped = statement.strip()
+    method = DEF_RE.match(stripped)
+    if method:
+        block_stack.append(method.group('name'))
+    elif BLOCK_RE.search(stripped):
+        block_stack.append('')
+
+def pop_blocks(statement, block_stack):
+    stripped = statement.strip()
+    end_count = len(END_TOKEN_RE.findall(stripped))
+    if ENDLESS_DEF_RE.match(stripped):
+        end_count += 1
+    for _ in range(end_count):
+        if block_stack:
+            block_stack.pop()
+
+def current_methods(block_stack):
+    return [name for name in block_stack if name]
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not (UNSAFE_RANDOM_RE.search(text) or PREDICTABLE_SOURCE_RE.search(text)):
+        return
+    if not SECURITY_CONTEXT_RE.search(text):
+        return
+    lines = text.splitlines()
+    block_stack = []
+    insecure_rng_vars = set()
+    seen = set()
+    for idx, _ in enumerate(lines, start=1):
+        raw_statement = strip_line_comments(lines[idx - 1])
+        push_blocks(raw_statement, block_stack)
+        if has_ignore(lines, idx):
+            pop_blocks(raw_statement, block_stack)
+            continue
+        statement = logical_statement(lines, idx).strip()
+        if not statement:
+            pop_blocks(raw_statement, block_stack)
+            continue
+        assign = ASSIGN_RE.match(statement)
+        if assign:
+            name = assign.group('lhs')
+            rhs = assign.group('rhs')
+            if SAFE_RANDOM_RE.search(rhs):
+                insecure_rng_vars.discard(name)
+            elif re.search(r'\bRandom\.new\s*\(', rhs):
+                insecure_rng_vars.add(name)
+        sensitive = is_sensitive_context(statement, current_methods(block_stack))
+        source = unsafe_source(statement, insecure_rng_vars, sensitive)
+        if not source or not sensitive:
+            pop_blocks(raw_statement, block_stack)
+            continue
+        key = (relpath(path), idx, source)
+        if key in seen:
+            pop_blocks(raw_statement, block_stack)
+            continue
+        seen.add(key)
+        issues.append((relpath(path), idx, f"{source_line(lines, idx)}  [{source} in security-sensitive generation context]"))
+        pop_blocks(raw_statement, block_stack)
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:25]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+  )
+}
+
 write_ast_rules() {
   [[ "$HAS_AST_GREP" -eq 1 ]] || return 0
   trap '[[ -n "${AST_RULE_DIR:-}" && "${AST_RULE_DIR:-}" != "/" && "${AST_RULE_DIR:-}" != "." ]] && rm -rf -- "$AST_RULE_DIR" 2>/dev/null || true; [[ -n "${AST_CONFIG_FILE:-}" ]] && rm -f "$AST_CONFIG_FILE" 2>/dev/null || true' EXIT
@@ -2483,7 +2779,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if run_category 6; then
 print_header "6. SECURITY VULNERABILITIES"
-print_category "Detects: code injection, unsafe deserialization, TLS off, weak crypto, path traversal, open redirects, response header injection, outbound URL SSRF, unsafe archive extraction" \
+print_category "Detects: code injection, unsafe deserialization, TLS off, weak crypto, security-sensitive non-crypto randomness, path traversal, open redirects, response header injection, outbound URL SSRF, unsafe archive extraction" \
   "Security bugs expose users to attacks and data breaches."
 
 print_subheader "eval/instance_eval/class_eval"
@@ -2557,13 +2853,7 @@ if [ "$count" -gt 0 ]; then
   show_detailed_finding "\b(password|api_?key|client_secret|private_?key|bearer|authorization|token)\b[[:space:]]*[:=][[:space:]]*['\"][^\"']+['\"]" 5
 fi
 
-print_subheader "SecureRandom absent where tokens generated"
-count=$("${GREP_RN[@]}" -e "token|secret|nonce|password" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -E -v -i "SecureRandom" || true) | count_lines)
-if [ "$count" -gt 20 ]; then
-  print_finding "info" "$count" "Potential token generation sites" "Ensure SecureRandom is used"
-fi
-
+run_security_randomness_checks
 run_archive_extraction_checks
 run_path_traversal_checks
 run_open_redirect_checks

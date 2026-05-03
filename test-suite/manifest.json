@@ -8053,6 +8053,65 @@
       }
     },
     {
+      "id": "ruby-security-randomness-buggy",
+      "description": "Ruby security tokens, session secrets, CSRF nonces, API keys, and OTPs should use SecureRandom instead of rand, Random, Time.now, Process.pid, or object_id material.",
+      "path": "test-suite/ruby/security_randomness_buggy",
+      "language": "ruby",
+      "tags": [
+        "ruby",
+        "security",
+        "randomness",
+        "buggy"
+      ],
+      "args": [
+        "--only=ruby",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Security token generated with non-cryptographic randomness"
+        ]
+      }
+    },
+    {
+      "id": "ruby-security-randomness-clean",
+      "description": "Ruby SecureRandom-backed tokens should stay clean while harmless display randomness remains allowed.",
+      "path": "test-suite/ruby/security_randomness_clean",
+      "language": "ruby",
+      "tags": [
+        "ruby",
+        "security",
+        "randomness",
+        "clean"
+      ],
+      "args": [
+        "--only=ruby",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Security token generated with non-cryptographic randomness"
+        ]
+      }
+    },
+    {
       "id": "ruby-async-errors-buggy",
       "description": "Ruby Thread.new blocks lacking rescue/exception handling.",
       "path": "test-suite/ruby/async_errors/buggy",
