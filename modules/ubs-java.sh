@@ -1949,6 +1949,267 @@ PY
 )
 }
 
+run_security_randomness_checks() {
+  print_subheader "Security-sensitive non-crypto randomness"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable security randomness checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Security token generated with non-cryptographic randomness" "Use java.security.SecureRandom or a framework helper backed by SecureRandom for tokens, sessions, CSRF nonces, OTPs, salts, API keys, and secrets"
+        else
+          print_finding "good" "No security-sensitive non-crypto randomness detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.gradle', '.mvn', 'build', 'target', 'out', 'node_modules', '.cache'}
+EXTS = {'.java'}
+RNG_METHODS = (
+    'nextInt', 'nextLong', 'nextDouble', 'nextFloat', 'nextBoolean', 'nextBytes',
+    'ints', 'longs', 'doubles', 'nextGaussian',
+)
+SECURITY_TERMS = (
+    'apikey', 'accesskey', 'privatekey', 'publickey', 'clientsecret',
+    'secret', 'token', 'session', 'cookie', 'csrf', 'xsrf', 'otp', 'totp',
+    'mfa', 'nonce', 'salt', 'password', 'passwd', 'pwd', 'auth', 'bearer',
+    'credential', 'reset', 'invite', 'verification', 'verify', 'confirm',
+    'confirmation', 'magiclink', 'recovery', 'signature',
+)
+ASSIGN_RE = re.compile(
+    r'^\s*(?:@[\w.]+(?:\([^)]*\))?\s*)*'
+    r'(?:(?:public|private|protected|static|final|volatile|transient|var)\s+)*'
+    r'(?:(?:[\w.$<>?,\[\]]+\s+)+)?(?:this\.)?'
+    r'(?P<lhs>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?P<rhs>.+)'
+)
+FUNC_RE = re.compile(
+    r'^\s*(?:(?:public|private|protected|static|final|synchronized|abstract|native)\s+)*'
+    r'(?:[A-Za-z_$][A-Za-z0-9_$.<>, ?\[\]]+\s+)+'
+    r'(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\s*\([^;]*\)\s*(?:throws\s+[^{]+)?\{?'
+)
+UNSAFE_CTOR_RE = re.compile(r'\bnew\s+(?:java\.util\.)?Random\s*\(')
+UNSAFE_SPLITTABLE_CTOR_RE = re.compile(r'\bnew\s+(?:java\.util\.)?SplittableRandom\s*\(')
+THREAD_LOCAL_CALL_RE = re.compile(
+    rf'\b(?:java\.util\.concurrent\.)?ThreadLocalRandom\.current\s*\(\s*\)\s*\.'
+    rf'(?:{"|".join(RNG_METHODS)})\s*\('
+)
+MATH_RANDOM_RE = re.compile(r'\bMath\.random\s*\(')
+PREDICTABLE_SOURCE_RE = re.compile(
+    r'\bSystem\.(?:currentTimeMillis|nanoTime)\s*\('
+    r'|\bInstant\.now\s*\(\s*\)\.toEpochMilli\s*\('
+    r'|\bnew\s+Date\s*\(\s*\)\.getTime\s*\('
+    r'|\bSystem\.identityHashCode\s*\('
+    r'|\bProcessHandle\.current\s*\(\s*\)\.pid\s*\(',
+)
+TOKEN_MATERIAL_RE = re.compile(
+    r'\b(?:Long|Integer|Short|Byte)\.toString\s*\('
+    r'|\bString\.format\s*\('
+    r'|\b(?:Base64|HexFormat)\.'
+    r'|\bnew\s+String\s*\('
+    r'|\.toString\s*\(',
+)
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in EXTS:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in EXTS and not should_skip(path):
+            yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < len(line):
+            nxt = line[i + 1]
+            if nxt == '/':
+                break
+            if nxt == '*':
+                end = line.find('*/', i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def logical_statement(lines, start_idx):
+    pieces = []
+    for raw in lines[start_idx - 1:min(len(lines), start_idx + 7)]:
+        line = strip_line_comments(raw).strip()
+        if not line:
+            continue
+        pieces.append(line)
+        if ';' in line or '{' in line or '}' in line:
+            break
+    return ' '.join(pieces)
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip().replace('\t', ' ')
+    return ''
+
+def normalized(text: str) -> str:
+    return re.sub(r'[^a-z0-9]+', '', text.lower())
+
+def has_security_context(statement: str, method_name: str) -> bool:
+    text = f'{statement} {method_name or ""}'
+    compact = normalized(text)
+    if any(term in compact for term in SECURITY_TERMS):
+        return True
+    return bool(re.search(r'(?<![A-Za-z0-9_])(?:key|sig)(?![A-Za-z0-9_])', text, re.IGNORECASE))
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def rng_method_pattern(name: str) -> re.Pattern:
+    return re.compile(rf'\b{re.escape(name)}\.(?:{"|".join(RNG_METHODS)})\s*\(')
+
+def starts_method(statement: str):
+    match = FUNC_RE.match(statement)
+    return match.group('name') if match else None
+
+def update_insecure_rng_vars(statement: str, insecure_rng_vars):
+    assign = ASSIGN_RE.match(statement)
+    if not assign:
+        return
+    name = assign.group('lhs')
+    rhs = assign.group('rhs')
+    if re.search(r'\b(?:java\.security\.)?SecureRandom(?:\.getInstance(?:Strong)?|\.getInstance)?\s*\(', rhs):
+        insecure_rng_vars.discard(name)
+        return
+    if (
+        UNSAFE_CTOR_RE.search(rhs)
+        or UNSAFE_SPLITTABLE_CTOR_RE.search(rhs)
+        or re.search(r'\b(?:java\.util\.concurrent\.)?ThreadLocalRandom\.current\s*\(', rhs)
+    ):
+        insecure_rng_vars.add(name)
+
+def unsafe_source(statement: str, insecure_rng_vars, sensitive: bool, line_sensitive: bool):
+    for regex in (THREAD_LOCAL_CALL_RE, MATH_RANDOM_RE):
+        match = regex.search(statement)
+        if match:
+            return match.group(0).strip()
+    split_direct = re.search(
+        rf'\bnew\s+(?:java\.util\.)?SplittableRandom\s*\([^)]*\)\s*\.(?:{"|".join(RNG_METHODS)})\s*\(',
+        statement,
+    )
+    if split_direct:
+        return split_direct.group(0).strip()
+    ctor = UNSAFE_CTOR_RE.search(statement)
+    if ctor:
+        return ctor.group(0).strip()
+    for name in sorted(insecure_rng_vars):
+        match = rng_method_pattern(name).search(statement)
+        if match:
+            return match.group(0).strip()
+    predictable = PREDICTABLE_SOURCE_RE.search(statement)
+    if predictable and sensitive and (line_sensitive or TOKEN_MATERIAL_RE.search(statement)):
+        return predictable.group(0).strip()
+    return None
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not any(token in text for token in (
+        'Random', 'ThreadLocalRandom', 'Math.random', 'currentTimeMillis', 'nanoTime',
+        'Instant.now()', 'Date().getTime', 'identityHashCode', 'ProcessHandle.current()',
+    )):
+        return
+    lines = text.splitlines()
+    insecure_rng_vars = set()
+    method_stack = []
+    brace_depth = 0
+    seen = set()
+    for idx, raw in enumerate(lines, start=1):
+        raw_statement = strip_line_comments(raw).strip()
+        while method_stack and brace_depth < method_stack[-1][1]:
+            method_stack.pop()
+        method_name = starts_method(raw_statement)
+        opens = raw_statement.count('{')
+        closes = raw_statement.count('}')
+        if method_name:
+            method_stack.append((method_name, brace_depth + max(opens, 1)))
+        current_method = method_stack[-1][0] if method_stack else ''
+        if has_ignore(lines, idx) or not raw_statement:
+            brace_depth += opens - closes
+            continue
+        statement = logical_statement(lines, idx)
+        update_insecure_rng_vars(statement, insecure_rng_vars)
+        line_sensitive = has_security_context(statement, '')
+        sensitive = line_sensitive or has_security_context('', current_method)
+        source = unsafe_source(statement, insecure_rng_vars, sensitive, line_sensitive)
+        if source and sensitive:
+            key = (relpath(path), idx, source)
+            if key not in seen:
+                seen.add(key)
+                issues.append((relpath(path), idx, f"{source_line(lines, idx)}  [{source} in security-sensitive generation context]"))
+        brace_depth += opens - closes
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:25]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 run_kotlin_type_narrowing_checks() {
   if [[ "$HAS_KOTLIN_FILES" -ne 1 ]]; then
     return 0
@@ -3147,7 +3408,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_run 4; then
 print_header "4. SECURITY"
-print_category "Detects: Insecure SSL, weak hashes, http://, insecure deserialization, shell command execution, Random for secrets, request path traversal, response header injection, open redirects, outbound URL SSRF, unsafe archive extraction" \
+print_category "Detects: Insecure SSL, weak hashes, http://, insecure deserialization, shell command execution, security-sensitive non-crypto randomness, request path traversal, response header injection, open redirects, outbound URL SSRF, unsafe archive extraction" \
   "Security misconfigurations expose users to attacks and data breaches"
 
 print_subheader "SSL verification disabled (CRITICAL)"
@@ -3166,9 +3427,7 @@ print_subheader "Java deserialization"
 deser=$(( $(ast_search 'new java.io.ObjectInputStream($$).readObject()' || echo 0) + $("${GREP_RN[@]}" -e "ObjectInputStream\(.+\)\.readObject\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
 if [ "$deser" -gt 0 ]; then print_finding "warning" "$deser" "Object deserialization detected"; fi
 
-print_subheader "java.util.Random usage"
-rand=$(( $(ast_search 'new java.util.Random($$)' || echo 0) + $("${GREP_RN[@]}" -e "new[[:space:]]+Random\(" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
-if [ "$rand" -gt 0 ]; then print_finding "info" "$rand" "Random used; prefer SecureRandom for secrets"; fi
+run_security_randomness_checks
 
 print_subheader "Runtime.exec command execution"
 cmd_exec=$("${GREP_RN[@]}" -e "Runtime\\.getRuntime\\(\\)\\.exec" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
