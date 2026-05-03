@@ -1649,6 +1649,217 @@ PY
 )
 }
 
+run_security_randomness_checks() {
+  print_subheader "Security-sensitive non-crypto randomness"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable security randomness checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Security token generated with non-cryptographic randomness" "Use :crypto.strong_rand_bytes/1 plus Base.url_encode64/2, or a framework helper built on cryptographic randomness, for tokens, sessions, CSRF values, OTPs, salts, and API keys."
+        else
+          print_finding "good" "No security-sensitive non-crypto randomness detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.hg', '.svn', '_build', 'deps', '.elixir_ls', '.hex', '.fetch', 'node_modules', 'dist', 'build', 'cover', 'doc', 'priv/static', '.cache', 'tmp', 'log'}
+EXTS = {'.ex', '.exs', '.eex', '.heex', '.leex', '.sface'}
+VAR_RE = r'[a-z_][A-Za-z0-9_?!]*'
+ASSIGN_RE = re.compile(rf'^\s*({VAR_RE})\s*=\s*(.+)')
+SECURITY_NAME_RE = re.compile(
+    r'(?:token|secret|password|passwd|pwd|session|cookie|csrf|xsrf|otp|totp|mfa|'
+    r'nonce|salt|api[_-]?key|access[_-]?key|private[_-]?key|public[_-]?key|'
+    r'\bkey\b|auth|bearer|credential|reset|invite|verification|confirm|'
+    r'magic[_-]?link|recovery|signature|\bsig\b)',
+    re.IGNORECASE,
+)
+UNSAFE_RANDOM_RE = re.compile(
+    r'(?<![A-Za-z0-9_]):(?:rand|random)\.(?:uniform(?:_s)?|bytes|seed|seed_s)\b|'
+    r'\bEnum\.(?:random|take_random|shuffle)\s*\(|'
+    r'\bSystem\.unique_integer\s*\(|'
+    r'\b:erlang\.(?:unique_integer|monotonic_time|system_time|phash2)\s*\(',
+    re.IGNORECASE,
+)
+SAFE_RANDOM_RE = re.compile(
+    r'(?<![A-Za-z0-9_]):crypto\.strong_rand_bytes\s*\(|'
+    r'\b(?:safe_token|secure_token|secure_random|crypto_random|'
+    r'generate_secure_token|Phoenix\.Token\.sign|Plug\.Crypto)\b',
+    re.IGNORECASE,
+)
+SECURITY_SINK_RE = re.compile(
+    r'\b(?:put_session|configure_session|put_resp_cookie|put_private|assign)\s*\([^#\n]*(?:token|session|csrf|xsrf|otp|nonce|salt|api[_-]?key|secret|auth|credential)|'
+    r'\b(?:Base\.encode(?:16|32|64)!?|Integer\.to_string|to_string)\s*\(',
+    re.IGNORECASE,
+)
+
+def should_skip(path: Path) -> bool:
+    try:
+        parts = path.relative_to(BASE_DIR).parts
+    except ValueError:
+        parts = path.parts
+    return any(part in SKIP_DIRS for part in parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in EXTS:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in EXTS and not should_skip(path):
+            yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '#':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = strip_line_comments(lines[idx])
+    balance = statement.count('(') + statement.count('[') + statement.count('{')
+    balance -= statement.count(')') + statement.count(']') + statement.count('}')
+    has_end = balance <= 0 and not statement.rstrip().endswith(('=', '|>', ',', '->'))
+    lookahead = idx + 1
+    while lookahead < len(lines) and lookahead < idx + 8:
+        upcoming = strip_line_comments(lines[lookahead]).lstrip()
+        if balance <= 0 and has_end and not upcoming.startswith('|>'):
+            break
+        next_line = strip_line_comments(lines[lookahead]).strip()
+        statement += ' ' + next_line
+        balance += next_line.count('(') + next_line.count('[') + next_line.count('{')
+        balance -= next_line.count(')') + next_line.count(']') + next_line.count('}')
+        has_end = balance <= 0 and not statement.rstrip().endswith(('=', '|>', ',', '->'))
+        lookahead += 1
+    return statement
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip().replace('\t', ' ')
+    return ''
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def is_continuation_line(lines, line_no):
+    idx = line_no - 2
+    while idx >= 0:
+        previous = strip_line_comments(lines[idx]).strip()
+        if not previous:
+            idx -= 1
+            continue
+        return previous.endswith(('=', '|>', ',', '->'))
+    return False
+
+def function_context(lines, line_no):
+    start = max(0, line_no - 14)
+    for line in reversed(lines[start:line_no]):
+        clean = strip_line_comments(line)
+        if re.search(r'\bdefp?\s+[A-Za-z_][A-Za-z0-9_?!]*', clean):
+            return clean
+    return ''
+
+def is_security_context(statement: str, variable: str, lines, line_no) -> bool:
+    if variable and SECURITY_NAME_RE.search(variable):
+        return True
+    if SECURITY_NAME_RE.search(statement):
+        return True
+    return bool(SECURITY_NAME_RE.search(function_context(lines, line_no)))
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not UNSAFE_RANDOM_RE.search(text):
+        return
+    lines = text.splitlines()
+    seen = set()
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        if is_continuation_line(lines, idx):
+            continue
+        statement = logical_statement(lines, idx).strip()
+        if not statement or not UNSAFE_RANDOM_RE.search(statement):
+            continue
+        if SAFE_RANDOM_RE.search(statement):
+            continue
+        assignment = ASSIGN_RE.search(statement)
+        variable = assignment.group(1) if assignment else ''
+        security_context = is_security_context(statement, variable, lines, idx)
+        if not security_context:
+            continue
+        if not (assignment or SECURITY_SINK_RE.search(statement) or SECURITY_NAME_RE.search(statement) or security_context):
+            continue
+        key = (relpath(path), idx)
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append((relpath(path), idx, source_line(lines, idx)))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:5]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 persist_metric_json() {
   local key=$1; local payload=$2
   [[ -n "$key" && -n "$payload" ]] || return 0
@@ -1954,7 +2165,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if run_category 4; then
 print_header "4. SECURITY VULNERABILITIES"
-print_category "Detects: code injection, request path traversal, open redirects, response header injection, outbound URL SSRF, archive traversal, SQL injection, crypto misuse, hardcoded secrets" \
+print_category "Detects: code injection, request path traversal, open redirects, response header injection, outbound URL SSRF, archive traversal, SQL injection, crypto misuse, insecure token randomness, hardcoded secrets" \
   "Security issues in Elixir/Phoenix applications."
 
 print_subheader "Code execution via Code.eval_string / Code.eval_quoted"
@@ -2019,6 +2230,8 @@ if [ "$total" -gt 0 ]; then
   print_finding "warning" "$total" "Weak hash algorithm (:md5 or :sha)" "Use :sha256 or :sha3_256 for security-sensitive hashing"
   show_detailed_finding ":crypto\.(hash|hmac)\(:(md5|sha)\b|:md5\b" 3
 fi
+
+run_security_randomness_checks
 
 print_subheader "Atom creation from user input (atom table exhaustion)"
 count=$("${GREP_RN[@]}" -e "String\.to_atom\b" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
