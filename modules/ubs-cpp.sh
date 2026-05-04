@@ -882,6 +882,267 @@ PY
 )
 }
 
+run_security_randomness_checks() {
+  print_subheader "Security-sensitive non-crypto randomness"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable security randomness checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Security token generated with non-cryptographic randomness" "Use RAND_bytes/RAND_priv_bytes, getrandom, BCryptGenRandom, randombytes_buf, or another OS/crypto-backed random byte source for tokens, nonces, salts, OTPs, and reset codes"
+        else
+          print_finding "good" "No security-sensitive non-crypto randomness detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.hg', '.svn', 'vendor', 'node_modules', '.cache', 'build', 'cmake-build-debug', 'cmake-build-release', 'dist', 'out'}
+EXTS = {'.c', '.cc', '.cpp', '.cxx', '.c++', '.h', '.hh', '.hpp', '.hxx', '.ipp', '.tpp', '.ixx', '.cppm', '.mpp'}
+
+SECURITY_CONTEXT_RE = re.compile(
+    r'\b(?:session|csrf|xsrf|token|secret|nonce|salt|otp|password|passwd|pwd|reset|invite|'
+    r'invitation|verification|verify|auth|oauth|bearer|credential|jwt|cookie|signature|'
+    r'signing|encrypt(?:ion)?|decrypt(?:ion)?|api\s*key|access\s*key|private\s*key|public\s*key|'
+    r'recovery\s*code|backup\s*code|totp|mfa|2fa)\b',
+    re.IGNORECASE,
+)
+UNSAFE_RANDOM_CALL_RE = re.compile(
+    r'(?<![A-Za-z0-9_:])(?:std::)?(?:rand|srand)\s*\('
+    r'|(?<![A-Za-z0-9_:])(?:random|srandom|drand48|erand48|lrand48|mrand48|srand48)\s*\('
+)
+PREDICTABLE_SOURCE_RE = re.compile(
+    r'(?<![A-Za-z0-9_:])(?:std::)?time\s*\('
+    r'|\b(?:std::chrono::)?(?:system_clock|steady_clock|high_resolution_clock)::now\s*\('
+    r'|(?<![A-Za-z0-9_:])clock\s*\('
+    r'|(?<![A-Za-z0-9_:])(?:getpid|GetCurrentProcessId)\s*\('
+    r'|\bstd::hash\s*<'
+)
+INSECURE_ENGINE_TYPE_RE = re.compile(
+    r'\b(?:std::|boost::random::)?(?:mt19937(?:_64)?|minstd_rand(?:0)?|default_random_engine|'
+    r'ranlux(?:24|48)(?:_base)?|knuth_b|linear_congruential_engine|mersenne_twister_engine|'
+    r'subtract_with_carry_engine|random_device)\b'
+)
+ENGINE_DECL_RE = re.compile(
+    r'\b(?:std::|boost::random::)?(?:mt19937(?:_64)?|minstd_rand(?:0)?|default_random_engine|'
+    r'ranlux(?:24|48)(?:_base)?|knuth_b|linear_congruential_engine|mersenne_twister_engine|'
+    r'subtract_with_carry_engine|random_device)(?:\s*<[^;{}()]*>)?\s+([A-Za-z_][A-Za-z0-9_]*)\b'
+)
+AUTO_ENGINE_DECL_RE = re.compile(
+    r'\bauto(?:\s+const)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:std::|boost::random::)?'
+    r'(?:mt19937(?:_64)?|minstd_rand(?:0)?|default_random_engine|ranlux(?:24|48)(?:_base)?|knuth_b|random_device)\b'
+)
+DISTRIBUTION_RE = re.compile(
+    r'\b(?:std::|boost::random::)?(?:uniform_(?:int|real)_distribution|normal_distribution|'
+    r'bernoulli_distribution|binomial_distribution|poisson_distribution|discrete_distribution)\b'
+)
+
+def should_skip(path: Path) -> bool:
+    try:
+        parts = path.relative_to(BASE_DIR).parts
+    except ValueError:
+        parts = path.parts
+    return any(part in SKIP_DIRS for part in parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in EXTS:
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in EXTS and not should_skip(path):
+            yield path
+
+def code_without_comments_or_strings(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            out.append(' ')
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(' ')
+            i += 1
+            continue
+        if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def strip_block_comments_preserve_lines(text: str) -> str:
+    out = []
+    i = 0
+    in_comment = False
+    while i < len(text):
+        if in_comment:
+            if text.startswith('*/', i):
+                out.extend('  ')
+                i += 2
+                in_comment = False
+                continue
+            out.append('\n' if text[i] == '\n' else ' ')
+            i += 1
+            continue
+        if text.startswith('/*', i):
+            out.extend('  ')
+            i += 2
+            in_comment = True
+            continue
+        out.append(text[i])
+        i += 1
+    return ''.join(out)
+
+def normalize_security_text(text: str) -> str:
+    text = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', text)
+    text = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', text)
+    text = re.sub(r'[_\-.]+', ' ', text)
+    return text
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def logical_statement(lines, line_no):
+    idx = line_no - 1
+    statement = code_without_comments_or_strings(lines[idx])
+    balance = statement.count('(') - statement.count(')')
+    has_end = ';' in statement or '{' in statement or '}' in statement
+    lookahead = idx + 1
+    while (balance > 0 or not has_end) and lookahead < len(lines) and lookahead < idx + 8:
+        next_line = code_without_comments_or_strings(lines[lookahead]).strip()
+        statement += ' ' + next_line
+        balance += next_line.count('(') - next_line.count(')')
+        has_end = has_end or ';' in next_line or '{' in next_line or '}' in next_line
+        lookahead += 1
+    return statement
+
+def context_around(lines, line_no):
+    start = max(0, line_no - 8)
+    end = min(len(lines), line_no + 8)
+    return '\n'.join(code_without_comments_or_strings(line) for line in lines[start:end])
+
+def has_security_context(statement, context):
+    normalized = normalize_security_text(statement + '\n' + context)
+    return bool(SECURITY_CONTEXT_RE.search(normalized))
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip().replace('\t', ' ')
+    return ''
+
+def relpath(path):
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def collect_insecure_rng_vars(lines):
+    vars_found = set()
+    for idx, _ in enumerate(lines, start=1):
+        statement = logical_statement(lines, idx)
+        for match in ENGINE_DECL_RE.finditer(statement):
+            vars_found.add(match.group(1))
+        for match in AUTO_ENGINE_DECL_RE.finditer(statement):
+            vars_found.add(match.group(1))
+    return vars_found
+
+def uses_insecure_rng_var(statement, rng_vars):
+    for var in rng_vars:
+        escaped = re.escape(var)
+        if re.search(rf'\b[A-Za-z_][A-Za-z0-9_]*\s*\(\s*{escaped}\b', statement):
+            return True
+        if DISTRIBUTION_RE.search(statement) and re.search(rf'\b{escaped}\b', statement):
+            return True
+        if re.search(rf'\b{escaped}\s*\(', statement):
+            return True
+    return False
+
+def random_issue_reason(statement, rng_vars):
+    if UNSAFE_RANDOM_CALL_RE.search(statement):
+        return 'weak random API'
+    if INSECURE_ENGINE_TYPE_RE.search(statement):
+        return 'non-cryptographic random engine'
+    if uses_insecure_rng_var(statement, rng_vars):
+        return 'non-cryptographic random engine output'
+    if PREDICTABLE_SOURCE_RE.search(statement):
+        return 'predictable seed or token material'
+    return ''
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not (
+        UNSAFE_RANDOM_CALL_RE.search(text)
+        or PREDICTABLE_SOURCE_RE.search(text)
+        or INSECURE_ENGINE_TYPE_RE.search(text)
+    ):
+        return
+    raw_lines = text.splitlines()
+    code_lines = strip_block_comments_preserve_lines(text).splitlines()
+    while len(code_lines) < len(raw_lines):
+        code_lines.append('')
+    rng_vars = collect_insecure_rng_vars(code_lines)
+    seen = set()
+    for idx, _ in enumerate(code_lines, start=1):
+        if has_ignore(raw_lines, idx):
+            continue
+        statement = logical_statement(code_lines, idx)
+        context = context_around(code_lines, idx)
+        if not has_security_context(statement, context):
+            continue
+        if not random_issue_reason(statement, rng_vars):
+            continue
+        key = (relpath(path), idx)
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append((relpath(path), idx, source_line(raw_lines, idx)))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:5]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 run_path_traversal_checks() {
   print_subheader "Request-derived filesystem paths"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -2891,7 +3152,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_skip 7; then
 print_header "7. UNDEFINED BEHAVIOR RISK ZONE"
-print_category "Detects: dangerous casts, unsafe C APIs, request path traversal, open redirects, response header injection, outbound URL SSRF, archive traversal, delete mismatch" \
+print_category "Detects: dangerous casts, unsafe C APIs, security-sensitive non-crypto randomness, request path traversal, open redirects, response header injection, outbound URL SSRF, archive traversal, delete mismatch" \
   "UB can pass tests and still crash in production"
 
 print_subheader "Dangerous functions (strcpy/gets/scanf/sprintf)"
@@ -2914,6 +3175,7 @@ run_open_redirect_checks
 run_response_header_checks
 run_outbound_url_checks
 run_archive_extraction_checks
+run_security_randomness_checks
 
 print_subheader "reinterpret_cast/const_cast occurrences"
 count=$(search_count "reinterpret_cast<|const_cast<")

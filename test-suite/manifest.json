@@ -5403,6 +5403,65 @@
       }
     },
     {
+      "id": "cpp-security-randomness-buggy",
+      "description": "C/C++ security tokens, CSRF nonces, API keys, password resets, and invite codes should not use rand, random, random_device, Mersenne Twister engines, time, or process IDs.",
+      "path": "test-suite/cpp/security_randomness_buggy",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "security",
+        "randomness",
+        "buggy"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Security token generated with non-cryptographic randomness"
+        ]
+      }
+    },
+    {
+      "id": "cpp-security-randomness-clean",
+      "description": "C/C++ crypto-backed token helpers should stay clean while harmless display randomness and documentation mentions remain allowed.",
+      "path": "test-suite/cpp/security_randomness_clean",
+      "language": "cpp",
+      "tags": [
+        "cpp",
+        "security",
+        "randomness",
+        "clean"
+      ],
+      "args": [
+        "--only=cpp",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Security token generated with non-cryptographic randomness"
+        ]
+      }
+    },
+    {
       "id": "cpp-archive-extraction-buggy",
       "description": "C++ archive extraction fixture with unvalidated entry-name path joins.",
       "path": "test-suite/cpp/archive_extraction_buggy",
