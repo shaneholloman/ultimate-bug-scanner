@@ -6821,10 +6821,235 @@ if [ "$tls_verification_count" -gt 0 ]; then
 fi
 
 print_subheader "Hardcoded secrets/credentials"
-count=$("${GREP_RNI[@]}" -e "\b(password|api_?key|secret|token)\b[[:space:]]*[:=][[:space:]]*['\"]([^'\"]+)['\"]" "$PROJECT_DIR" 2>/dev/null |   (grep -v "process\.env" || true) | count_lines)
-if [ "$count" -gt 0 ]; then
-  print_finding "critical" "$count" "Possible hardcoded secrets" "Use environment variables or secret managers"
-  show_detailed_finding "\b(password|api_?key|secret|token)\b[[:space:]]*[:=][[:space:]]*['\"]([^'\"]+)['\"]" 3
+hardcoded_secret_report=$(python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+literal_pattern = r"""(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)"""
+env_fallback_re = re.compile(
+    r'\bprocess\.env(?:\.([A-Za-z_$][\w$]*)|\[\s*[\'"]([^\'"]+)[\'"]\s*\])'
+    r'\s*(?:\|\||\?\?)\s*(' + literal_pattern + r')'
+)
+declaration_re = re.compile(
+    r'\b(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(.+)'
+)
+property_re = re.compile(
+    r'(?:^|[{,]\s*)([A-Za-z_$][\w$]*|[\'"][^\'"]+[\'"])\s*:\s*(.+)'
+)
+assignment_re = re.compile(
+    r'(?:^|[;\s])(?:this\.)?([A-Za-z_$][\w$]*)\s*=\s*(.+)'
+)
+direct_literal_re = re.compile(r'^\s*(' + literal_pattern + r')')
+secret_word_re = re.compile(
+    r'(?:'
+    r'\bsecret\b|\bpassword\b|\bpasswd\b|\bpwd\b|\btoken\b|\bapi[_-]?key\b|'
+    r'\bprivate[_-]?key\b|\bclient[_-]?secret\b|\bwebhook[_-]?secret\b|'
+    r'\bjwt[_-]?secret\b|\bnext[_-]?auth[_-]?secret\b|\bnextauth[_-]?secret\b|'
+    r'\baccess[_-]?token\b|\brefresh[_-]?token\b|\bsession[_-]?secret\b|'
+    r'\bcookie[_-]?secret\b|\bsigning[_-]?secret\b|\bencryption[_-]?key\b|'
+    r'\bcredential(?:s)?\b'
+    r')'
+)
+sensitive_phrase_re = re.compile(
+    r'\b(?:'
+    r'api\s+key|private\s+key|client\s+secret|webhook\s+secret|'
+    r'jwt\s+secret|next\s+auth\s+secret|nextauth\s+secret|'
+    r'access\s+token|refresh\s+token|session\s+secret|cookie\s+secret|'
+    r'signing\s+secret|encryption\s+key|secret\s+key\s+base'
+    r')\b'
+)
+
+placeholder_values = {
+    'example', 'sample', 'dummy', 'placeholder', 'changeme', 'change_me',
+    'not_a_secret', 'your_secret_here', 'your-api-key', 'localhost',
+    '127.0.0.1', 'http://localhost', 'https://localhost', 'https://example.com',
+}
+
+def strip_line_comments(source_line):
+    out = []
+    quote = ''
+    escape = False
+    idx = 0
+    while idx < len(source_line):
+        ch = source_line[idx]
+        nxt = source_line[idx + 1] if idx + 1 < len(source_line) else ''
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            idx += 1
+            continue
+        if ch in ('"', "'", '`'):
+            quote = ch
+            out.append(ch)
+            idx += 1
+            continue
+        if ch == '/' and nxt == '/':
+            break
+        if ch == '/' and nxt == '*':
+            end = source_line.find('*/', idx + 2)
+            if end == -1:
+                break
+            idx = end + 2
+            continue
+        out.append(ch)
+        idx += 1
+    return ''.join(out)
+
+def code_line(source_line):
+    stripped = source_line.strip()
+    if not stripped or stripped.startswith(("//", "/*", "*")):
+        return ""
+    return strip_line_comments(source_line)
+
+def statement_from(lines, idx, max_lines=14):
+    parts = []
+    paren_balance = 0
+    brace_balance = 0
+    saw_code = False
+    for line_idx in range(idx, min(len(lines), idx + max_lines)):
+        current = code_line(lines[line_idx]).strip()
+        if not current:
+            continue
+        parts.append(current)
+        saw_code = True
+        paren_balance += current.count('(') - current.count(')')
+        brace_balance += current.count('{') - current.count('}')
+        if line_idx > idx and paren_balance <= 0 and brace_balance <= 0:
+            break
+        if ';' in current and paren_balance <= 0 and brace_balance <= 0:
+            break
+    return ' '.join(parts) if saw_code else ""
+
+def normalize_name(name):
+    cleaned = name.strip().strip('"\'`')
+    cleaned = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', cleaned)
+    cleaned = re.sub(r'[^A-Za-z0-9]+', '_', cleaned)
+    return cleaned.lower().strip('_')
+
+def is_sensitive_name(name):
+    normalized = normalize_name(name)
+    spaced = normalized.replace('_', ' ')
+    return bool(secret_word_re.search(spaced) or secret_word_re.search(normalized) or sensitive_phrase_re.search(spaced))
+
+def unquote_literal(token):
+    token = token.strip()
+    if len(token) < 2 or token[0] not in ('"', "'", '`') or token[-1] != token[0]:
+        return ""
+    return token[1:-1]
+
+def is_risky_literal(token):
+    value = unquote_literal(token)
+    if token.startswith('`') and '${' in value:
+        return False
+    compact = value.strip()
+    if len(compact) < 8:
+        return False
+    lowered = compact.lower()
+    if lowered in placeholder_values:
+        return False
+    if 'example.' in lowered or lowered.startswith(('example_', 'sample_', 'dummy_')):
+        return False
+    if not re.search(r'[A-Za-z0-9]', compact):
+        return False
+    return True
+
+def first_direct_literal(expr):
+    match = direct_literal_re.search(expr)
+    if not match:
+        return ""
+    token = match.group(1)
+    return token if is_risky_literal(token) else ""
+
+def env_fallback_literal(statement):
+    for match in env_fallback_re.finditer(statement):
+        env_name = match.group(1) or match.group(2) or ""
+        token = match.group(3)
+        if is_sensitive_name(env_name) and is_risky_literal(token):
+            return token
+    return ""
+
+def assignment_literal(statement):
+    for regex in (declaration_re, property_re, assignment_re):
+        for match in regex.finditer(statement):
+            name, expr = match.group(1), match.group(2)
+            if is_sensitive_name(name) and first_direct_literal(expr):
+                return match.group(0)
+    return ""
+
+def has_ignore(lines, idx):
+    if 'ubs:ignore' in lines[idx]:
+        return True
+    return idx > 0 and 'ubs:ignore' in lines[idx - 1]
+
+issues = []
+if root.is_file():
+    candidates = [root]
+    sample_root = root.parent
+else:
+    candidates = []
+    sample_root = root
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            candidates.append(Path(dirpath) / fname)
+
+for path in candidates:
+    if path.suffix.lower() not in exts:
+        continue
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        continue
+    seen_lines = set()
+    for idx, line in enumerate(lines):
+        stripped = code_line(line).strip()
+        if not stripped or has_ignore(lines, idx):
+            continue
+        if not is_sensitive_name(stripped):
+            continue
+        if re.match(r'(?:export\s+)?(?:async\s+)?function\b', stripped) and not env_fallback_literal(stripped):
+            continue
+        statement = statement_from(lines, idx)
+        if not statement or 'ubs:ignore' in statement:
+            continue
+        if not (env_fallback_literal(statement) or assignment_literal(statement)):
+            continue
+        if idx in seen_lines:
+            continue
+        seen_lines.add(idx)
+        try:
+            rel = path.relative_to(sample_root)
+        except ValueError:
+            rel = path
+        issues.append((str(rel), idx + 1, stripped.replace('\t', ' ')))
+
+print(len(issues))
+for entry in issues[:25]:
+    print('\t'.join(str(part) for part in entry))
+PY
+)
+hardcoded_secret_count=$(printf '%s\n' "$hardcoded_secret_report" | head -n1 | awk 'END{print $0+0}')
+hardcoded_secret_samples=$(printf '%s\n' "$hardcoded_secret_report" | tail -n +2)
+if [ "$hardcoded_secret_count" -gt 0 ]; then
+  print_finding "critical" "$hardcoded_secret_count" "Possible hardcoded secrets" "Use environment variables or secret managers; do not keep literal fallbacks for secret env vars"
+  sample_limit=3
+  while IFS=$'\t' read -r sample_path sample_line sample_text; do
+    [ -z "$sample_path" ] && continue
+    print_code_sample "$sample_path" "$sample_line" "$sample_text"
+    sample_limit=$((sample_limit - 1))
+    [ "$sample_limit" -le 0 ] && break
+  done <<<"$hardcoded_secret_samples"
 fi
 
 print_subheader "RegExp denial of service (ReDoS) risk"

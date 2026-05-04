@@ -3600,6 +3600,67 @@
       }
     },
     {
+      "id": "js-typescript-hardcoded-secrets-buggy",
+      "description": "TypeScript auth and integration config should not keep literal secrets or literal process.env fallbacks.",
+      "path": "test-suite/js/security/hardcoded-secrets-buggy.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "security",
+        "secrets",
+        "buggy"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Possible hardcoded secrets"
+        ]
+      }
+    },
+    {
+      "id": "js-typescript-hardcoded-secrets-clean",
+      "description": "TypeScript auth and integration config loaded from required environment variables should stay clean.",
+      "path": "test-suite/js/security/hardcoded-secrets-clean.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "security",
+        "secrets",
+        "clean"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Possible hardcoded secrets"
+        ]
+      }
+    },
+    {
       "id": "js-typescript-random-security-buggy",
       "description": "TypeScript security tokens, sessions, OTPs, nonces, and invite codes should not use Math.random().",
       "path": "test-suite/js/security/random-security-buggy.ts",
