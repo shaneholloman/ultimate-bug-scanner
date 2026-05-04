@@ -32,4 +32,3 @@ class CleanKotlinRandomSecurity {
         return uiRandom.nextInt(8)
     }
 }
-

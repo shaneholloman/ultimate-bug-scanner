@@ -29,4 +29,3 @@ class BuggyKotlinRandomSecurity {
         return Random.Default.nextInt(100000, 999999).toString()
     }
 }
-
