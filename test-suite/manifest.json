@@ -9347,6 +9347,65 @@
       }
     },
     {
+      "id": "elixir-hardcoded-secrets-buggy",
+      "description": "Elixir Phoenix/Guardian config should not hardcode secret_key_base, signing salts, JWT secrets, API keys, or env fallback secrets.",
+      "path": "test-suite/elixir/buggy/hardcoded_secrets.ex",
+      "language": "elixir",
+      "tags": [
+        "elixir",
+        "security",
+        "secrets",
+        "buggy"
+      ],
+      "args": [
+        "--only=elixir",
+        "--fail-on-warning",
+        "--skip=1,2,3,5,6,7,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Hardcoded secrets/tokens in source"
+        ]
+      }
+    },
+    {
+      "id": "elixir-hardcoded-secrets-clean",
+      "description": "Elixir Phoenix/Guardian config using runtime env and non-secret display defaults should stay clean.",
+      "path": "test-suite/elixir/clean/hardcoded_secrets.ex",
+      "language": "elixir",
+      "tags": [
+        "elixir",
+        "security",
+        "secrets",
+        "clean"
+      ],
+      "args": [
+        "--only=elixir",
+        "--fail-on-warning",
+        "--skip=1,2,3,5,6,7,8,9,10,11,12,13,14,15,16"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Hardcoded secrets/tokens in source"
+        ]
+      }
+    },
+    {
       "id": "elixir-security-randomness-buggy",
       "description": "Elixir tokens, sessions, CSRF values, and API keys should not use :rand, :random, Enum.random, or System.unique_integer.",
       "path": "test-suite/elixir/buggy/security_randomness.ex",

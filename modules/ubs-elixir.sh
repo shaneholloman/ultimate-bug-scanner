@@ -1860,6 +1860,195 @@ PY
 )
 }
 
+run_hardcoded_secret_checks() {
+  print_subheader "Hardcoded secrets/tokens/passwords"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable hardcoded secret checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Hardcoded secrets/tokens in source" "Use runtime environment variables, secret stores, or release-time config for Phoenix secret_key_base, signing salts, JWT/API secrets, and token keys."
+        else
+          print_finding "good" "No hardcoded secrets/tokens detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', '.hg', '.svn', '_build', 'deps', '.elixir_ls', '.hex', '.fetch', 'node_modules', 'dist', 'build', 'cover', 'doc', 'priv/static', '.cache', 'tmp', 'log'}
+EXTS = {'.ex', '.exs', '.eex', '.heex', '.leex', '.sface'}
+
+SECRET_KEY_RE = re.compile(
+    r'(?:secret[_-]?key[_-]?base|signing[_-]?salt|encryption[_-]?salt|guardian[_-]?secret|'
+    r'joken[_-]?secret|jwt[_-]?secret|client[_-]?secret|webhook[_-]?secret|api[_-]?key|'
+    r'private[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?secret|cookie[_-]?secret|'
+    r'(?:^|[_-])secret(?:$|[_-])|password|passwd|pwd|token|credential)',
+    re.IGNORECASE,
+)
+ASSIGNMENT_SECRET_RE = re.compile(
+    r'(?P<key>@?[A-Za-z_][A-Za-z0-9_?!]*(?:[_-][A-Za-z0-9_?!]+)*)\s*'
+    r'(?::|=>|=)\s*'
+    r'(?P<quote>["\'])(?P<value>[^"\'\n]{8,})(?P=quote)'
+)
+MODULE_ATTR_SECRET_RE = re.compile(
+    r'(?P<key>@[A-Za-z_][A-Za-z0-9_?!]*(?:[_-][A-Za-z0-9_?!]+)*)\s+'
+    r'(?P<quote>["\'])(?P<value>[^"\'\n]{8,})(?P=quote)'
+)
+CONFIG_SECRET_RE = re.compile(
+    r'\bconfig\s+:[A-Za-z_][A-Za-z0-9_?!]*(?:\s*,\s*[A-Za-z0-9_.:]+)*\s*,\s*'
+    r'(?P<key>:[A-Za-z_][A-Za-z0-9_?!]*(?:[_-][A-Za-z0-9_?!]+)*)\s*,\s*'
+    r'(?P<quote>["\'])(?P<value>[^"\'\n]{8,})(?P=quote)'
+)
+ENV_FALLBACK_RE = re.compile(
+    r'\bSystem\.get_env\s*\(\s*(?P<env_quote>["\'])(?P<env>[A-Za-z0-9_]+)(?P=env_quote)\s*,\s*'
+    r'(?P<quote>["\'])(?P<value>[^"\'\n]{8,})(?P=quote)\s*\)'
+)
+LOW_VALUE_LITERAL_RE = re.compile(
+    r'^(?:example|sample|dummy|placeholder|change[_-]?me|please[_-]?change|'
+    r'localhost|127\.0\.0\.1|https?://example\.com)$',
+    re.IGNORECASE,
+)
+
+def should_skip(path: Path) -> bool:
+    try:
+        rel_parts = path.relative_to(BASE_DIR).parts
+    except ValueError:
+        rel_parts = path.parts
+    if any(part in SKIP_DIRS for part in rel_parts):
+        return True
+    normalized = '/'.join(rel_parts)
+    return (
+        '/test/' in f'/{normalized}/'
+        or normalized.endswith('_test.exs')
+        or normalized == 'config/test.exs'
+        or normalized.endswith('/config/test.exs')
+    )
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() in EXTS and not should_skip(root):
+            yield root
+        return
+    for path in root.rglob('*'):
+        if path.is_file() and path.suffix.lower() in EXTS and not should_skip(path):
+            yield path
+
+def strip_line_comment(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    for ch in line:
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+            continue
+        if ch == '#':
+            break
+        out.append(ch)
+    return ''.join(out)
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def relpath(path: Path) -> str:
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip().replace('\t', ' ')
+    return ''
+
+def looks_like_secret_literal(value: str) -> bool:
+    raw = value.strip()
+    if len(raw) < 8:
+        return False
+    if LOW_VALUE_LITERAL_RE.search(raw):
+        return False
+    if re.fullmatch(r'[\w.-]+', raw) and raw.upper() == raw and '_' in raw:
+        return False
+    return True
+
+def analyze(path, issues):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return
+    if not (SECRET_KEY_RE.search(text) or 'System.get_env' in text):
+        return
+    lines = text.splitlines()
+    seen = set()
+    for idx, _ in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        statement = strip_line_comment(lines[idx - 1]).strip()
+        for regex in (ASSIGNMENT_SECRET_RE, MODULE_ATTR_SECRET_RE, CONFIG_SECRET_RE):
+            for match in regex.finditer(statement):
+                key = match.group('key').lstrip('@:')
+                value = match.group('value')
+                if not SECRET_KEY_RE.search(key):
+                    continue
+                if not looks_like_secret_literal(value):
+                    continue
+                issue_key = (relpath(path), idx, key)
+                if issue_key in seen:
+                    continue
+                seen.add(issue_key)
+                issues.append((relpath(path), idx, f"{source_line(lines, idx)}  [hardcoded {key}]"))
+        for match in ENV_FALLBACK_RE.finditer(statement):
+            env_name = match.group('env')
+            value = match.group('value')
+            if not (SECRET_KEY_RE.search(env_name) and looks_like_secret_literal(value)):
+                continue
+            issue_key = (relpath(path), idx, env_name)
+            if issue_key in seen:
+                continue
+            seen.add(issue_key)
+            issues.append((relpath(path), idx, f"{source_line(lines, idx)}  [literal fallback for {env_name}]"))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:5]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+)
+}
+
 persist_metric_json() {
   local key=$1; local payload=$2
   [[ -n "$key" && -n "$payload" ]] || return 0
@@ -2214,13 +2403,7 @@ if [ "$total" -gt 0 ]; then
   show_detailed_finding 'fragment\(".*#\{|Ecto\.Adapters\.SQL\.query.*".*#\{' 5
 fi
 
-print_subheader "Hardcoded secrets/tokens/passwords"
-count=$("${GREP_RNI[@]}" -e "(password|secret|api_key|token|private_key)\s*[=:]\s*\"[^\"]{8,}\"" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -v -E "test/|_test\.exs|config/test\.exs|#\s*" || true) | count_lines)
-if [ "$count" -gt 0 ]; then
-  print_finding "critical" "$count" "Hardcoded secrets/tokens in source" "Use environment variables or runtime config"
-  show_detailed_finding "(password|secret|api_key|token|private_key)\s*[=:]\s*\"[^\"]{8,}\"" 3
-fi
+run_hardcoded_secret_checks
 
 print_subheader "Weak crypto: :md5 or :sha (prefer :sha256+)"
 count=$("${GREP_RN[@]}" -e ":crypto\.(hash|hmac)\(:(md5|sha)\b" "$PROJECT_DIR" 2>/dev/null | count_lines || true)
