@@ -5184,6 +5184,275 @@ PY
   )
 }
 
+run_constant_time_compare_checks() {
+  print_subheader "Secret/token comparisons without timing-safe equality"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable timing-safe comparison checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "critical" "$a" "Secret, signature, or token compared with ==/!=" "Use hmac.Equal, subtle.ConstantTimeCompare, or a reviewed constant-time helper for bearer tokens, HMACs, CSRF values, reset secrets, API keys, and signatures"
+        else
+          print_finding "good" "No secret comparisons using ==/!= detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', 'vendor', 'node_modules', '.cache', 'bin', 'build', 'dist'}
+
+COMPARE_RE = re.compile(r'(?<![=!<>])(?P<left>.+?)\s*(?P<op>==|!=)\s*(?!=)\s*(?P<right>.+)')
+ASSIGN_RE = re.compile(r'^\s*(?:var\s+)?(?P<lhs>[A-Za-z_][A-Za-z0-9_,\s]*)\s*(?::=|=)\s*(?P<rhs>.+)$')
+IDENT_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
+SAFE_COMPARE_RE = re.compile(
+    r'\b(?:hmac\.Equal|subtle\.ConstantTimeCompare|subtle\.ConstantTimeEq)\s*\('
+    r'|\b(?:constantTimeEqual|constantTimeCompare|timingSafeEqual|timingSafeCompare|'
+    r'safeEqual|safeCompare|secureCompare)\s*\(',
+    re.IGNORECASE,
+)
+SENSITIVE_RE = re.compile(
+    r'(?:'
+    r'\b(?:token|secret|signature|sig|hmac|mac|digest|csrf|xsrf|nonce|otp|totp|mfa|reset|'
+    r'password|passwd|pwd|auth|bearer|credential|session|jwt|webhook|invite|'
+    r'verification|recovery)\b|'
+    r'\bapi\s+key\b|'
+    r'\bauthorization\b|'
+    r'\bx-signature\b'
+    r')',
+    re.IGNORECASE,
+)
+NULLISH_RE = re.compile(r'^(?:nil|true|false|0|1|""|``)$')
+SHAPE_RE = re.compile(r'\b(?:len|cap)\s*\(|\.(?:Len|Size)\s*\(')
+PURE_STRING_LITERAL_RE = re.compile(r'^\s*(?:"(?:\\.|[^"\\])*"|`[^`]*`)\s*$')
+KEYWORDS = {
+    'if', 'for', 'switch', 'case', 'return', 'var', 'const', 'func',
+    'true', 'false', 'nil', 'range', 'go', 'defer',
+}
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() == '.go':
+            yield root
+        return
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for name in filenames:
+            path = Path(dirpath) / name
+            if path.suffix.lower() == '.go' and not should_skip(path):
+                yield path
+
+def relpath(path: Path) -> str:
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    idx = 0
+    while idx < len(line):
+        ch = line[idx]
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            idx += 1
+            continue
+        if ch in ('"', "'", '`'):
+            quote = ch
+            out.append(ch)
+            idx += 1
+            continue
+        if ch == '/' and idx + 1 < len(line):
+            nxt = line[idx + 1]
+            if nxt == '/':
+                break
+            if nxt == '*':
+                end = line.find('*/', idx + 2)
+                if end == -1:
+                    break
+                idx = end + 2
+                continue
+        out.append(ch)
+        idx += 1
+    return ''.join(out)
+
+def source_line(lines, line_no):
+    idx = line_no - 1
+    if 0 <= idx < len(lines):
+        return lines[idx].strip().replace('\t', ' ')
+    return ''
+
+def has_ignore(lines, line_no):
+    idx = line_no - 1
+    return (
+        0 <= idx < len(lines) and 'ubs:ignore' in lines[idx]
+    ) or (
+        0 <= idx - 1 < len(lines) and 'ubs:ignore' in lines[idx - 1]
+    )
+
+def statement_from(lines, line_no, max_lines=8):
+    idx = line_no - 1
+    parts = []
+    balance = 0
+    for current_idx in range(idx, min(len(lines), idx + max_lines)):
+        current = strip_line_comments(lines[current_idx]).strip()
+        if not current:
+            if parts:
+                break
+            continue
+        parts.append(current)
+        balance += current.count('(') + current.count('{') - current.count(')') - current.count('}')
+        if current_idx > idx and balance <= 0:
+            break
+        if current_idx == idx and balance <= 0 and not current.endswith(('{', '(', ',')):
+            break
+    return ' '.join(parts)
+
+def split_identifier_terms(text: str) -> str:
+    text = re.sub(r'(?<=[A-Z])(?=[A-Z][a-z])', ' ', text)
+    text = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', text)
+    text = re.sub(r'[_\-.]+', ' ', text)
+    return text
+
+def is_sensitive_text(text: str) -> bool:
+    return bool(SENSITIVE_RE.search(split_identifier_terms(text)))
+
+def is_sensitive_operand_text(text: str) -> bool:
+    stripped = text.strip()
+    if PURE_STRING_LITERAL_RE.match(stripped):
+        return False
+    return is_sensitive_text(stripped)
+
+def lhs_names(lhs: str):
+    names = []
+    for part in lhs.split(','):
+        name = part.strip()
+        if name and name != '_' and IDENT_RE.fullmatch(name):
+            names.append(name)
+    return names
+
+def operand_identifiers(operand: str):
+    return {
+        token
+        for token in IDENT_RE.findall(operand)
+        if token not in KEYWORDS
+    }
+
+def clean_operand_text(operand: str) -> str:
+    clean = operand.strip()
+    clean = re.sub(r'^(?:if|for|switch|case)\s*\(?\s*', '', clean)
+    clean = re.split(r'\s*(?:&&|\|\||[;{])', clean, maxsplit=1)[0].strip()
+    while clean and clean[-1] in ';{}){':
+        clean = clean[:-1].strip()
+    return clean
+
+def operand_is_nullish_or_shape_check(operand: str) -> bool:
+    clean = clean_operand_text(operand)
+    if NULLISH_RE.match(clean):
+        return True
+    if SHAPE_RE.search(clean):
+        return True
+    if re.match(r'^[0-9]+(?:\.[0-9]+)?$', clean):
+        return True
+    return False
+
+def collect_sensitive_vars(lines):
+    sensitive = set()
+    for idx, raw in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        stripped = strip_line_comments(raw).strip()
+        if not stripped:
+            continue
+        statement = statement_from(lines, idx, max_lines=5)
+        if not statement or SAFE_COMPARE_RE.search(statement):
+            continue
+        match = ASSIGN_RE.match(statement)
+        if not match:
+            continue
+        rhs = match.group('rhs')
+        rhs_sensitive = is_sensitive_operand_text(rhs) or bool(operand_identifiers(rhs) & sensitive)
+        for name in lhs_names(match.group('lhs')):
+            if is_sensitive_text(name) or rhs_sensitive:
+                sensitive.add(name)
+    return sensitive
+
+def operand_is_sensitive(operand: str, sensitive_vars) -> bool:
+    if is_sensitive_operand_text(operand):
+        return True
+    return bool(operand_identifiers(operand) & sensitive_vars)
+
+def unsafe_secret_compare(statement: str, sensitive_vars) -> bool:
+    if SAFE_COMPARE_RE.search(statement) or 'ubs:ignore' in statement:
+        return False
+    match = COMPARE_RE.search(statement)
+    if not match:
+        return False
+    left = clean_operand_text(match.group('left'))
+    right = clean_operand_text(match.group('right'))
+    if operand_is_nullish_or_shape_check(left) or operand_is_nullish_or_shape_check(right):
+        return False
+    return operand_is_sensitive(left, sensitive_vars) or operand_is_sensitive(right, sensitive_vars)
+
+issues = []
+for path in iter_files(ROOT):
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        continue
+    if '==' not in text and '!=' not in text:
+        continue
+    lines = text.splitlines()
+    sensitive_vars = collect_sensitive_vars(lines)
+    seen = set()
+    for idx, raw in enumerate(lines, start=1):
+        if has_ignore(lines, idx):
+            continue
+        stripped = strip_line_comments(raw).strip()
+        if not stripped or ('==' not in stripped and '!=' not in stripped):
+            continue
+        statement = statement_from(lines, idx)
+        if not statement or not unsafe_secret_compare(statement, sensitive_vars):
+            continue
+        key = (relpath(path), idx)
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append((relpath(path), idx, source_line(lines, idx)))
+
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:25]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+  )
+}
+
 run_cookie_security_checks() {
   print_subheader "Auth/session cookie security"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -5673,7 +5942,7 @@ PY
 # ═══════════════════════════════════════════════════════════════════════════
 if should_skip 9; then
 print_header "9. CRYPTOGRAPHY & SECURITY"
-print_category "Detects: weak hashes, security-sensitive non-crypto randomness, InsecureSkipVerify, auth cookie flags, credentialed CORS, shell exec, dynamic SQL strings, request path traversal, response header injection, open redirects, outbound URL SSRF, unsafe archive extraction" \
+print_category "Detects: weak hashes, security-sensitive non-crypto randomness, timing-unsafe secret comparisons, InsecureSkipVerify, auth cookie flags, credentialed CORS, shell exec, dynamic SQL strings, request path traversal, response header injection, open redirects, outbound URL SSRF, unsafe archive extraction" \
   "Security footguns are easy to miss and costly to fix"
 
 print_subheader "Weak hashes (md5/sha1) and RC4"
@@ -5682,6 +5951,7 @@ if [ "$count" -gt 0 ]; then print_finding "warning" "$count" "Weak crypto primit
 
 run_security_randomness_checks
 run_hardcoded_secret_checks
+run_constant_time_compare_checks
 run_cookie_security_checks
 run_cors_credentials_checks
 

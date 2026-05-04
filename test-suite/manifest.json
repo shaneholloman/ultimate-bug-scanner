@@ -5078,6 +5078,65 @@
       }
     },
     {
+      "id": "golang-constant-time-compare-buggy",
+      "description": "Go bearer tokens, webhook signatures, CSRF values, reset secrets, and API keys should not be compared with == or !=.",
+      "path": "test-suite/golang/security/constant_time_compare_buggy.go",
+      "language": "golang",
+      "tags": [
+        "golang",
+        "security",
+        "constant-time",
+        "buggy"
+      ],
+      "args": [
+        "--only=golang",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,7,8,10,11,12,13,14,15,16,17,18,19,20,21,22"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 7
+          }
+        },
+        "require_substrings": [
+          "Secret, signature, or token compared with ==/!="
+        ]
+      }
+    },
+    {
+      "id": "golang-constant-time-compare-clean",
+      "description": "Go code using hmac.Equal, subtle.ConstantTimeCompare, or reviewed constant-time helpers for secret comparisons should stay clean.",
+      "path": "test-suite/golang/security/constant_time_compare_clean.go",
+      "language": "golang",
+      "tags": [
+        "golang",
+        "security",
+        "constant-time",
+        "clean"
+      ],
+      "args": [
+        "--only=golang",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,7,8,10,11,12,13,14,15,16,17,18,19,20,21,22"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Secret, signature, or token compared with ==/!="
+        ]
+      }
+    },
+    {
       "id": "golang-hardcoded-secrets-buggy",
       "description": "Go services should not hardcode secret literals, config-map secret values, struct secret fields, or env helper fallbacks.",
       "path": "test-suite/golang/security/hardcoded_secrets_buggy.go",
