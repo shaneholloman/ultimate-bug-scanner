@@ -1980,7 +1980,7 @@ from pathlib import Path
 ROOT = Path(sys.argv[1]).resolve()
 BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
 SKIP_DIRS = {'.git', '.gradle', '.mvn', 'build', 'target', 'out', 'node_modules', '.cache'}
-EXTS = {'.java'}
+EXTS = {'.java', '.kt', '.kts'}
 RNG_METHODS = (
     'nextInt', 'nextLong', 'nextDouble', 'nextFloat', 'nextBoolean', 'nextBytes',
     'ints', 'longs', 'doubles', 'nextGaussian',
@@ -1994,25 +1994,37 @@ SECURITY_TERMS = (
 )
 ASSIGN_RE = re.compile(
     r'^\s*(?:@[\w.]+(?:\([^)]*\))?\s*)*'
-    r'(?:(?:public|private|protected|static|final|volatile|transient|var)\s+)*'
+    r'(?:(?:public|private|protected|internal|static|final|volatile|transient|var|val)\s+)*'
     r'(?:(?:[\w.$<>?,\[\]]+\s+)+)?(?:this\.)?'
-    r'(?P<lhs>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?P<rhs>.+)'
+    r'(?P<lhs>[A-Za-z_$][A-Za-z0-9_$]*)(?:\s*:\s*[\w.$<>?,\[\]]+)?\s*=\s*(?P<rhs>.+)'
 )
 FUNC_RE = re.compile(
     r'^\s*(?:(?:public|private|protected|static|final|synchronized|abstract|native)\s+)*'
     r'(?:[A-Za-z_$][A-Za-z0-9_$.<>, ?\[\]]+\s+)+'
     r'(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\s*\([^;]*\)\s*(?:throws\s+[^{]+)?\{?'
 )
-UNSAFE_CTOR_RE = re.compile(r'\bnew\s+(?:java\.util\.)?Random\s*\(')
-UNSAFE_SPLITTABLE_CTOR_RE = re.compile(r'\bnew\s+(?:java\.util\.)?SplittableRandom\s*\(')
+KOTLIN_FUNC_RE = re.compile(
+    r'^\s*(?:(?:public|private|protected|internal|override|suspend|inline|operator|open|final)\s+)*'
+    r'fun\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\.)?(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\s*\('
+)
+UNSAFE_CTOR_RE = re.compile(r'\b(?:new\s+)?(?:(?:java\.util|kotlin\.random)\.)?Random\s*\(')
+UNSAFE_SPLITTABLE_CTOR_RE = re.compile(r'\b(?:new\s+)?(?:java\.util\.)?SplittableRandom\s*\(')
 THREAD_LOCAL_CALL_RE = re.compile(
     rf'\b(?:java\.util\.concurrent\.)?ThreadLocalRandom\.current\s*\(\s*\)\s*\.'
     rf'(?:{"|".join(RNG_METHODS)})\s*\('
 )
+KOTLIN_RANDOM_OBJECT_CALL_RE = re.compile(
+    rf'\b(?:kotlin\.random\.)?Random(?:\.Default)?\s*\.\s*(?:{"|".join(RNG_METHODS)})\s*\('
+)
+KOTLIN_RANDOM_CTOR_CALL_RE = re.compile(
+    rf'\b(?:kotlin\.random\.)?Random\s*\([^)]*\)\s*\.\s*(?:{"|".join(RNG_METHODS)})\s*\('
+)
 MATH_RANDOM_RE = re.compile(r'\bMath\.random\s*\(')
+UUID_RANDOM_RE = re.compile(r'\b(?:java\.util\.)?UUID\.randomUUID\s*\(')
 PREDICTABLE_SOURCE_RE = re.compile(
     r'\bSystem\.(?:currentTimeMillis|nanoTime)\s*\('
     r'|\bInstant\.now\s*\(\s*\)\.toEpochMilli\s*\('
+    r'|\bClock\.System\.now\s*\(\s*\)\.toEpochMilliseconds\s*\('
     r'|\bnew\s+Date\s*\(\s*\)\.getTime\s*\('
     r'|\bSystem\.identityHashCode\s*\('
     r'|\bProcessHandle\.current\s*\(\s*\)\.pid\s*\(',
@@ -2119,6 +2131,9 @@ def rng_method_pattern(name: str) -> re.Pattern:
 
 def starts_method(statement: str):
     match = FUNC_RE.match(statement)
+    if match:
+        return match.group('name')
+    match = KOTLIN_FUNC_RE.match(statement)
     return match.group('name') if match else None
 
 def update_insecure_rng_vars(statement: str, insecure_rng_vars):
@@ -2134,16 +2149,17 @@ def update_insecure_rng_vars(statement: str, insecure_rng_vars):
         UNSAFE_CTOR_RE.search(rhs)
         or UNSAFE_SPLITTABLE_CTOR_RE.search(rhs)
         or re.search(r'\b(?:java\.util\.concurrent\.)?ThreadLocalRandom\.current\s*\(', rhs)
+        or re.search(r'\b(?:kotlin\.random\.)?Random(?:\.Default)?\b', rhs)
     ):
         insecure_rng_vars.add(name)
 
 def unsafe_source(statement: str, insecure_rng_vars, sensitive: bool, line_sensitive: bool):
-    for regex in (THREAD_LOCAL_CALL_RE, MATH_RANDOM_RE):
+    for regex in (THREAD_LOCAL_CALL_RE, KOTLIN_RANDOM_OBJECT_CALL_RE, KOTLIN_RANDOM_CTOR_CALL_RE, MATH_RANDOM_RE, UUID_RANDOM_RE):
         match = regex.search(statement)
         if match:
             return match.group(0).strip()
     split_direct = re.search(
-        rf'\bnew\s+(?:java\.util\.)?SplittableRandom\s*\([^)]*\)\s*\.(?:{"|".join(RNG_METHODS)})\s*\(',
+        rf'\b(?:new\s+)?(?:java\.util\.)?SplittableRandom\s*\([^)]*\)\s*\.(?:{"|".join(RNG_METHODS)})\s*\(',
         statement,
     )
     if split_direct:
@@ -2155,6 +2171,9 @@ def unsafe_source(statement: str, insecure_rng_vars, sensitive: bool, line_sensi
         match = rng_method_pattern(name).search(statement)
         if match:
             return match.group(0).strip()
+    uuid_random = UUID_RANDOM_RE.search(statement)
+    if uuid_random:
+        return uuid_random.group(0).strip()
     predictable = PREDICTABLE_SOURCE_RE.search(statement)
     if predictable and sensitive and (line_sensitive or TOKEN_MATERIAL_RE.search(statement)):
         return predictable.group(0).strip()
@@ -2168,6 +2187,7 @@ def analyze(path, issues):
     if not any(token in text for token in (
         'Random', 'ThreadLocalRandom', 'Math.random', 'currentTimeMillis', 'nanoTime',
         'Instant.now()', 'Date().getTime', 'identityHashCode', 'ProcessHandle.current()',
+        'randomUUID', 'Clock.System.now()',
     )):
         return
     lines = text.splitlines()

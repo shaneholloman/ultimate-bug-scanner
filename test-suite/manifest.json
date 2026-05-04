@@ -6958,6 +6958,65 @@
       }
     },
     {
+      "id": "kotlin-random-security-buggy",
+      "description": "Kotlin tokens, sessions, CSRF nonces, OTPs, API keys, invites, and reset codes should not be generated from kotlin.random.Random, java.util.Random, ThreadLocalRandom, UUID.randomUUID, or timestamps.",
+      "path": "test-suite/kotlin/security_randomness_buggy",
+      "language": "java",
+      "tags": [
+        "kotlin",
+        "security",
+        "randomness",
+        "buggy"
+      ],
+      "args": [
+        "--only=java",
+        "--fail-on-warning",
+        "--skip=1,2,3,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Security token generated with non-cryptographic randomness"
+        ]
+      }
+    },
+    {
+      "id": "kotlin-random-security-clean",
+      "description": "Kotlin SecureRandom-backed token helpers should stay clean while non-security UI randomness remains allowed.",
+      "path": "test-suite/kotlin/security_randomness_clean",
+      "language": "java",
+      "tags": [
+        "kotlin",
+        "security",
+        "randomness",
+        "clean"
+      ],
+      "args": [
+        "--only=java",
+        "--fail-on-warning",
+        "--skip=1,2,3,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Security token generated with non-cryptographic randomness"
+        ]
+      }
+    },
+    {
       "id": "kotlin-type-narrowing-buggy",
       "description": "Kotlin null guards that do not exit before using the guarded value with '!!'.",
       "path": "test-suite/kotlin/type_narrowing/buggy",
