@@ -6,6 +6,7 @@
 *.db-shm
 
 # Daemon runtime files
+.write.lock
 daemon.lock
 daemon.log
 daemon-*.log
