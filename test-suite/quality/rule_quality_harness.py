@@ -40,8 +40,23 @@ SMOKE_CASE_IDS = (
 )
 CLEAN_FUZZ_CASE_IDS = (
     "js-typescript-request-body-limit-clean",
+    "js-typescript-sql-injection-clean",
+    "golang-open-redirect-clean",
     "golang-request-body-limit-clean",
+    "golang-ssrf-clean",
     "rust-request-body-limit-clean",
+    "rust-sql-injection-clean",
+)
+METAMORPHIC_CASE_IDS = (
+    *SMOKE_CASE_IDS,
+    "js-typescript-sql-injection-buggy",
+    "js-typescript-sql-injection-clean",
+    "golang-open-redirect-buggy",
+    "golang-open-redirect-clean",
+    "golang-ssrf-buggy",
+    "golang-ssrf-clean",
+    "rust-sql-injection-buggy",
+    "rust-sql-injection-clean",
 )
 CAMPAIGN_RUNTIME_SLUGS = {
     "golang": {
@@ -481,7 +496,7 @@ def materialize_variant(case: dict[str, Any], label: str, contents: str) -> Path
 
 def run_metamorphic_checks(manifest: dict[str, Any], timeout: int) -> None:
     cases = case_by_id(manifest)
-    for case_id in SMOKE_CASE_IDS:
+    for case_id in METAMORPHIC_CASE_IDS:
         case = cases[case_id]
         original_path = REPO_ROOT / case["path"]
         transformed = source_with_benign_comments(
