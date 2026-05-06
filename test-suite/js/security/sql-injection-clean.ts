@@ -7,6 +7,10 @@ type Database = {
   query(sql: string, values: readonly unknown[]): Promise<unknown>;
 };
 
+type RouteContext = {
+  params: Record<string, string | undefined>;
+};
+
 type PrismaLike = {
   $queryRaw(strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<unknown>;
 };
@@ -24,6 +28,10 @@ declare function usersTable(name: "users"): QueryBuilder;
 export async function parameterizedDbQuery(req: RequestLike, db: Database): Promise<unknown> {
   const email = req.query.email;
   return db.query("SELECT id, email FROM users WHERE email = $1", [email]);
+}
+
+export async function parameterizedRouteParams(_request: RequestLike, { params }: RouteContext, db: Database): Promise<unknown> {
+  return db.query("SELECT id FROM tenants WHERE slug = $1", [params.tenant]);
 }
 
 export async function prismaSafeTaggedTemplate(req: RequestLike, prisma: PrismaLike): Promise<unknown> {

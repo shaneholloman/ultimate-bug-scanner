@@ -24,6 +24,10 @@ router.get('/search', (req, res) => {
   res.send('done');
 });
 
+async function nextRouteSearch(_request, { params }) {
+  await db.query('SELECT * FROM tenants WHERE slug = ?', [params.tenant]);
+}
+
 router.get('/exec', (req, res) => {
   exec('ls ' + shellescape([req.query.path || '.']), err => {
     if (err) {

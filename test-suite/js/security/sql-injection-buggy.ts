@@ -7,6 +7,10 @@ type Database = {
   query(sql: string, values?: readonly unknown[]): Promise<unknown>;
 };
 
+type RouteContext = {
+  params: Record<string, string | undefined>;
+};
+
 type PrismaLike = {
   $queryRaw(strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<unknown>;
   $queryRawUnsafe(sql: string): Promise<unknown>;
@@ -21,6 +25,11 @@ export async function rawDbQueryFromQuery(req: RequestLike, db: Database): Promi
   const email = req.query.email;
   const sql = `SELECT id, email FROM users WHERE email = '${email}'`;
   return db.query(sql);
+}
+
+export async function rawDbQueryFromRouteParams(_request: RequestLike, { params }: RouteContext, db: Database): Promise<unknown> {
+  const tenant = params.tenant;
+  return db.query("SELECT id FROM tenants WHERE slug = '" + tenant + "'");
 }
 
 export async function dynamicTableWithPlaceholder(req: RequestLike, db: Database): Promise<unknown> {

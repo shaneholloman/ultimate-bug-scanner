@@ -1303,9 +1303,11 @@ BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
 SKIP_DIRS = {'.git', '.hg', '.svn', '.venv', 'node_modules', '.next', '.nuxt', '.cache', 'dist', 'build', 'coverage', 'tmp', '.turbo'}
 EXTS = {'.js', '.jsx', '.ts', '.tsx'}
 PATH_LIMIT = 5
+ROUTE_PARAM_FIELDS = r"(?:id|slug|user|username|email|name|status|tenant|account|role|filter|search|sort|limit|offset|where|order|table|column)"
 
 SOURCE_PATTERNS = [
     (re.compile(r"\b(?:req|request|ctx\.request|context\.req)\.(?:body|query|params)[\w\.\[\]'\"]*", re.IGNORECASE), 'HTTP request payload'),
+    (re.compile(rf"\b(?:context\.)?params\s*(?:\.\s*{ROUTE_PARAM_FIELDS}\b|\[\s*['\"]{ROUTE_PARAM_FIELDS}['\"]\s*\])", re.IGNORECASE), 'Route params'),
     (re.compile(r"\b(?:req|request)\.files?\b", re.IGNORECASE), 'Uploaded file'),
     (re.compile(r"\b(?:event|e)\.target\.value\b", re.IGNORECASE), 'DOM event value'),
     (re.compile(r"\blocation\.(?:search|hash|href)\b", re.IGNORECASE), 'window.location data'),
@@ -1734,6 +1736,7 @@ skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cac
 source_re = re.compile(
     r'\b(?:req|request|ctx|context|event)\.(?:body|query|params|headers|cookies)\b'
     r'|\b(?:req|request|ctx|context)\.(?:get|header|param|query)\s*\('
+    r"|\b(?:context\.)?params\s*(?:\.\s*(?:id|slug|user|username|email|name|status|tenant|account|role|filter|search|sort|limit|offset|where|order|table|column)\b|\[\s*['\"](?:id|slug|user|username|email|name|status|tenant|account|role|filter|search|sort|limit|offset|where|order|table|column)['\"]\s*\])"
     r'|\b(?:searchParams|URLSearchParams)\.(?:get|getAll|entries)\s*\('
     r'|\b(?:request|req)\.url\b'
     r'|\b(?:new\s+URL|URLSearchParams)\s*\([^)]*(?:req|request|event)\b',

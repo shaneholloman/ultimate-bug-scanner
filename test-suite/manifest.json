@@ -1290,6 +1290,7 @@
         },
         "require_substrings": [
           "Lightweight taint analysis",
+          "params.tenant",
           "User input reaches command execution APIs"
         ]
       }
@@ -4565,6 +4566,7 @@
         },
         "require_substrings": [
           "Interpolated SQL reaches execution sink",
+          "tenants WHERE slug",
           "owner = $1",
           "$queryRawUnsafe",
           "$executeRawUnsafe"

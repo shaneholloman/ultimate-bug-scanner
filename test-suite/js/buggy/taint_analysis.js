@@ -23,6 +23,12 @@ router.get('/search', (req, res) => {
   res.send('done');
 });
 
+async function nextRouteSearch(_request, { params }) {
+  const tenant = params.tenant;
+  const tenantSql = "SELECT * FROM tenants WHERE slug = '" + tenant + "'";
+  await db.query(tenantSql);
+}
+
 router.get('/exec', (req, res) => {
   const cmd = 'ls ' + req.query.path;
   exec(cmd, err => {
