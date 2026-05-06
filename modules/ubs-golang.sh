@@ -5012,6 +5012,144 @@ rec_count=$([[ "$HAS_AST_GREP" -eq 1 && -f "$AST_JSON" ]] && ast_count "go.recov
 if [ "$rec_count" -gt 0 ]; then print_finding "warning" "$rec_count" "recover() outside defer is ineffective"; fi
 fi
 
+run_request_body_limit_checks() {
+  print_subheader "Unbounded request body ReadAll"
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_finding "info" 0 "python3 not available" "Install python3 to enable request body size-limit checks"
+    return
+  fi
+  local printed=0
+  while IFS=$'\t' read -r tag a b c; do
+    case "$tag" in
+      __COUNT__)
+        if [[ "$a" -gt 0 ]]; then
+          print_finding "warning" "$a" "Request body read without explicit byte limit" "Wrap request bodies with http.MaxBytesReader or io.LimitReader before io.ReadAll/ioutil.ReadAll to prevent memory exhaustion"
+        else
+          print_finding "good" "No unbounded request body ReadAll detected"
+        fi
+        ;;
+      __SAMPLE__)
+        if [[ "$printed" -lt "$DETAIL_LIMIT" && "$printed" -lt "$MAX_DETAILED" ]]; then
+          print_code_sample "$a" "$b" "$c"
+          printed=$((printed + 1))
+        fi
+        ;;
+    esac
+  done < <(python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
+SKIP_DIRS = {'.git', 'vendor', 'node_modules', '.cache', 'bin', 'build', 'dist'}
+
+READALL_BODY_RE = re.compile(
+    r'\b(?:io|ioutil)\.ReadAll\s*\(\s*(?P<body>[A-Za-z_][A-Za-z0-9_]*\.Body)\s*\)'
+)
+
+def should_skip(path: Path) -> bool:
+    return any(part in SKIP_DIRS for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() == '.go':
+            yield root
+        return
+    for path in root.rglob('*.go'):
+        if path.is_file() and not should_skip(path):
+            yield path
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escaped = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        nxt = line[i + 1] if i + 1 < len(line) else ''
+        if quote:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'", '`'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and nxt == '/':
+            break
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def relpath(path: Path) -> str:
+    try:
+        return str(path.relative_to(BASE_DIR))
+    except ValueError:
+        return str(path)
+
+def has_ignore(lines, idx):
+    start = max(0, idx - 2)
+    return any('ubs:ignore' in lines[pos] for pos in range(start, idx + 1))
+
+def context_around(lines, idx):
+    start = idx
+    while start > 0 and idx - start < 35:
+        prior = strip_line_comments(lines[start - 1]).strip()
+        if prior.startswith('func ') or prior.startswith('func('):
+            start -= 1
+            break
+        start -= 1
+    end = min(len(lines), idx + 10)
+    return '\n'.join(lines[start:end])
+
+def body_is_limited(context: str, body: str) -> bool:
+    escaped = re.escape(body)
+    return bool(
+        re.search(rf'\b(?:http\.)?MaxBytesReader\s*\([^;\n]*\b{escaped}\b', context)
+        or re.search(rf'\b(?:io\.)?LimitReader\s*\(\s*{escaped}\b', context)
+    )
+
+def analyze(path: Path, issues):
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except OSError:
+        return
+    seen = set()
+    for idx, raw in enumerate(lines):
+        if has_ignore(lines, idx):
+            continue
+        stripped = strip_line_comments(raw).strip()
+        match = READALL_BODY_RE.search(stripped)
+        if not stripped or not match:
+            continue
+        context = context_around(lines, idx)
+        if body_is_limited(context, match.group('body')):
+            continue
+        key = (relpath(path), idx + 1)
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append((relpath(path), idx + 1, raw.strip().replace('\t', ' ')))
+
+issues = []
+for file_path in iter_files(ROOT):
+    analyze(file_path, issues)
+
+print(f"__COUNT__\t{len(issues)}")
+for file_name, line_no, code in issues[:25]:
+    print(f"__SAMPLE__\t{file_name}\t{line_no}\t{code}")
+PY
+  )
+}
+
 # ═══════════════════════════════════════════════════════════════════════════
 # CATEGORY 7: JSON & ENCODING
 # ═══════════════════════════════════════════════════════════════════════════
@@ -5038,7 +5176,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_skip 8; then
 print_header "8. FILESYSTEM & I/O"
-print_category "Detects: ioutil (deprecated), ReadAll on bodies, Close leaks, defer Close ordering hazards" \
+print_category "Detects: ioutil (deprecated), unbounded ReadAll on request bodies, Close leaks, defer Close ordering hazards" \
   "I/O mistakes cause memory spikes and descriptor leaks"
 
 print_subheader "ioutil package usage (deprecated)"
@@ -5048,6 +5186,8 @@ if [ "$ioutil_count" -gt 0 ]; then print_finding "info" "$ioutil_count" "Replace
 print_subheader "io.ReadAll usage"
 ra_count=$(grep_count_scoped "io\.ReadAll\(")
 if [ "$ra_count" -gt 10 ]; then print_finding "info" "$ra_count" "Many ReadAll calls - ensure bounded inputs"; fi
+
+run_request_body_limit_checks
 
 print_subheader "File open without Close (heuristic)"
 open_count=$(grep_count_scoped "os\.Open(File)?\(")

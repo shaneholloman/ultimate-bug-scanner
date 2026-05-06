@@ -3341,6 +3341,245 @@ collect_samples_sql_injection() {
   printf ']'
 }
 
+rust_unbounded_request_body_matches() {
+  [[ "$have_python3" -eq 1 ]] || return 1
+  python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+skip_dirs = {".git", "target", ".cargo", "node_modules"}
+
+TO_BYTES_RE = re.compile(r"\b(?:(?:hyper|axum)::)?body::to_bytes\s*\(")
+UNSAFE_LIMIT_RE = re.compile(r"\b(?:(?:std::)?usize|u64|u32)::MAX\b")
+COLLECT_BYTES_RE = re.compile(r"\.collect\s*\(\)\s*\.await(?:\?|\.[A-Za-z_][A-Za-z0-9_]*\(\))?[^;\n]*\.to_bytes\s*\(")
+SAFE_CONTEXT_RE = re.compile(
+    r"\b(?:DefaultBodyLimit::max|RequestBodyLimitLayer::new|RequestBodyLimit|"
+    r"ContentLengthLimit|tower_http::limit|http_body_util::Limited|Limited::new|"
+    r"ContentLengthLimitLayer)\b"
+)
+CONTENT_LENGTH_GUARD_RE = re.compile(r"\b(?:CONTENT_LENGTH|content_length|content-length)\b[\s\S]{0,240}\b(?:>|>=)\b")
+
+def rust_files(path: Path):
+    if path.is_file():
+        if path.suffix == ".rs":
+            yield path
+        return
+    for child in path.rglob("*.rs"):
+        if skip_dirs.intersection(child.parts):
+            continue
+        yield child
+
+def mask_range(chars, start, end):
+    for pos in range(start, min(end, len(chars))):
+        if chars[pos] != "\n":
+            chars[pos] = " "
+
+def mask_comments_and_strings(text: str) -> str:
+    chars = list(text)
+    i = 0
+    n = len(chars)
+    state = "code"
+    while i < n:
+        ch = chars[i]
+        nxt = chars[i + 1] if i + 1 < n else ""
+        if state == "code":
+            if ch == "/" and nxt == "/":
+                start = i
+                i += 2
+                while i < n and chars[i] != "\n":
+                    i += 1
+                mask_range(chars, start, i)
+                continue
+            if ch == "/" and nxt == "*":
+                chars[i] = chars[i + 1] = " "
+                i += 2
+                state = "block"
+                continue
+            if ch == "r":
+                j = i + 1
+                while j < n and chars[j] == "#":
+                    j += 1
+                if j < n and chars[j] == '"':
+                    hashes = j - i - 1
+                    close = '"' + ("#" * hashes)
+                    end = text.find(close, j + 1)
+                    end = n if end == -1 else end + len(close)
+                    mask_range(chars, i, end)
+                    i = end
+                    continue
+            if ch == '"':
+                chars[i] = " "
+                i += 1
+                state = "string"
+                continue
+        elif state == "block":
+            if ch == "*" and nxt == "/":
+                chars[i] = chars[i + 1] = " "
+                i += 2
+                state = "code"
+                continue
+            if ch != "\n":
+                chars[i] = " "
+        elif state == "string":
+            if ch == "\\":
+                chars[i] = " "
+                if i + 1 < n and chars[i + 1] != "\n":
+                    chars[i + 1] = " "
+                    i += 2
+                    continue
+            if ch == '"':
+                chars[i] = " "
+                i += 1
+                state = "code"
+                continue
+            if ch != "\n":
+                chars[i] = " "
+        i += 1
+    return "".join(chars)
+
+def statement_from(masked_lines, idx):
+    statement = masked_lines[idx].strip()
+    balance = statement.count("(") + statement.count("{") - statement.count(")") - statement.count("}")
+    lookahead = idx + 1
+    while balance > 0 and lookahead < len(masked_lines) and lookahead < idx + 12:
+        nxt = masked_lines[lookahead].strip()
+        statement += " " + nxt
+        balance += nxt.count("(") + nxt.count("{") - nxt.count(")") - nxt.count("}")
+        lookahead += 1
+    return statement
+
+def call_args(statement, marker="to_bytes"):
+    start = statement.find(marker + "(")
+    if start == -1:
+        return ""
+    pos = start + len(marker) + 1
+    depth = 1
+    end = pos
+    while end < len(statement):
+        ch = statement[end]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return statement[pos:end]
+        end += 1
+    return statement[pos:]
+
+def top_level_arg_count(args):
+    if not args.strip():
+        return 0
+    depth = 0
+    count = 1
+    for ch in args:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            count += 1
+    return count
+
+def source_line(lines, idx):
+    return lines[idx].strip().replace("\t", " ")
+
+def context_around(original_lines, idx):
+    start = max(0, idx - 35)
+    end = min(len(original_lines), idx + 10)
+    return "\n".join(original_lines[start:end])
+
+def has_ignore(lines, idx):
+    start = max(0, idx - 2)
+    return any("ubs:ignore" in lines[pos] for pos in range(start, idx + 1))
+
+def context_is_limited(context: str) -> bool:
+    return bool(SAFE_CONTEXT_RE.search(context) or CONTENT_LENGTH_GUARD_RE.search(context))
+
+def unbounded_to_bytes(statement: str) -> bool:
+    if not TO_BYTES_RE.search(statement):
+        return False
+    args = call_args(statement)
+    argc = top_level_arg_count(args)
+    return argc < 2 or bool(UNSAFE_LIMIT_RE.search(args))
+
+def analyze(path: Path, issues):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    masked_lines = mask_comments_and_strings(text).splitlines()
+    lines = text.splitlines()
+    seen = set()
+    for idx, masked in enumerate(masked_lines):
+        if has_ignore(lines, idx):
+            continue
+        stripped = masked.strip()
+        if not stripped:
+            continue
+        if "to_bytes" not in stripped and ".collect" not in stripped:
+            continue
+        statement = statement_from(masked_lines, idx)
+        if not (unbounded_to_bytes(statement) or COLLECT_BYTES_RE.search(statement)):
+            continue
+        context = context_around(lines, idx)
+        if context_is_limited(context):
+            continue
+        key = (str(path), idx + 1)
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append((path, idx + 1, source_line(lines, idx)))
+
+for rust_file in rust_files(root):
+    results = []
+    analyze(rust_file, results)
+    for path, line_no, code in results:
+        print(f"{path}:{line_no}:{code}")
+PY
+}
+
+count_unbounded_request_body_matches() {
+  if [[ "$have_python3" -eq 1 ]]; then
+    rust_unbounded_request_body_matches | count_lines || true
+  else
+    return 1
+  fi
+}
+
+show_unbounded_request_body_examples() {
+  local limit="${1:-$DETAIL_LIMIT}"
+  local printed=0
+  [[ "$have_python3" -eq 1 ]] || return 1
+  while IFS= read -r rawline; do
+    [[ -z "$rawline" ]] && continue
+    parse_grep_line "$rawline" || continue
+    print_code_sample "$PARSED_FILE" "$PARSED_LINE" "$PARSED_CODE"
+    printed=$((printed + 1))
+    [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
+  done < <(rust_unbounded_request_body_matches | head -n "$limit")
+  [[ "$printed" -gt 0 ]]
+}
+
+collect_samples_unbounded_request_body() {
+  local limit="${1:-$DETAIL_LIMIT}"
+  if [[ "$have_python3" -ne 1 ]]; then
+    printf '[]'
+    return
+  fi
+  mapfile -t lines < <(rust_unbounded_request_body_matches | head -n "$limit")
+  printf '['
+  local i=0
+  local line
+  for line in "${lines[@]}"; do
+    [[ $i -gt 0 ]] && printf ','
+    printf '"%s"' "$(printf '%s' "$line" | json_escape)"
+    i=$((i + 1))
+  done
+  printf ']'
+}
+
 rust_cors_credential_matches() {
   [[ "$have_python3" -eq 1 ]] || return 1
   python3 - "$PROJECT_DIR" <<'PY'
@@ -6888,7 +7127,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if category_enabled 8; then
 print_header "8. SECURITY FINDINGS"
-print_category "Detects: TLS verification disabled, weak hash algos, security-sensitive non-crypto randomness, timing-unsafe secret comparisons, JWT verification bypasses, shell command injection, request-derived response headers/open redirects/outbound URLs/SQL, credentialed CORS, HTTP URLs, secrets" \
+print_category "Detects: TLS verification disabled, weak hash algos, security-sensitive non-crypto randomness, timing-unsafe secret comparisons, JWT verification bypasses, shell command injection, request-derived response headers/open redirects/outbound URLs/SQL, unbounded request body reads, credentialed CORS, HTTP URLs, secrets" \
   "Security misconfigurations can lead to credential leaks, command injection, and MITM attacks"
 
 print_subheader "Weak hash algorithms (MD5/SHA1)"
@@ -7050,6 +7289,17 @@ if [ "$sql_injection_hits" -gt 0 ]; then
   add_finding "critical" "$sql_injection_hits" "Interpolated SQL reaches execution sink" "Use sqlx query macros, .bind(), rusqlite params!, diesel DSL/bind(), or other parameterized placeholders instead of format!/concat SQL" "${CATEGORY_NAME[8]}" "$(collect_samples_sql_injection 3)"
 else
   print_finding "good" "No request-derived SQL construction sinks detected"
+fi
+
+print_subheader "Unbounded request body reads"
+unbounded_body_hits=$(count_unbounded_request_body_matches || echo 0)
+unbounded_body_hits=$(printf '%s\n' "${unbounded_body_hits:-0}" | awk 'END{print $0+0}')
+if [ "$unbounded_body_hits" -gt 0 ]; then
+  print_finding "warning" "$unbounded_body_hits" "Request body read without explicit byte limit" "Use DefaultBodyLimit::max, RequestBodyLimitLayer, http_body_util::Limited, or axum::body::to_bytes(body, limit) before buffering request bodies"
+  show_unbounded_request_body_examples 3 || true
+  add_finding "warning" "$unbounded_body_hits" "Request body read without explicit byte limit" "Use DefaultBodyLimit::max, RequestBodyLimitLayer, http_body_util::Limited, or axum::body::to_bytes(body, limit) before buffering request bodies" "${CATEGORY_NAME[8]}" "$(collect_samples_unbounded_request_body 3)"
+else
+  print_finding "good" "No unbounded request body reads detected"
 fi
 
 print_subheader "CORS credential policy"

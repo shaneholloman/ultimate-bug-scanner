@@ -2064,6 +2064,134 @@ collect_samples_sql_injection() {
   printf ']'
 }
 
+js_unbounded_request_body_matches() {
+  python3 - "$PROJECT_DIR" <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+body_call_re = re.compile(
+    r'\b(?P<receiver>(?:req|request|nextRequest|event\.request|ctx\.request|context\.request))'
+    r'\s*\.\s*(?P<method>json|text|arrayBuffer|formData|blob)\s*\(',
+    re.IGNORECASE,
+)
+safe_re = re.compile(
+    r'\b(?:content-length|Content-Length|headers\.get\s*\(\s*[\'"]content-length[\'"]|'
+    r'bodySizeLimit|sizeLimit|maxBodySize|maxRequestBody|maxPayload|maxBytes|'
+    r'bytes\.parse|raw-body[^;\n]*limit|'
+    r'createUploadthing|unstable_parseMultipartFormData)\b'
+)
+guard_re = re.compile(r'\b(?:if|throw|return|NextResponse\.json|Response\.json)\b')
+
+def iter_files(path: Path):
+    if path.is_file():
+        if path.suffix.lower() in exts:
+            yield path
+        return
+    for dirpath, dirnames, filenames in os.walk(path):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            file_path = Path(dirpath) / fname
+            if file_path.suffix.lower() in exts:
+                yield file_path
+
+def strip_line_comments(line: str) -> str:
+    quote = ''
+    escaped = False
+    for idx, ch in enumerate(line):
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == quote:
+                quote = ''
+            continue
+        if ch in ('"', "'", '`'):
+            quote = ch
+            continue
+        if ch == '/' and idx + 1 < len(line) and line[idx + 1] == '/':
+            return line[:idx]
+    return line
+
+def has_ignore(lines, idx):
+    start = max(0, idx - 2)
+    return any('ubs:ignore' in lines[pos] for pos in range(start, idx + 1))
+
+def source_line(lines, idx):
+    return lines[idx].strip().replace('\t', ' ')
+
+def function_context(lines, idx):
+    start = idx
+    while start > 0 and idx - start < 45:
+        stripped = strip_line_comments(lines[start]).strip()
+        if re.search(r'\b(?:export\s+)?(?:async\s+)?function\b|=>\s*\{|app\.(?:post|put|patch|use)\s*\(|router\.(?:post|put|patch|use)\s*\(', stripped):
+            break
+        start -= 1
+    end = idx
+    while end + 1 < len(lines) and end - idx < 16:
+        end += 1
+    return '\n'.join(lines[start:end + 1])
+
+def guarded(context: str) -> bool:
+    if not safe_re.search(context):
+        return False
+    return bool(guard_re.search(context) or re.search(r'\blimit\s*:', context))
+
+def analyze(path: Path, issues):
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except OSError:
+        return
+    seen = set()
+    for idx, raw in enumerate(lines):
+        if has_ignore(lines, idx):
+            continue
+        stripped = strip_line_comments(raw).strip()
+        if not stripped or not body_call_re.search(stripped):
+            continue
+        if 'ubs:ignore' in stripped:
+            continue
+        context = function_context(lines, idx)
+        if guarded(context):
+            continue
+        key = (path, idx + 1)
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append((path, idx + 1, source_line(lines, idx)))
+
+issues = []
+for file_path in iter_files(root):
+    analyze(file_path, issues)
+
+for path, line_no, code in issues:
+    print(f"{path}:{line_no}:{code}")
+PY
+}
+
+count_unbounded_request_body_matches() {
+  js_unbounded_request_body_matches | count_lines || true
+}
+
+show_unbounded_request_body_examples() {
+  local limit="${1:-$DETAIL_LIMIT}"
+  local printed=0
+  while IFS= read -r rawline; do
+    [[ -z "$rawline" ]] && continue
+    parse_grep_line "$rawline" || continue
+    print_code_sample "$PARSED_FILE" "$PARSED_LINE" "$PARSED_CODE"
+    printed=$((printed + 1))
+    [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
+  done < <(js_unbounded_request_body_matches | head -n "$limit")
+  [[ "$printed" -gt 0 ]]
+}
+
 # Temporarily relax pipefail for grep-heavy scans to avoid ERR on 1/no-match
 begin_scan_section(){
   if [[ "$DISABLE_PIPEFAIL_DURING_SCAN" -eq 1 ]]; then set +o pipefail; fi
@@ -4691,7 +4819,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_skip 7; then
 print_header "7. SECURITY VULNERABILITIES"
-print_category "Detects: Code injection, XSS, SQL injection, prototype pollution, timing attacks" \
+print_category "Detects: Code injection, XSS, SQL injection, prototype pollution, timing attacks, unbounded request body reads" \
   "Security bugs expose users to attacks and data breaches"
 
 print_subheader "eval() usage (CRITICAL SECURITY RISK)"
@@ -8080,6 +8208,16 @@ if [ "$sql_injection_hits" -gt 0 ]; then
   show_sql_injection_examples "$DETAIL_LIMIT" || true
 else
   print_finding "good" "No request-derived raw SQL construction detected"
+fi
+
+print_subheader "Unbounded request body parsing"
+unbounded_body_hits=$(count_unbounded_request_body_matches || echo 0)
+unbounded_body_hits=$(printf '%s\n' "${unbounded_body_hits:-0}" | awk 'END{print $0+0}')
+if [ "$unbounded_body_hits" -gt 0 ]; then
+  print_finding "warning" "$unbounded_body_hits" "Request body parsed without explicit size guard" "Check Content-Length or enforce framework/body-parser limits before request.json(), request.text(), request.arrayBuffer(), request.formData(), or equivalent body consumers"
+  show_unbounded_request_body_examples "$DETAIL_LIMIT" || true
+else
+  print_finding "good" "No unbounded Request body parsers detected"
 fi
 
 print_subheader "RegExp denial of service (ReDoS) risk"

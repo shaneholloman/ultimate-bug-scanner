@@ -4728,6 +4728,69 @@
       }
     },
     {
+      "id": "js-typescript-request-body-limit-buggy",
+      "description": "TypeScript server handlers should not call Request body consumers before enforcing an explicit byte limit.",
+      "path": "test-suite/js/security/request-body-limit-buggy.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "security",
+        "request-body",
+        "buggy"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request body parsed without explicit size guard",
+          "request.json",
+          "event.request.formData"
+        ]
+      }
+    },
+    {
+      "id": "js-typescript-request-body-limit-clean",
+      "description": "TypeScript handlers with Content-Length guards before body parsing should stay clean.",
+      "path": "test-suite/js/security/request-body-limit-clean.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "security",
+        "request-body",
+        "clean"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request body parsed without explicit size guard"
+        ]
+      }
+    },
+    {
       "id": "golang-buggy",
       "description": "Go buggy fixtures exercising goroutine/context/network pitfalls.",
       "path": "test-suite/golang/buggy",
@@ -5307,6 +5370,67 @@
         },
         "forbid_substrings": [
           "Archive extraction path traversal risk"
+        ]
+      }
+    },
+    {
+      "id": "golang-request-body-limit-buggy",
+      "description": "Go handlers should not ReadAll request bodies before applying http.MaxBytesReader or io.LimitReader.",
+      "path": "test-suite/golang/security/request_body_limit_buggy.go",
+      "language": "golang",
+      "tags": [
+        "golang",
+        "security",
+        "request-body",
+        "buggy"
+      ],
+      "args": [
+        "--only=golang",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19,20,21,22"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request body read without explicit byte limit",
+          "io.ReadAll(r.Body)",
+          "ioutil.ReadAll(req.Body)"
+        ]
+      }
+    },
+    {
+      "id": "golang-request-body-limit-clean",
+      "description": "Go handlers that bound request bodies before ReadAll should stay clean.",
+      "path": "test-suite/golang/security/request_body_limit_clean.go",
+      "language": "golang",
+      "tags": [
+        "golang",
+        "security",
+        "request-body",
+        "clean"
+      ],
+      "args": [
+        "--only=golang",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19,20,21,22"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request body read without explicit byte limit"
         ]
       }
     },
@@ -7478,6 +7602,68 @@
         },
         "forbid_substrings": [
           "Interpolated SQL reaches execution sink"
+        ]
+      }
+    },
+    {
+      "id": "rust-request-body-limit-buggy",
+      "description": "Rust web handlers should not buffer request bodies with hyper/axum/body collect APIs without an explicit byte limit.",
+      "path": "test-suite/rust/buggy/request_body_limit.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "request-body",
+        "buggy"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "warning": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Request body read without explicit byte limit",
+          "hyper::body::to_bytes",
+          "usize::MAX"
+        ]
+      }
+    },
+    {
+      "id": "rust-request-body-limit-clean",
+      "description": "Rust web handlers using DefaultBodyLimit, explicit axum to_bytes limits, or Limited bodies should stay clean.",
+      "path": "test-suite/rust/clean/request_body_limit.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "request-body",
+        "clean"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Request body read without explicit byte limit"
         ]
       }
     },
