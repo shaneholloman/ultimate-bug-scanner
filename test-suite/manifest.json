@@ -7413,6 +7413,68 @@
       }
     },
     {
+      "id": "rust-sql-injection-buggy",
+      "description": "Rust request-derived values should not be interpolated into raw SQL strings that reach sqlx, diesel, rusqlite, postgres, or generic raw query sinks.",
+      "path": "test-suite/rust/buggy/sql_injection.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "sql-injection",
+        "buggy"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8",
+        "--fail-on-warning"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Interpolated SQL reaches execution sink",
+          "sqlx::query",
+          "diesel::sql_query"
+        ]
+      }
+    },
+    {
+      "id": "rust-sql-injection-clean",
+      "description": "Rust SQL queries using bind(), compile-time checked sqlx macros, rusqlite params!, or diesel bind() should stay clean.",
+      "path": "test-suite/rust/clean/sql_injection.rs",
+      "language": "rust",
+      "tags": [
+        "rust",
+        "security",
+        "sql-injection",
+        "clean"
+      ],
+      "ubs_bin": "../modules/ubs-rust.sh",
+      "args": [
+        "--no-cargo",
+        "--only=8"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Interpolated SQL reaches execution sink"
+        ]
+      }
+    },
+    {
       "id": "rust-cors-credentials-buggy",
       "description": "Rust CORS responses must not combine credentials with wildcard origins or reflected request Origin values without an allow-list.",
       "path": "test-suite/rust/buggy/cors_credentials.rs",
