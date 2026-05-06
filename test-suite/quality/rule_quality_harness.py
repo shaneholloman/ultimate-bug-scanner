@@ -30,7 +30,7 @@ RUNTIME_ROOT = Path(
 )
 
 TARGET_LANGUAGES = {"js", "golang", "rust"}
-RUNTIME_CASE_IDS = (
+SMOKE_CASE_IDS = (
     "js-typescript-request-body-limit-buggy",
     "js-typescript-request-body-limit-clean",
     "golang-request-body-limit-buggy",
@@ -43,6 +43,51 @@ CLEAN_FUZZ_CASE_IDS = (
     "golang-request-body-limit-clean",
     "rust-request-body-limit-clean",
 )
+CAMPAIGN_RUNTIME_SLUGS = {
+    "golang": {
+        "constant_time_compare",
+        "cors_credentials",
+        "hardcoded_secrets",
+        "header_injection",
+        "jwt_verification",
+        "open_redirect",
+        "path_traversal",
+        "random_security",
+        "request_body_limit",
+        "reverse_proxy_ssrf",
+        "ssrf",
+        "taint_analysis",
+    },
+    "js": {
+        "constant-time-compare",
+        "cors-credentials",
+        "hardcoded-secrets",
+        "header-injection",
+        "jwt-verification",
+        "open-redirect",
+        "path-traversal",
+        "prototype-pollution",
+        "random-security",
+        "request-body-limit",
+        "reverse-proxy-ssrf",
+        "sql-injection",
+        "ssrf-fetch",
+        "taint_analysis",
+    },
+    "rust": {
+        "constant_time_compare",
+        "cors_credentials",
+        "hardcoded_secrets",
+        "header_injection",
+        "jwt_verification",
+        "open_redirect",
+        "request_body_limit",
+        "security_injection",
+        "security_randomness",
+        "sql_injection",
+        "ssrf",
+    },
+}
 JSON_DECODER = json.JSONDecoder()
 
 sys.path.insert(0, str(TEST_ROOT))
@@ -209,6 +254,20 @@ def case_by_id(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {case["id"]: case for case in manifest["cases"]}
 
 
+def runtime_case_ids_for_scope(coverage: dict[str, Any], scope: str) -> tuple[str, ...]:
+    if scope == "smoke":
+        return SMOKE_CASE_IDS
+    selected: list[str] = []
+    for pair in coverage["pairs"]:
+        language = pair["language"]
+        slug = pair["slug"]
+        if scope == "campaign" and slug not in CAMPAIGN_RUNTIME_SLUGS.get(language, set()):
+            continue
+        selected.append(pair["buggy_case"])
+        selected.append(pair["clean_case"])
+    return tuple(selected)
+
+
 def command_for_case(
     manifest: dict[str, Any],
     case: dict[str, Any],
@@ -317,6 +376,67 @@ def run_real_case(
     return proc, summary_totals(summary)
 
 
+def run_ast_grep_rule_pack_check(timeout: int) -> None:
+    fixture = "test-suite/js/security/request-body-limit-buggy.ts"
+    cmd = [str(REPO_ROOT / "modules" / "ubs-js.sh"), "--format=sarif", fixture]
+    env = os.environ.copy()
+    env.update({"NO_COLOR": "1", "UBS_ENABLE_AUTO_UPDATE": "0"})
+    start = time.monotonic()
+    try:
+        proc = subprocess.run(  # nosec B603 - fixed repo-local command and fixture.
+            cmd,
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError(f"ast-grep rule-pack SARIF check timed out after {timeout}s") from exc
+    proc.duration_seconds = round(time.monotonic() - start, 3)  # type: ignore[attr-defined]
+
+    if proc.returncode not in (0, 1):
+        write_runtime_artifact("ast-grep-js-rule-pack-sarif", proc, None)
+        raise AssertionError(
+            "JS ast-grep rule-pack SARIF check failed; stderr is captured under "
+            "test-suite/artifacts/rule_quality/ast-grep-js-rule-pack-sarif/"
+        )
+    if "Environment error" in proc.stderr:
+        write_runtime_artifact("ast-grep-js-rule-pack-sarif", proc, None)
+        raise AssertionError("JS ast-grep rule-pack emitted an environment error")
+
+    try:
+        payload = JSON_DECODER.decode(proc.stdout)
+    except json.JSONDecodeError as exc:
+        write_runtime_artifact("ast-grep-js-rule-pack-sarif", proc, None)
+        raise AssertionError(f"JS ast-grep rule-pack did not emit valid SARIF JSON: {exc}") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("runs"), list):
+        write_runtime_artifact("ast-grep-js-rule-pack-sarif", proc, payload if isinstance(payload, dict) else None)
+        raise AssertionError("JS ast-grep rule-pack SARIF output lacks runs[]")
+    write_runtime_artifact(
+        "ast-grep-js-rule-pack-sarif",
+        proc,
+        {"sarif_runs": len(payload["runs"])},
+    )
+    print("[ast-grep-rule-pack] PASS")
+
+
+def run_runtime_pair_checks(
+    manifest: dict[str, Any],
+    coverage: dict[str, Any],
+    scope: str,
+    timeout: int,
+) -> None:
+    if scope == "smoke":
+        return
+    cases = case_by_id(manifest)
+    case_ids = runtime_case_ids_for_scope(coverage, scope)
+    for case_id in case_ids:
+        run_real_case(manifest, cases[case_id], f"runtime-{scope}-{case_id}", timeout)
+    print(f"[runtime-{scope}] PASS ({len(case_ids)} real fixture scans)")
+
+
 def comment_prefix_for(path: Path) -> str:
     if path.suffix in {".go", ".rs", ".js", ".jsx", ".ts", ".tsx"}:
         return "//"
@@ -349,7 +469,7 @@ def materialize_variant(case: dict[str, Any], label: str, contents: str) -> Path
 
 def run_metamorphic_checks(manifest: dict[str, Any], timeout: int) -> None:
     cases = case_by_id(manifest)
-    for case_id in RUNTIME_CASE_IDS:
+    for case_id in SMOKE_CASE_IDS:
         case = cases[case_id]
         original_path = REPO_ROOT / case["path"]
         transformed = source_with_benign_comments(
@@ -401,6 +521,12 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case-timeout", type=int, default=60)
     parser.add_argument("--fuzz-iterations", type=int, default=3)
+    parser.add_argument(
+        "--runtime-scope",
+        choices=("smoke", "campaign", "all"),
+        default=os.environ.get("UBS_RULE_RUNTIME_SCOPE", "smoke"),
+        help="real fixture runtime breadth: smoke=request-body MRs, campaign=recent Rust/TS/Go campaign rules, all=every paired security fixture",
+    )
     parser.add_argument("--skip-runtime", action="store_true")
     parser.add_argument("--update-goldens", action="store_true")
     args = parser.parse_args(argv)
@@ -412,6 +538,8 @@ def main(argv: list[str]) -> int:
     print("[manifest-audit] PASS")
 
     if not args.skip_runtime:
+        run_ast_grep_rule_pack_check(args.case_timeout)
+        run_runtime_pair_checks(manifest, coverage, args.runtime_scope, args.case_timeout)
         run_metamorphic_checks(manifest, args.case_timeout)
         run_fuzz_smoke(manifest, args.case_timeout, args.fuzz_iterations)
 

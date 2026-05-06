@@ -157,10 +157,11 @@ Run it directly when changing Rust, TypeScript, or Go rules:
 ```bash
 cd test-suite
 uv run python quality/rule_quality_harness.py
+uv run python quality/rule_quality_harness.py --runtime-scope=campaign
 UPDATE_GOLDENS=1 uv run python quality/rule_quality_harness.py --skip-runtime
 ```
 
-Only update the golden after reviewing the coverage diff and confirming the rule coverage change is intentional.
+The default runtime scope keeps `run_all.sh` quick by running the ast-grep rule-pack validity check plus request-body metamorphic/fuzz checks. Use `--runtime-scope=campaign` for the recent Rust/TypeScript/Go detector campaign, or `--runtime-scope=all` to execute every paired security fixture in the golden. Only update the golden after reviewing the coverage diff and confirming the rule coverage change is intentional.
 
 ### Scan Individual Buggy Files
 

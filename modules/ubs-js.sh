@@ -78,6 +78,8 @@ DISABLE_PIPEFAIL_DURING_SCAN=1
 AST_RULE_RESULTS_JSON=""
 AST_RULE_DIR=""
 AST_RULE_CONFIG=""
+AST_SARIF_TMP=""
+AST_SARIF_ERR=""
 
 # Async error coverage spec (rule ids -> metadata)
 ASYNC_ERROR_RULE_IDS=(js.async.then-no-catch js.async.promiseall-no-try js.async.await-no-try js.async.dangling-promise)
@@ -187,6 +189,12 @@ cleanup_temp_artifacts(){
   fi
   if [[ -n "$AST_RULE_CONFIG" && -f "$AST_RULE_CONFIG" ]]; then
     rm -f "$AST_RULE_CONFIG"
+  fi
+  if [[ -n "$AST_SARIF_TMP" && -f "$AST_SARIF_TMP" ]]; then
+    rm -f "$AST_SARIF_TMP"
+  fi
+  if [[ -n "$AST_SARIF_ERR" && -f "$AST_SARIF_ERR" ]]; then
+    rm -f "$AST_SARIF_ERR"
   fi
   if [[ -n "$AST_RULE_DIR" && -d "$AST_RULE_DIR" && "$AST_RULE_DIR" != "/" && "$AST_RULE_DIR" != "." ]]; then
     rm -rf -- "$AST_RULE_DIR"
@@ -2892,6 +2900,7 @@ YAML
 id: js.tanstack.sortUndefined-direction
 language: typescript
 rule:
+  kind: pair
   regex: "sortUndefined:\\s*-1"
 severity: info
 message: "sortUndefined: -1 sorts nulls to top; use 1 to sort to bottom (common expectation)"
@@ -2913,7 +2922,7 @@ id: js.operator-precedence-ternary-nullish
 language: typescript
 rule:
   any:
-    - pattern: $A ?? $B ? $C : $D
+    - pattern: "$A ?? $B ? $C : $D"
 severity: warning
 message: "?? and ternary have ambiguous precedence; add parentheses: ($A ?? $B) ? ... or $A ?? ($B ? ...)"
 YAML
@@ -3088,9 +3097,10 @@ if [[ "$FORMAT" == "sarif" ]]; then
     exit 2
   fi
 
-  sarif_tmp="$(mktemp 2>/dev/null || mktemp -t ubs-js.sarif.XXXXXX)"
+  AST_SARIF_TMP="$(mktemp 2>/dev/null || mktemp -t ubs-js.sarif.XXXXXX)"
+  AST_SARIF_ERR="$(mktemp 2>/dev/null || mktemp -t ubs-js.sarif.err.XXXXXX)"
   code=0
-  if ast_grep_project scan -c "$AST_RULE_CONFIG" --format sarif >"$sarif_tmp" 2>/dev/null; then
+  if ast_grep_project scan -c "$AST_RULE_CONFIG" --format sarif >"$AST_SARIF_TMP" 2>"$AST_SARIF_ERR"; then
     code=0
   else
     code=$?
@@ -3100,17 +3110,20 @@ if [[ "$FORMAT" == "sarif" ]]; then
   # Treat that as a successful scan so UBS can still parse findings.
   if [[ "$code" -ne 0 && "$code" -ne 1 ]]; then
     say "${RED}${BOLD}${CROSS} Environment error: failed to produce SARIF via ast-grep${RESET}"
+    if [[ -s "$AST_SARIF_ERR" ]]; then
+      sed -n '1,12p' "$AST_SARIF_ERR" >&2 || true
+    fi
     exit 2
   fi
 
   critical=0
   warning=0
   if command -v jq >/dev/null 2>&1; then
-    critical=$(jq '[.runs[]?.results[]? | select((.level // "warning") == "error")] | length' "$sarif_tmp" 2>/dev/null || echo 0)
-    warning=$(jq '[.runs[]?.results[]? | select((.level // "warning") == "warning")] | length' "$sarif_tmp" 2>/dev/null || echo 0)
+    critical=$(jq '[.runs[]?.results[]? | select((.level // "warning") == "error")] | length' "$AST_SARIF_TMP" 2>/dev/null || echo 0)
+    warning=$(jq '[.runs[]?.results[]? | select((.level // "warning") == "warning")] | length' "$AST_SARIF_TMP" 2>/dev/null || echo 0)
   else
-    critical=$(grep -Eo '"level":[[:space:]]*"error"' "$sarif_tmp" 2>/dev/null | wc -l | awk '{print $1+0}')
-    warning=$(grep -Eo '"level":[[:space:]]*"warning"' "$sarif_tmp" 2>/dev/null | wc -l | awk '{print $1+0}')
+    critical=$(grep -Eo '"level":[[:space:]]*"error"' "$AST_SARIF_TMP" 2>/dev/null | wc -l | awk '{print $1+0}')
+    warning=$(grep -Eo '"level":[[:space:]]*"warning"' "$AST_SARIF_TMP" 2>/dev/null | wc -l | awk '{print $1+0}')
   fi
   critical=${critical:-0}
   warning=${warning:-0}
@@ -3122,7 +3135,7 @@ if [[ "$FORMAT" == "sarif" ]]; then
     exit_code=1
   fi
 
-  cat "$sarif_tmp" >&3
+  cat "$AST_SARIF_TMP" >&3
   exit "$exit_code"
 fi
 
