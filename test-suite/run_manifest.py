@@ -150,6 +150,14 @@ def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+def timeout_output(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 def check_expectations(
     expect: Dict[str, Any],
     exit_code: int,
@@ -229,6 +237,12 @@ def main() -> None:
     parser.add_argument("--case", dest="cases", action="append", help="Run only matching case id (can repeat)")
     parser.add_argument("--list", action="store_true", help="List available case ids and exit")
     parser.add_argument("--fail-fast", action="store_true", help="Stop after first failure")
+    parser.add_argument(
+        "--case-timeout",
+        type=int,
+        default=int(os.environ.get("UBS_MANIFEST_CASE_TIMEOUT", "120")),
+        help="Per-case timeout in seconds; set to 0 to disable (default: 120 or UBS_MANIFEST_CASE_TIMEOUT)",
+    )
     args = parser.parse_args()
 
     manifest = load_manifest(args.manifest)
@@ -288,6 +302,7 @@ def main() -> None:
         stderr_path = artifacts_dir / "stderr.log"
         summary_path = artifacts_dir / "result.json"
 
+        print(f"[{case_id}] RUN {case_path_arg}", flush=True)
         start = time.time()
         if shims:
             shim_dir = artifacts_dir / "bin_shims"
@@ -300,7 +315,41 @@ def main() -> None:
                 except OSError:
                     pass
             env["PATH"] = f"{shim_dir}{os.pathsep}{env.get('PATH', '')}"
-        proc = subprocess.run(cmd, cwd=REPO_ROOT, text=True, capture_output=True, env=env)
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=args.case_timeout if args.case_timeout > 0 else None,
+            )
+        except subprocess.TimeoutExpired as exc:
+            duration = time.time() - start
+            stdout_path.write_text(timeout_output(exc.stdout))
+            stderr_text = timeout_output(exc.stderr)
+            if stderr_text and not stderr_text.endswith("\n"):
+                stderr_text += "\n"
+            stderr_text += f"Timed out after {args.case_timeout}s\n"
+            stderr_path.write_text(stderr_text)
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "id": case_id,
+                        "command": cmd,
+                        "duration_sec": duration,
+                        "timeout_sec": args.case_timeout,
+                        "timed_out": True,
+                        "summary": None,
+                    },
+                    indent=2,
+                )
+            )
+            failures += 1
+            print(format_case_result(case_id, "fail", duration, [f"timed out after {args.case_timeout}s"]))
+            if args.fail_fast:
+                break
+            continue
         duration = time.time() - start
         stdout_path.write_text(proc.stdout)
         stderr_path.write_text(proc.stderr)

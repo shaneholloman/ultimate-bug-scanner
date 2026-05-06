@@ -848,6 +848,7 @@ cd test-suite
 ./run_manifest.py                  # run every enabled case
 ./run_manifest.py --list           # inspect case ids / skip status
 ./run_manifest.py --case cpp-buggy # run one case
+./run_manifest.py --case-timeout=120 # fail a hung case with artifacts
 ./run_all.sh --fail-fast           # convenience wrapper around run_manifest.py
 ```
 
@@ -862,6 +863,9 @@ Key behavior:
   a process-level nonzero exit.
 - Artifacts for every case (stdout, stderr, parsed summary) land under
   `test-suite/artifacts/<case-id>/` to speed up debugging scanner regressions.
+- Each case prints a flushed `RUN` line before execution and is capped by
+  `--case-timeout` (or `UBS_MANIFEST_CASE_TIMEOUT`) so hangs become named
+  failures instead of silent suite stalls.
 - Disabled cases are recorded with skip reasons so we can track the backlog
   explicitly. See `test-suite/TODO.md` for the full punch list.
 
