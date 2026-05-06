@@ -760,6 +760,7 @@ SOURCE_PATTERNS = [
     re.compile(r"\.(?:Form|PostForm)\.Get\(", re.IGNORECASE),
     re.compile(r"\.Header\.Get\(", re.IGNORECASE),
     re.compile(r"URL\.Query\(\)\.Get", re.IGNORECASE),
+    re.compile(r"\.PathValue\(", re.IGNORECASE),
     re.compile(r"mux\.Vars\(", re.IGNORECASE),
     re.compile(r"chi\.URLParam\(", re.IGNORECASE),
     re.compile(r"\.(?:QueryParam|FormParam|Param)\(", re.IGNORECASE),

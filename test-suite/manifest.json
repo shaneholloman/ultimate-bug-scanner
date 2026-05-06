@@ -4798,7 +4798,8 @@
           }
         },
         "require_substrings": [
-          "Lightweight taint analysis"
+          "Lightweight taint analysis",
+          ".PathValue("
         ]
       }
     },

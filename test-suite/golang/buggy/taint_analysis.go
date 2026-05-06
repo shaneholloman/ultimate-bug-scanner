@@ -14,6 +14,12 @@ type repository struct{}
 func (repository) Where(query string, args ...interface{}) repository { return repository{} }
 func (repository) Find(dest interface{}) error                        { return nil }
 
+func queryPathValue(r *http.Request) {
+	tenant := r.PathValue("tenant")
+	sql := "SELECT id FROM tenants WHERE slug = '" + tenant + "'"
+	db.Query(sql)
+}
+
 var searchHandler = func(w http.ResponseWriter, r *http.Request) {
 	term := r.Form.Get("term")
 	sql := "SELECT id FROM articles WHERE title LIKE '%" + term + "%'"
