@@ -1,0 +1,38 @@
+type RequestLike = {
+  query: Record<string, string | undefined>;
+  body: Record<string, string | undefined>;
+};
+
+type Database = {
+  query(sql: string): Promise<unknown>;
+};
+
+type PrismaLike = {
+  $queryRawUnsafe(sql: string): Promise<unknown>;
+  $executeRawUnsafe(sql: string): Promise<unknown>;
+};
+
+type SequelizeLike = {
+  query(sql: string): Promise<unknown>;
+};
+
+export async function rawDbQueryFromQuery(req: RequestLike, db: Database): Promise<unknown> {
+  const email = req.query.email;
+  const sql = `SELECT id, email FROM users WHERE email = '${email}'`;
+  return db.query(sql);
+}
+
+export async function prismaUnsafeTemplate(req: RequestLike, prisma: PrismaLike): Promise<unknown> {
+  const status = req.body.status;
+  return prisma.$queryRawUnsafe(`SELECT * FROM invoices WHERE status = '${status}'`);
+}
+
+export async function prismaUnsafeConcat(req: RequestLike, prisma: PrismaLike): Promise<unknown> {
+  const tenant = req.query.tenant;
+  return prisma.$executeRawUnsafe("DELETE FROM tenant_jobs WHERE tenant = '" + tenant + "'");
+}
+
+export async function sequelizeInterpolated(req: RequestLike, sequelize: SequelizeLike): Promise<unknown> {
+  const role = req.query.role;
+  return sequelize.query(`SELECT * FROM users WHERE role = '${role}'`);
+}

@@ -1720,6 +1720,267 @@ PY
   fi
 }
 
+js_sql_injection_matches() {
+  python3 - "$PROJECT_DIR" <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+exts = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+skip_dirs = {'.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', '.turbo'}
+
+source_re = re.compile(
+    r'\b(?:req|request|ctx|context|event)\.(?:body|query|params|headers|cookies)\b'
+    r'|\b(?:req|request|ctx|context)\.(?:get|header|param|query)\s*\('
+    r'|\b(?:searchParams|URLSearchParams)\.(?:get|getAll|entries)\s*\('
+    r'|\b(?:request|req)\.url\b'
+    r'|\b(?:new\s+URL|URLSearchParams)\s*\([^)]*(?:req|request|event)\b',
+    re.IGNORECASE,
+)
+sql_keyword_re = re.compile(r'\b(?:SELECT|INSERT|UPDATE|DELETE|UPSERT|MERGE|WITH)\b', re.IGNORECASE)
+sql_sink_re = re.compile(
+    r'\.\s*(?:query|execute|raw|'
+    r'\$queryRawUnsafe|\$executeRawUnsafe|queryRawUnsafe|executeRawUnsafe|'
+    r'\$queryRaw|\$executeRaw|queryRaw|executeRaw)\s*(?:\(|`)',
+    re.IGNORECASE,
+)
+unsafe_sink_re = re.compile(r'\$?(?:queryRawUnsafe|executeRawUnsafe)\s*\(', re.IGNORECASE)
+assign_re = re.compile(r'^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*(.+)$')
+simple_assign_re = re.compile(r'^\s*([A-Za-z_$][\w$]*)\s*=\s*(?![=>=])(.+)$')
+destructure_re = re.compile(r'^\s*(?:const|let|var)\s*\{([^}]+)\}\s*=\s*(.+)$')
+safe_sql_re = re.compile(
+    r'\b(?:sql|Prisma\.sql)\s*`|'
+    r'\$queryRaw\s*`|\$executeRaw\s*`|'
+    r'\b(?:query|execute|raw)\s*\(\s*["`][\s\S]*?(?:\$[0-9]+|\?|:[A-Za-z_][\w$]*)[\s\S]*?,\s*(?:\[[\s\S]*?\]|\{[\s\S]*?\b(?:replacements|bind)\b)|'
+    r'\bsequelize\.query\s*\([\s\S]*?,\s*\{[\s\S]*?\b(?:replacements|bind)\b|'
+    r'\b(?:knex|db|pool|connection|client)\.[A-Za-z_$][\w$]*\s*\([\s\S]*?\)\s*\.\s*(?:where|andWhere|orWhere)\s*\(',
+    re.IGNORECASE,
+)
+
+
+def iter_files(path: Path):
+    if path.is_file():
+        if path.suffix.lower() in exts:
+            yield path
+        return
+    for dirpath, dirnames, filenames in os.walk(path):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            candidate = Path(dirpath) / fname
+            if candidate.suffix.lower() in exts:
+                yield candidate
+
+
+def strip_line_comments(line: str) -> str:
+    out = []
+    quote = ''
+    escape = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        nxt = line[i + 1] if i + 1 < len(line) else ''
+        if quote:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == quote:
+                quote = ''
+            i += 1
+            continue
+        if ch in ('"', "'", '`'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and nxt == '/':
+            break
+        if ch == '/' and nxt == '*':
+            end = line.find('*/', i + 2)
+            if end == -1:
+                break
+            i = end + 2
+            continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+
+def statement_from(lines, index, max_lines=18):
+    parts = []
+    paren = brace = bracket = 0
+    for offset in range(index, min(len(lines), index + max_lines)):
+        current = strip_line_comments(lines[offset]).strip()
+        if not current:
+            continue
+        parts.append(current)
+        paren += current.count('(') - current.count(')')
+        brace += current.count('{') - current.count('}')
+        bracket += current.count('[') - current.count(']')
+        if offset > index and paren <= 0 and brace <= 0 and bracket <= 0:
+            break
+        if ';' in current and paren <= 0 and brace <= 0 and bracket <= 0:
+            break
+    return ' '.join(parts)
+
+
+def has_ignore(lines, index):
+    return (
+        0 <= index < len(lines) and 'ubs:ignore' in lines[index]
+    ) or (
+        0 <= index - 1 < len(lines) and 'ubs:ignore' in lines[index - 1]
+    )
+
+
+def names_from_destructure(blob: str):
+    names = []
+    for part in blob.split(','):
+        token = part.strip().split('=')[0].strip()
+        if ':' in token:
+            token = token.split(':', 1)[1].strip()
+        if token.startswith('...'):
+            token = token[3:].strip()
+        if re.match(r'^[A-Za-z_$][\w$]*$', token):
+            names.append(token)
+    return names
+
+
+def refs(expr: str, names: set[str]):
+    return [name for name in names if re.search(rf'(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])', expr)]
+
+
+def has_untrusted(expr: str, tainted: set[str]):
+    return bool(source_re.search(expr) or refs(expr, tainted))
+
+
+def dynamic_sql(expr: str):
+    return bool('${' in expr or re.search(r'(?:\+|\.concat\s*\(|\.join\s*\()', expr))
+
+
+def safe_parameterized(statement: str):
+    if unsafe_sink_re.search(statement):
+        return False
+    return bool(safe_sql_re.search(statement))
+
+
+def source_line(lines, index):
+    if 0 <= index < len(lines):
+        return lines[index].strip().replace('\t', ' ')
+    return ''
+
+
+def analyze(path: Path, issues):
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except OSError:
+        return
+    text = '\n'.join(lines)
+    if not (sql_sink_re.search(text) or sql_keyword_re.search(text)):
+        return
+    tainted: set[str] = set()
+    tainted_sql: set[str] = set()
+    seen = set()
+    for idx, raw in enumerate(lines):
+        stripped = strip_line_comments(raw).strip()
+        if not stripped or has_ignore(lines, idx):
+            continue
+        statement = statement_from(lines, idx)
+        if not statement or 'ubs:ignore' in statement:
+            continue
+
+        destruct = destructure_re.match(statement)
+        if destruct and source_re.search(destruct.group(2)):
+            tainted.update(names_from_destructure(destruct.group(1)))
+
+        assign = assign_re.match(statement) or simple_assign_re.match(statement)
+        if assign:
+            name, rhs = assign.groups()
+            if source_re.search(rhs) or refs(rhs, tainted):
+                tainted.add(name)
+            elif name in tainted and not refs(rhs, tainted):
+                tainted.discard(name)
+            if sql_keyword_re.search(rhs) and dynamic_sql(rhs) and has_untrusted(rhs, tainted):
+                tainted_sql.add(name)
+            elif name in tainted_sql and not refs(rhs, tainted_sql):
+                tainted_sql.discard(name)
+
+        if not sql_sink_re.search(stripped):
+            continue
+        statement = statement_from(lines, idx)
+        if not statement or 'ubs:ignore' in statement:
+            continue
+        if not sql_sink_re.search(statement):
+            continue
+        if safe_parameterized(statement):
+            continue
+
+        sql_var_refs = refs(statement, tainted_sql)
+        untrusted = has_untrusted(statement, tainted)
+        dynamic = dynamic_sql(statement)
+        unsafe = bool(unsafe_sink_re.search(statement))
+        has_inline_sql = bool(sql_keyword_re.search(statement))
+        if not (
+            sql_var_refs
+            or (has_inline_sql and dynamic and untrusted)
+            or (unsafe and (untrusted or sql_var_refs or (has_inline_sql and dynamic)))
+        ):
+            continue
+
+        reason = 'request-derived SQL reaches raw execution'
+        if unsafe:
+            reason = 'request-derived SQL reaches Prisma raw unsafe execution'
+        elif sql_var_refs:
+            reason = f"request-derived SQL variable {sql_var_refs[0]} reaches execution"
+        key = (path, idx + 1, reason)
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append((path, idx + 1, f"{source_line(lines, idx)}  [{reason}]"))
+
+
+issues = []
+for file_path in iter_files(root):
+    analyze(file_path, issues)
+
+for path, line_no, code in issues:
+    print(f"{path}:{line_no}:{code}")
+PY
+}
+
+count_sql_injection_matches() {
+  js_sql_injection_matches | count_lines || true
+}
+
+show_sql_injection_examples() {
+  local limit="${1:-$DETAIL_LIMIT}"
+  local printed=0
+  while IFS= read -r rawline; do
+    [[ -z "$rawline" ]] && continue
+    parse_grep_line "$rawline" || continue
+    print_code_sample "$PARSED_FILE" "$PARSED_LINE" "$PARSED_CODE"
+    printed=$((printed + 1))
+    [[ $printed -ge $limit || $printed -ge $MAX_DETAILED ]] && break
+  done < <(js_sql_injection_matches | head -n "$limit")
+  [[ "$printed" -gt 0 ]]
+}
+
+collect_samples_sql_injection() {
+  local limit="${1:-$DETAIL_LIMIT}"
+  mapfile -t lines < <(js_sql_injection_matches | head -n "$limit")
+  printf '['
+  local i=0
+  local line
+  for line in "${lines[@]}"; do
+    [[ $i -gt 0 ]] && printf ','
+    printf '"%s"' "$(printf '%s' "$line" | json_escape)"
+    i=$((i + 1))
+  done
+  printf ']'
+}
+
 # Temporarily relax pipefail for grep-heavy scans to avoid ERR on 1/no-match
 begin_scan_section(){
   if [[ "$DISABLE_PIPEFAIL_DURING_SCAN" -eq 1 ]]; then set +o pipefail; fi
@@ -4347,7 +4608,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if should_skip 7; then
 print_header "7. SECURITY VULNERABILITIES"
-print_category "Detects: Code injection, XSS, prototype pollution, timing attacks" \
+print_category "Detects: Code injection, XSS, SQL injection, prototype pollution, timing attacks" \
   "Security bugs expose users to attacks and data breaches"
 
 print_subheader "eval() usage (CRITICAL SECURITY RISK)"
@@ -7726,6 +7987,16 @@ if [ "$hardcoded_secret_count" -gt 0 ]; then
     sample_limit=$((sample_limit - 1))
     [ "$sample_limit" -le 0 ] && break
   done <<<"$hardcoded_secret_samples"
+fi
+
+print_subheader "Request-derived SQL construction"
+sql_injection_hits=$(count_sql_injection_matches || echo 0)
+sql_injection_hits=$(printf '%s\n' "${sql_injection_hits:-0}" | awk 'END{print $0+0}')
+if [ "$sql_injection_hits" -gt 0 ]; then
+  print_finding "critical" "$sql_injection_hits" "Interpolated SQL reaches execution sink" "Use parameterized queries, Prisma safe tagged templates, bind/replacements, or query-builder where clauses instead of raw string construction"
+  show_sql_injection_examples 3 || true
+else
+  print_finding "good" "No request-derived raw SQL construction detected"
 fi
 
 print_subheader "RegExp denial of service (ReDoS) risk"

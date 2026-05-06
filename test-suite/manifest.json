@@ -4539,6 +4539,69 @@
       }
     },
     {
+      "id": "js-typescript-sql-injection-buggy",
+      "description": "TypeScript SQL execution sinks should not consume request-derived interpolated SQL strings or Prisma raw unsafe queries.",
+      "path": "test-suite/js/security/sql-injection-buggy.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "security",
+        "sql-injection",
+        "buggy"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Interpolated SQL reaches execution sink",
+          "$queryRawUnsafe",
+          "$executeRawUnsafe"
+        ]
+      }
+    },
+    {
+      "id": "js-typescript-sql-injection-clean",
+      "description": "TypeScript SQL execution using parameters, Prisma tagged templates, replacements, or query-builder where clauses should stay clean.",
+      "path": "test-suite/js/security/sql-injection-clean.ts",
+      "language": "js",
+      "tags": [
+        "js",
+        "typescript",
+        "security",
+        "sql-injection",
+        "clean"
+      ],
+      "args": [
+        "--only=js",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Interpolated SQL reaches execution sink"
+        ]
+      }
+    },
+    {
       "id": "js-typescript-cors-credentials-buggy",
       "description": "TypeScript/Node CORS must not combine credentials with wildcard or reflected origins.",
       "path": "test-suite/js/security/cors-credentials-buggy.ts",
