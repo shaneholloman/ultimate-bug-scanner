@@ -7227,7 +7227,11 @@ if [ "$MODS_COUNT" -gt 0 ]; then
     print_finding "good" "All modules declare go >= 1.23"
   fi
 else
-  print_finding "warning" 1 "No go.mod found" "Use modules; GOPATH mode is legacy"
+  if [[ -f "$PROJECT_DIR" || "${GO_FILES_COUNT:-0}" -le 1 ]]; then
+    print_finding "info" 1 "No go.mod found for focused scan" "Module hygiene requires a project root; focused file scans skip go.mod enforcement"
+  else
+    print_finding "warning" 1 "No go.mod found" "Use modules; GOPATH mode is legacy"
+  fi
 fi
 
 print_subheader "go.sum presence"
