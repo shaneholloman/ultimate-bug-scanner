@@ -5880,7 +5880,7 @@ def statement_from(lines, line_no, max_lines=8):
     for current_idx in range(idx, min(len(lines), idx + max_lines)):
         current = strip_line_comments(lines[current_idx]).strip()
         if not current:
-            if parts:
+            if parts and balance <= 0:
                 break
             continue
         parts.append(current)
@@ -6154,7 +6154,7 @@ def statement_from(lines, line_no, max_lines=12):
     for current_idx in range(idx, min(len(lines), idx + max_lines)):
         current = strip_line_comments(lines[current_idx]).strip()
         if not current:
-            if parts:
+            if parts and balance <= 0:
                 break
             continue
         parts.append(current)
@@ -6390,7 +6390,7 @@ def statement_from(lines, line_no, max_lines=18):
     for current_idx in range(idx, min(len(lines), idx + max_lines)):
         current = strip_line_comments(lines[current_idx]).strip()
         if not current:
-            if parts:
+            if parts and balance <= 0:
                 break
             continue
         parts.append(current)
