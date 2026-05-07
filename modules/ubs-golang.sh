@@ -2735,9 +2735,8 @@ YAML
 id: go.defer-in-loop
 language: go
 rule:
-  pattern: defer $CALL
-  inside:
-    kind: for_statement
+  kind: for_statement
+  regex: "(?s)\\bdefer\\s+"
 severity: warning
 message: "defer inside loop may delay cleanup and grow stack; consider explicit close or scoped function."
 YAML
@@ -2758,7 +2757,7 @@ YAML
 id: go.panic-call
 language: go
 rule:
-  pattern: panic($$)
+  pattern: panic($$$)
 severity: warning
 message: "panic used; prefer error returns in libraries and recover at process boundaries."
 YAML
@@ -2767,9 +2766,8 @@ YAML
 id: go.goroutine-in-loop
 language: go
 rule:
-  pattern: go $EXPR
-  inside:
-    kind: for_statement
+  kind: for_statement
+  regex: "(?s)\\bgo\\s+"
 severity: info
 message: "goroutine launched inside loop; ensure captured values are correct and rate-limited."
 YAML
@@ -2779,10 +2777,7 @@ id: go.loop-var-capture
 language: go
 rule:
   kind: for_statement
-  pattern: |
-    for $I := range $$ {
-      go func() { $$ $I $$ }()
-    }
+  regex: "(?s)for\\s+[^\\n{]*range\\s+[^\\n{]*\\{.*\\bgo\\s+func\\s*\\(\\)\\s*\\{"
 severity: warning
 message: "Loop variable captured by goroutine closure; pass it as a parameter to avoid capture bugs."
 YAML
@@ -2791,11 +2786,10 @@ YAML
 id: go.select-no-default
 language: go
 rule:
-  pattern: |
-    select { $$ }
+  kind: select_statement
   not:
     has:
-      pattern: "default:"
+      regex: "\\bdefault\\s*:"
 severity: info
 message: "select without a default may block indefinitely; confirm this is intended or add a timeout/default."
 YAML
@@ -2871,13 +2865,13 @@ language: go
 rule:
   any:
     - kind: call_expression
-      pattern: http.Get($$)
+      regex: "\\bhttp\\.Get\\s*\\("
     - kind: call_expression
-      pattern: http.Post($$)
+      regex: "\\bhttp\\.Post\\s*\\("
     - kind: call_expression
-      pattern: http.Head($$)
+      regex: "\\bhttp\\.Head\\s*\\("
     - kind: call_expression
-      pattern: http.DefaultClient.Do($$)
+      regex: "\\bhttp\\.DefaultClient\\.Do\\s*\\("
 severity: warning
 message: "Default http.Client has no Timeout; prefer custom client with Timeout or context-aware requests."
 YAML
@@ -2887,7 +2881,7 @@ id: go.http-newrequest-without-context
 language: go
 rule:
   kind: call_expression
-  pattern: http.NewRequest($$)
+  regex: "\\bhttp\\.NewRequest\\s*\\("
 severity: info
 message: "Prefer http.NewRequestWithContext(ctx, ...) to propagate cancellation."
 YAML
@@ -2897,7 +2891,7 @@ id: go.exec-command-without-context
 language: go
 rule:
   kind: call_expression
-  pattern: exec.Command($$)
+  regex: "\\bexec\\.Command\\s*\\("
 severity: info
 message: "Prefer exec.CommandContext(ctx, ...) to enforce timeouts and cancellation."
 YAML
@@ -2906,7 +2900,7 @@ YAML
 id: go.http-client-without-timeout
 language: go
 rule:
-  pattern: http.Client{$$}
+  pattern: http.Client{$$$}
   not:
     has:
       pattern: "Timeout: $X"
@@ -2918,7 +2912,7 @@ YAML
 id: go.http-server-no-timeouts
 language: go
 rule:
-  pattern: http.Server{$$}
+  pattern: http.Server{$$$}
   not:
     any:
       - has: { pattern: "ReadTimeout: $X" }
@@ -2933,7 +2927,7 @@ YAML
 id: go.tls-minversion-missing
 language: go
 rule:
-  pattern: &cfg tls.Config{$$}
+  pattern: tls.Config{$$$}
   not:
     any:
       - has: { pattern: "MinVersion: tls.VersionTLS12" }
@@ -2948,7 +2942,7 @@ id: go.time-tick
 language: go
 rule:
   kind: call_expression
-  pattern: time.Tick($$)
+  regex: "\\btime\\.Tick\\s*\\("
 severity: warning
 message: "time.Tick leaks; prefer time.NewTicker and Stop() it."
 YAML
@@ -2957,10 +2951,8 @@ YAML
 id: go.time-after-in-loop
 language: go
 rule:
-  kind: call_expression
-  pattern: time.After($$)
-  inside:
-    kind: for_statement
+  kind: for_statement
+  regex: "(?s)\\btime\\.After\\s*\\("
 severity: warning
 message: "time.After in loop leaks timers until they fire; use time.NewTimer with Stop/Reset"
 YAML
@@ -3011,9 +3003,8 @@ YAML
 id: go.tls-insecure-skip
 language: go
 rule:
-  pattern: &tls http.Transport{ $$ }
-  has:
-    pattern: "InsecureSkipVerify: true"
+  kind: composite_literal
+  regex: "(?s)http\\.Transport\\s*\\{.*InsecureSkipVerify\\s*:\\s*true"
 severity: warning
 message: "TLS InsecureSkipVerify=true disables cert verification."
 YAML
@@ -3023,7 +3014,8 @@ YAML
 id: go.dot-import
 language: go
 rule:
-  pattern: import . "$PKG"
+  kind: import_spec
+  regex: "^\\.\\s"
 severity: warning
 message: "dot-import pollutes namespace; avoid except in tests/examples."
 YAML
@@ -3032,7 +3024,8 @@ YAML
 id: go.blank-import
 language: go
 rule:
-  pattern: import _ "$PKG"
+  kind: import_spec
+  regex: "^_\\s"
 severity: info
 message: "blank import; ensure side-effect import is intentional."
 YAML
@@ -3042,7 +3035,7 @@ id: go.ioutil-deprecated
 language: go
 rule:
   kind: call_expression
-  pattern: ioutil.$FN($$)
+  regex: "\\bioutil\\.[A-Za-z_][A-Za-z0-9_]*\\s*\\("
 severity: info
 message: "ioutil package is deprecated; prefer io/os equivalents."
 YAML
@@ -3085,7 +3078,8 @@ YAML
 id: go.os-remove-no-error-check
 language: go
 rule:
-  pattern: os.Remove($PATH)
+  kind: expression_statement
+  regex: "^os\\.Remove\\s*\\("
   not:
     inside:
       any:
@@ -3110,10 +3104,10 @@ YAML
 id: go.fmt-errorf-no-wrap
 language: go
 rule:
-  pattern: fmt.Errorf($$$)
+  kind: call_expression
+  regex: "\\bfmt\\.Errorf\\s*\\("
   not:
-    has:
-      regex: "%w"
+    regex: "%w"
 severity: info
 message: "fmt.Errorf without %w loses error chain; use %w to wrap the original error"
 YAML
@@ -3275,6 +3269,8 @@ rule:
           defer func() { _ = $RESP.Body.Close() }()
           $$$
         }
+    - kind: block
+      regex: "(?s)(http\\.(Get|Head|Post|PostForm)|[A-Za-z_][A-Za-z0-9_]*\\.(Do|Get))\\s*\\([^\\n]*\\)\\s*\\n\\s*defer\\s+[A-Za-z_][A-Za-z0-9_]*\\.Body\\.Close\\s*\\(\\)"
 severity: error
 message: "defer resp.Body.Close() occurs before checking err; resp may be nil and will panic. Check err first, then defer Close()."
 YAML
@@ -3389,6 +3385,8 @@ rule:
           defer func() { _ = $ROWS.Close() }()
           $$$
         }
+    - kind: block
+      regex: "(?s)[A-Za-z_][A-Za-z0-9_]*\\s*,\\s*err\\s*:=\\s*[A-Za-z_][A-Za-z0-9_]*\\.(Query|QueryContext)\\s*\\([^\\n]*\\)\\s*\\n\\s*defer\\s+[A-Za-z_][A-Za-z0-9_]*\\.Close\\s*\\(\\)"
 severity: error
 message: "defer rows.Close() occurs before checking err; rows may be nil and will panic. Check err first, then defer Close()."
 YAML
@@ -3421,13 +3419,13 @@ rule:
   all:
     - any:
         - kind: short_var_declaration
-          pattern: $TX, $ERR := $DB.Begin($$)
+          pattern: $TX, $ERR := $DB.Begin($$$)
         - kind: short_var_declaration
-          pattern: $TX, $ERR := $DB.BeginTx($$)
+          pattern: $TX, $ERR := $DB.BeginTx($$$)
         - kind: assignment_statement
-          pattern: $TX, $ERR = $DB.Begin($$)
+          pattern: $TX, $ERR = $DB.Begin($$$)
         - kind: assignment_statement
-          pattern: $TX, $ERR = $DB.BeginTx($$)
+          pattern: $TX, $ERR = $DB.BeginTx($$$)
     - not:
         inside:
           has:
@@ -3446,10 +3444,15 @@ id: go.http-handler-background
 language: go
 rule:
   all:
-    - pattern: |
-        func($W http.ResponseWriter, $R *http.Request) {
-          $$$
-        }
+    - any:
+        - pattern: |
+            func $NAME($W http.ResponseWriter, $R *http.Request, $$$) $RET {
+              $$$
+            }
+        - pattern: |
+            func($W http.ResponseWriter, $R *http.Request, $$$) {
+              $$$
+            }
     - has:
         pattern: context.Background()
 severity: warning
@@ -3461,7 +3464,7 @@ YAML
 id: go.http-transport-missing-timeouts
 language: go
 rule:
-  pattern: http.Transport{$$}
+  pattern: http.Transport{$$$}
   not:
     all:
       - has: { pattern: "ResponseHeaderTimeout: $X" }
@@ -3475,7 +3478,7 @@ YAML
 id: go.http-client-without-transport
 language: go
 rule:
-  pattern: http.Client{$$}
+  pattern: http.Client{$$$}
   not:
     has:
       pattern: "Transport: $T"
@@ -3534,7 +3537,7 @@ id: go.http-client-close-idle-missing
 language: go
 rule:
   all:
-    - pattern: $C := &http.Client{$$}
+    - pattern: $C := &http.Client{$$$}
     - not:
         inside:
           has:
@@ -3550,7 +3553,7 @@ language: go
 rule:
   all:
     - kind: short_var_declaration
-      pattern: $T := time.NewTimer($$)
+      pattern: $T := time.NewTimer($$$)
     - not:
         inside:
           has:
@@ -3565,16 +3568,10 @@ YAML
 id: go.waitgroup-add-no-done
 language: go
 rule:
-  pattern: |
-    func($NAME) {
-      $WG.Add($N)
-      $S
-      if $COND {
-        return
-      }
-      $T
-      $WG.Done()
-    }
+  kind: function_declaration
+  regex: "(?s)\\.[Aa]dd\\s*\\("
+  not:
+    regex: "\\.Done\\s*\\("
 severity: info
 message: "WaitGroup.Add without nearby Done in same function (heuristic)."
 YAML
@@ -3635,10 +3632,8 @@ YAML
 id: go.loop-var-capture-for
 language: go
 rule:
-  pattern: |
-    for $I := $INIT; $$$; $$$ {
-      go func() { $$$ $I $$$ }()
-    }
+  kind: for_statement
+  regex: "(?s)for\\s+[A-Za-z_][A-Za-z0-9_]*\\s*:=\\s*[^;]+;[^;]+;[^\\{]+\\{.*\\bgo\\s+func\\s*\\(\\)\\s*\\{"
 severity: warning
 message: "For-loop variable captured by goroutine closure; pass it as a parameter to avoid capture bugs."
 YAML
@@ -3664,10 +3659,10 @@ id: go.sql-dynamic-string
 language: go
 rule:
   any:
-    - pattern: $DB.Exec($Q + $X, $$)
-    - pattern: $DB.Query($Q + $X, $$)
-    - pattern: $DB.ExecContext($CTX, $Q + $X, $$)
-    - pattern: $DB.QueryContext($CTX, $Q + $X, $$)
+    - kind: call_expression
+      regex: "\\.(Exec|Query)\\s*\\([^\\n)]*\\+"
+    - kind: call_expression
+      regex: "\\.(ExecContext|QueryContext)\\s*\\([^\\n)]*\\+"
 severity: warning
 message: "Potential dynamic SQL via string concatenation at Exec/Query sink; use placeholders/parameters."
 YAML
@@ -3699,7 +3694,7 @@ rule:
       pattern: |
         {
           $$$
-          $TX, $ERR := $DB.Begin($$)
+          $TX, $ERR := $DB.Begin($$$)
           defer $TX.Rollback()
           $$$
         }
@@ -3707,7 +3702,7 @@ rule:
       pattern: |
         {
           $$$
-          $TX, $ERR := $DB.BeginTx($$)
+          $TX, $ERR := $DB.BeginTx($$$)
           defer $TX.Rollback()
           $$$
         }
@@ -3715,7 +3710,7 @@ rule:
       pattern: |
         {
           $$$
-          $TX, $ERR = $DB.Begin($$)
+          $TX, $ERR = $DB.Begin($$$)
           defer $TX.Rollback()
           $$$
         }
@@ -3723,7 +3718,7 @@ rule:
       pattern: |
         {
           $$$
-          $TX, $ERR = $DB.BeginTx($$)
+          $TX, $ERR = $DB.BeginTx($$$)
           defer $TX.Rollback()
           $$$
         }
@@ -3731,10 +3726,12 @@ rule:
       pattern: |
         {
           $$$
-          $TX, $ERR := $DB.BeginTx($$)
+          $TX, $ERR := $DB.BeginTx($$$)
           defer func() { _ = $TX.Rollback() }()
           $$$
         }
+    - kind: block
+      regex: "(?s)[A-Za-z_][A-Za-z0-9_]*\\s*,\\s*err\\s*:?=\\s*[A-Za-z_][A-Za-z0-9_]*\\.(Begin|BeginTx)\\s*\\([^\\n]*\\)\\s*\\n\\s*defer\\s+[A-Za-z_][A-Za-z0-9_]*\\.Rollback\\s*\\(\\)"
 severity: error
 message: "defer tx.Rollback() occurs before checking err; tx may be nil/stale and will panic/rollback wrong tx. Check err first, then defer Rollback()."
 YAML
@@ -3749,7 +3746,7 @@ rule:
       pattern: |
         {
           $$$
-          $TX, $ERR := $DB.Begin($$)
+          $TX, $ERR := $DB.Begin($$$)
           if $ERR != nil { $$$ }
           $S
           $$$
@@ -3760,7 +3757,7 @@ rule:
       pattern: |
         {
           $$$
-          $TX, $ERR := $DB.BeginTx($$)
+          $TX, $ERR := $DB.BeginTx($$$)
           if $ERR != nil { $$$ }
           $S
           $$$
@@ -3771,7 +3768,7 @@ rule:
       pattern: |
         {
           $$$
-          $TX, $ERR = $DB.Begin($$)
+          $TX, $ERR = $DB.Begin($$$)
           if $ERR != nil { $$$ }
           $S
           $$$
@@ -3782,7 +3779,7 @@ rule:
       pattern: |
         {
           $$$
-          $TX, $ERR = $DB.BeginTx($$)
+          $TX, $ERR = $DB.BeginTx($$$)
           if $ERR != nil { $$$ }
           $S
           $$$
@@ -3793,13 +3790,15 @@ rule:
       pattern: |
         {
           $$$
-          $TX, $ERR := $DB.BeginTx($$)
+          $TX, $ERR := $DB.BeginTx($$$)
           if $ERR != nil { $$$ }
           $S
           $$$
           defer func() { _ = $TX.Rollback() }()
           $$$
         }
+    - kind: block
+      regex: "(?s)[A-Za-z_][A-Za-z0-9_]*\\s*,\\s*err\\s*:?=\\s*[A-Za-z_][A-Za-z0-9_]*\\.(Begin|BeginTx)\\s*\\([^\\n]*\\)\\s*\\n\\s*if\\s+err\\s*!=\\s*nil\\s*\\{[^}]*\\}\\s*\\n\\s*[^\\n]+\\s*\\n\\s*defer\\s+[A-Za-z_][A-Za-z0-9_]*\\.Rollback\\s*\\(\\)"
 severity: warning
 message: "defer tx.Rollback() is not placed immediately after a successful Begin; early returns between may leak/skip rollback."
 YAML
@@ -3812,13 +3811,13 @@ rule:
   all:
     - any:
         - kind: short_var_declaration
-          pattern: $ROWS, $ERR := $DB.Query($$)
+          pattern: $ROWS, $ERR := $DB.Query($$$)
         - kind: short_var_declaration
-          pattern: $ROWS, $ERR := $DB.QueryContext($CTX, $$)
+          pattern: $ROWS, $ERR := $DB.QueryContext($CTX, $$$)
         - kind: assignment_statement
-          pattern: $ROWS, $ERR = $DB.Query($$)
+          pattern: $ROWS, $ERR = $DB.Query($$$)
         - kind: assignment_statement
-          pattern: $ROWS, $ERR = $DB.QueryContext($CTX, $$)
+          pattern: $ROWS, $ERR = $DB.QueryContext($CTX, $$$)
     - not:
         inside:
           has:
@@ -3845,7 +3844,7 @@ rule:
       pattern: |
         {
           $$$
-          $ROWS, $ERR := $DB.Query($$)
+          $ROWS, $ERR := $DB.Query($$$)
           if $ERR != nil { $$$ }
           $S
           $$$
@@ -3856,7 +3855,7 @@ rule:
       pattern: |
         {
           $$$
-          $ROWS, $ERR := $DB.QueryContext($CTX, $$)
+          $ROWS, $ERR := $DB.QueryContext($CTX, $$$)
           if $ERR != nil { $$$ }
           $S
           $$$
@@ -3867,7 +3866,7 @@ rule:
       pattern: |
         {
           $$$
-          $ROWS, $ERR = $DB.Query($$)
+          $ROWS, $ERR = $DB.Query($$$)
           if $ERR != nil { $$$ }
           $S
           $$$
@@ -3878,7 +3877,7 @@ rule:
       pattern: |
         {
           $$$
-          $ROWS, $ERR = $DB.QueryContext($CTX, $$)
+          $ROWS, $ERR = $DB.QueryContext($CTX, $$$)
           if $ERR != nil { $$$ }
           $S
           $$$
@@ -3889,13 +3888,15 @@ rule:
       pattern: |
         {
           $$$
-          $ROWS, $ERR := $DB.QueryContext($CTX, $$)
+          $ROWS, $ERR := $DB.QueryContext($CTX, $$$)
           if $ERR != nil { $$$ }
           $S
           $$$
           defer func() { _ = $ROWS.Close() }()
           $$$
         }
+    - kind: block
+      regex: "(?s)[A-Za-z_][A-Za-z0-9_]*\\s*,\\s*err\\s*:?=\\s*[A-Za-z_][A-Za-z0-9_]*\\.(Query|QueryContext)\\s*\\([^\\n]*\\)\\s*\\n\\s*if\\s+err\\s*!=\\s*nil\\s*\\{[^}]*\\}\\s*\\n\\s*[^\\n]+\\s*\\n\\s*defer\\s+[A-Za-z_][A-Za-z0-9_]*\\.Close\\s*\\(\\)"
 severity: info
 message: "defer rows.Close() is not placed immediately after a successful Query; early returns between may leak rows/connections."
 YAML
@@ -3972,6 +3973,8 @@ rule:
           defer func() { _ = $RESP.Body.Close() }()
           $$$
         }
+    - kind: block
+      regex: "(?s)(http\\.(Get|Head|Post|PostForm)|[A-Za-z_][A-Za-z0-9_]*\\.(Do|Get))\\s*\\([^\\n]*\\)\\s*\\n\\s*if\\s+err\\s*!=\\s*nil\\s*\\{[^}]*\\}\\s*\\n\\s*[^\\n]+\\s*\\n\\s*defer\\s+[A-Za-z_][A-Za-z0-9_]*\\.Body\\.Close\\s*\\(\\)"
 severity: info
 message: "defer resp.Body.Close() is not placed immediately after a successful request; early returns between may leak connections."
 YAML
@@ -4004,6 +4007,8 @@ rule:
           $CANCEL()
           $$$
         }
+    - kind: block
+      regex: "(?s)defer\\s+[A-Za-z_][A-Za-z0-9_]*\\s*\\(\\)\\s*\\n\\s*if\\s+err\\s*!=\\s*nil\\s*\\{[^}]*\\}\\s*\\n\\s*[^\\n]+\\s*\\n\\s*[A-Za-z_][A-Za-z0-9_]*\\s*\\(\\)"
 severity: error
 message: "defer cancel() occurs before checking err; you may be deferring the wrong cancel (shadowing/reassign bug)."
 YAML
@@ -4086,6 +4091,8 @@ rule:
           }
           $$$
         }
+    - kind: block
+      regex: "(?s)context\\.With(Cancel|Timeout|Deadline)\\s*\\([^\\n]*\\)\\s*\\n\\s*if\\s+[^\\n{]+\\{[^}]*\\bdefer\\s+[A-Za-z_][A-Za-z0-9_]*\\s*\\(\\)"
 severity: warning
 message: "cancel() is deferred conditionally inside if; prefer unconditional defer cancel() immediately after With*."
 YAML
@@ -4097,13 +4104,13 @@ language: go
 rule:
   any:
     - kind: short_var_declaration
-      pattern: $N, _ := $W.Write($$)
+      pattern: $N, _ := $W.Write($$$)
     - kind: assignment_statement
-      pattern: $N, _ = $W.Write($$)
+      pattern: $N, _ = $W.Write($$$)
     - kind: short_var_declaration
-      pattern: _, _ := $W.Write($$)
+      pattern: _, _ := $W.Write($$$)
     - kind: assignment_statement
-      pattern: _, _ = $W.Write($$)
+      pattern: _, _ = $W.Write($$$)
 severity: info
 message: "Write(...) error is ignored via blank identifier; consider handling/propagating the error."
 YAML
@@ -4115,13 +4122,17 @@ language: go
 rule:
   all:
     - kind: expression_statement
-      pattern: $W.Write($$)
+      regex: "\\.Write\\s*\\("
     - inside:
         any:
-          - pattern: func($W http.ResponseWriter, $R *http.Request) { $$$ }
-          - pattern: func($W http.ResponseWriter, $R *http.Request, $$) { $$$ }
-          - pattern: func ($REC $T) $NAME($W http.ResponseWriter, $R *http.Request) { $$$ }
-          - pattern: func ($REC $T) $NAME($W http.ResponseWriter, $R *http.Request, $$) { $$$ }
+          - pattern: |
+              func $NAME($W http.ResponseWriter, $R *http.Request, $$$) $RET {
+                $$$
+              }
+          - pattern: |
+              func($W http.ResponseWriter, $R *http.Request, $$$) {
+                $$$
+              }
 severity: info
 message: "http.ResponseWriter.Write(...) return values ignored; consider checking error (or explicitly discarding with _, _ = ...)."
 YAML
@@ -4133,15 +4144,15 @@ language: go
 rule:
   any:
     - kind: expression_statement
-      pattern: fmt.Fprintf($$)
+      regex: "\\bfmt\\.Fprintf\\s*\\("
     - kind: short_var_declaration
-      pattern: $N, _ := fmt.Fprintf($$)
+      regex: ",\\s*_\\s*:=\\s*fmt\\.Fprintf\\s*\\("
     - kind: assignment_statement
-      pattern: $N, _ = fmt.Fprintf($$)
+      regex: ",\\s*_\\s*=\\s*fmt\\.Fprintf\\s*\\("
     - kind: short_var_declaration
-      pattern: _, _ := fmt.Fprintf($$)
+      regex: "^_\\s*,\\s*_\\s*:=\\s*fmt\\.Fprintf\\s*\\("
     - kind: assignment_statement
-      pattern: _, _ = fmt.Fprintf($$)
+      regex: "^_\\s*,\\s*_\\s*=\\s*fmt\\.Fprintf\\s*\\("
 severity: info
 message: "fmt.Fprintf return error ignored; consider handling it (especially when writing to network/file)."
 YAML
