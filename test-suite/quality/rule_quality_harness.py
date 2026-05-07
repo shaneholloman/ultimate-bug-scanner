@@ -126,6 +126,8 @@ METAMORPHIC_CASE_IDS = (
     "rust-tls-verification-buggy",
     "rust-tls-verification-clean",
 )
+BASE_METAMORPHIC_TRANSFORMS = ("comments",)
+CAMPAIGN_LANGUAGE_METAMORPHIC_TRANSFORMS = ("whitespace",)
 JSON_DECODER = json.JSONDecoder()
 
 sys.path.insert(0, str(TEST_ROOT))
@@ -1087,9 +1089,36 @@ def source_with_benign_comments(
     return "\n".join(lines) + "\n"
 
 
+def source_with_benign_whitespace(source: str) -> str:
+    lines = source.splitlines()
+    expanded: list[str] = []
+    for index, line in enumerate(lines):
+        if index % 5 == 0:
+            expanded.append("")
+        expanded.append(line)
+        if index % 7 == 3:
+            expanded.append("")
+    expanded.append("")
+    return "\r\n".join(expanded) + "\r\n"
+
+
+def transform_source(
+    source: str,
+    path: Path,
+    transform: str,
+    rng: random.Random | None = None,
+) -> str:
+    if transform == "comments":
+        return source_with_benign_comments(source, path, rng)
+    if transform == "whitespace":
+        return source_with_benign_whitespace(source)
+    raise AssertionError(f"unknown source transform: {transform}")
+
+
 def materialize_variant(
     case: dict[str, Any],
     label: str,
+    transform: str = "comments",
     rng: random.Random | None = None,
 ) -> Path:
     original = REPO_ROOT / case["path"]
@@ -1110,9 +1139,10 @@ def materialize_variant(
             copy_variant_metadata(out_dir, original)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(
-            source_with_benign_comments(
+            transform_source(
                 original.read_text(encoding="utf-8"),
                 original,
+                transform,
                 rng,
             ),
             encoding="utf-8",
@@ -1130,9 +1160,10 @@ def materialize_variant(
         elif is_text_source(source_path):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(
-                source_with_benign_comments(
+                transform_source(
                     source_path.read_text(encoding="utf-8"),
                     source_path,
+                    transform,
                     rng,
                 ),
                 encoding="utf-8",
@@ -1143,6 +1174,13 @@ def materialize_variant(
     return out_path
 
 
+def metamorphic_transforms_for_case(case: dict[str, Any]) -> tuple[str, ...]:
+    transforms = list(BASE_METAMORPHIC_TRANSFORMS)
+    if case.get("language") in CAMPAIGN_COVERAGE_LANGUAGES:
+        transforms.extend(CAMPAIGN_LANGUAGE_METAMORPHIC_TRANSFORMS)
+    return tuple(transforms)
+
+
 def run_metamorphic_checks(
     manifest: dict[str, Any],
     case_ids: tuple[str, ...],
@@ -1150,21 +1188,35 @@ def run_metamorphic_checks(
     scope: str,
 ) -> None:
     cases = case_by_id(manifest)
+    transform_count = 0
     for case_id in case_ids:
         case = cases[case_id]
-        transformed_path = materialize_variant(case, f"metamorphic-{case_id}")
         _, original_summary = run_real_case(
             manifest, case, f"metamorphic-{case_id}-original", timeout
         )
-        _, transformed_summary = run_real_case(
-            manifest, case, f"metamorphic-{case_id}-transformed", timeout, transformed_path
-        )
-        if original_summary != transformed_summary:
-            raise AssertionError(
-                f"{case_id} changed under benign comment transform: "
-                f"{original_summary} != {transformed_summary}"
+        for transform in metamorphic_transforms_for_case(case):
+            transform_count += 1
+            transformed_path = materialize_variant(
+                case,
+                f"metamorphic-{case_id}-{transform}",
+                transform,
             )
-    print(f"[metamorphic-{scope}] PASS ({len(case_ids)} real fixture transforms)")
+            _, transformed_summary = run_real_case(
+                manifest,
+                case,
+                f"metamorphic-{case_id}-{transform}-transformed",
+                timeout,
+                transformed_path,
+            )
+            if original_summary != transformed_summary:
+                raise AssertionError(
+                    f"{case_id} changed under benign {transform} transform: "
+                    f"{original_summary} != {transformed_summary}"
+                )
+    print(
+        f"[metamorphic-{scope}] PASS "
+        f"({len(case_ids)} real fixture(s), {transform_count} transformed scan(s))"
+    )
 
 
 def run_fuzz_smoke(
@@ -1179,7 +1231,11 @@ def run_fuzz_smoke(
     for case_id in case_ids:
         case = cases[case_id]
         for iteration in range(iterations):
-            transformed_path = materialize_variant(case, f"fuzz-{case_id}-{iteration}", rng)
+            transformed_path = materialize_variant(
+                case,
+                f"fuzz-{case_id}-{iteration}",
+                rng=rng,
+            )
             run_real_case(
                 manifest,
                 case,

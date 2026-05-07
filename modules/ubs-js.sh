@@ -6238,7 +6238,6 @@ safe_re = re.compile(
     r')',
     re.IGNORECASE,
 )
-
 def code_line(source_line):
     stripped = source_line.strip()
     if not stripped or stripped.startswith(("//", "/*", "*")):
@@ -6443,6 +6442,10 @@ safe_re = re.compile(
     r')',
     re.IGNORECASE,
 )
+function_boundary_re = re.compile(
+    r'^\s*(?:export\s+)?(?:async\s+)?function\b|'
+    r'^\s*(?:export\s+)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>'
+)
 
 def code_line(source_line):
     stripped = source_line.strip()
@@ -6503,9 +6506,18 @@ def statement_from(lines, idx, max_lines=16):
 
 def context_from(lines, idx, max_lines=10):
     start = max(0, idx - max_lines)
+    blank_gap = 0
     for line_idx in range(idx - 1, start - 1, -1):
-        if not lines[line_idx].strip():
-            start = line_idx + 1
+        clean = code_line(lines[line_idx])
+        if not clean.strip():
+            blank_gap += 1
+            if blank_gap > 2:
+                start = line_idx + 1
+                break
+            continue
+        blank_gap = 0
+        if function_boundary_re.search(clean):
+            start = line_idx
             break
     return '\n'.join(
         clean
@@ -8155,6 +8167,10 @@ sensitive_re = re.compile(
     re.IGNORECASE,
 )
 token_shape_re = re.compile(r'\.toString\s*\(\s*(?:36|16)\s*\)|\bpadStart\s*\(\s*[46]\b')
+function_boundary_re = re.compile(
+    r'^\s*(?:export\s+)?(?:async\s+)?function\b|'
+    r'^\s*(?:export\s+)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>'
+)
 
 def identifier_terms(text):
     spaced = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', text)
@@ -8189,14 +8205,32 @@ def statement_from(lines, idx, max_lines=10):
 def context_from(lines, idx):
     start = max(0, idx - 6)
     end = min(len(lines), idx + 4)
+    blank_gap = 0
     for line_idx in range(idx - 1, start - 1, -1):
-        if not lines[line_idx].strip():
-            start = line_idx + 1
+        clean = code_line(lines[line_idx])
+        if not clean.strip():
+            blank_gap += 1
+            if blank_gap > 2:
+                start = line_idx + 1
+                break
+            continue
+        blank_gap = 0
+        if function_boundary_re.search(clean):
+            start = line_idx
             break
+    blank_gap = 0
     for line_idx in range(idx + 1, end):
-        if not lines[line_idx].strip():
+        clean = code_line(lines[line_idx])
+        if not clean.strip():
+            blank_gap += 1
+            if blank_gap > 2:
+                end = line_idx
+                break
+            continue
+        if function_boundary_re.search(clean):
             end = line_idx
             break
+        blank_gap = 0
     return '\n'.join(
         clean
         for source_line in lines[start:end]

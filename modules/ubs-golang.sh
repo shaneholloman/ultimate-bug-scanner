@@ -3793,7 +3793,7 @@ rule:
           $$$
         }
     - kind: block
-      regex: "(?s)[A-Za-z_][A-Za-z0-9_]*\\s*,\\s*err\\s*:?=\\s*[A-Za-z_][A-Za-z0-9_]*\\.(Begin|BeginTx)\\s*\\([^\\n]*\\)\\s*\\n\\s*if\\s+err\\s*!=\\s*nil\\s*\\{[^}]*\\}\\s*\\n\\s*[^\\n]+\\s*\\n\\s*defer\\s+[A-Za-z_][A-Za-z0-9_]*\\.Rollback\\s*\\(\\)"
+      regex: "(?s)[A-Za-z_][A-Za-z0-9_]*\\s*,\\s*err\\s*:?=\\s*[A-Za-z_][A-Za-z0-9_]*\\.(Begin|BeginTx)\\s*\\([^\\n]*\\)\\s*\\n\\s*if\\s+err\\s*!=\\s*nil\\s*\\{[^}]*\\}\\s*\\n\\s*[^\\r\\n]+\\s*\\n\\s*defer\\s+[A-Za-z_][A-Za-z0-9_]*\\.Rollback\\s*\\(\\)"
 severity: warning
 message: "defer tx.Rollback() is not placed immediately after a successful Begin; early returns between may leak/skip rollback."
 YAML
@@ -3891,7 +3891,7 @@ rule:
           $$$
         }
     - kind: block
-      regex: "(?s)[A-Za-z_][A-Za-z0-9_]*\\s*,\\s*err\\s*:?=\\s*[A-Za-z_][A-Za-z0-9_]*\\.(Query|QueryContext)\\s*\\([^\\n]*\\)\\s*\\n\\s*if\\s+err\\s*!=\\s*nil\\s*\\{[^}]*\\}\\s*\\n\\s*[^\\n]+\\s*\\n\\s*defer\\s+[A-Za-z_][A-Za-z0-9_]*\\.Close\\s*\\(\\)"
+      regex: "(?s)[A-Za-z_][A-Za-z0-9_]*\\s*,\\s*err\\s*:?=\\s*[A-Za-z_][A-Za-z0-9_]*\\.(Query|QueryContext)\\s*\\([^\\n]*\\)\\s*\\n\\s*if\\s+err\\s*!=\\s*nil\\s*\\{[^}]*\\}\\s*\\n\\s*[^\\r\\n]+\\s*\\n\\s*defer\\s+[A-Za-z_][A-Za-z0-9_]*\\.Close\\s*\\(\\)"
 severity: info
 message: "defer rows.Close() is not placed immediately after a successful Query; early returns between may leak rows/connections."
 YAML
@@ -3969,7 +3969,7 @@ rule:
           $$$
         }
     - kind: block
-      regex: "(?s)(http\\.(Get|Head|Post|PostForm)|[A-Za-z_][A-Za-z0-9_]*\\.(Do|Get))\\s*\\([^\\n]*\\)\\s*\\n\\s*if\\s+err\\s*!=\\s*nil\\s*\\{[^}]*\\}\\s*\\n\\s*[^\\n]+\\s*\\n\\s*defer\\s+[A-Za-z_][A-Za-z0-9_]*\\.Body\\.Close\\s*\\(\\)"
+      regex: "(?s)(http\\.(Get|Head|Post|PostForm)|[A-Za-z_][A-Za-z0-9_]*\\.(Do|Get))\\s*\\([^\\n]*\\)\\s*\\n\\s*if\\s+err\\s*!=\\s*nil\\s*\\{[^}]*\\}\\s*\\n\\s*[^\\r\\n]+\\s*\\n\\s*defer\\s+[A-Za-z_][A-Za-z0-9_]*\\.Body\\.Close\\s*\\(\\)"
 severity: info
 message: "defer resp.Body.Close() is not placed immediately after a successful request; early returns between may leak connections."
 YAML
@@ -4003,7 +4003,7 @@ rule:
           $$$
         }
     - kind: block
-      regex: "(?s)defer\\s+[A-Za-z_][A-Za-z0-9_]*\\s*\\(\\)\\s*\\n\\s*if\\s+err\\s*!=\\s*nil\\s*\\{[^}]*\\}\\s*\\n\\s*[^\\n]+\\s*\\n\\s*[A-Za-z_][A-Za-z0-9_]*\\s*\\(\\)"
+      regex: "(?s)defer\\s+[A-Za-z_][A-Za-z0-9_]*\\s*\\(\\)\\s*\\n\\s*if\\s+err\\s*!=\\s*nil\\s*\\{[^}]*\\}\\s*\\n\\s*[^\\r\\n]+\\s*\\n\\s*[A-Za-z_][A-Za-z0-9_]*\\s*\\(\\)"
 severity: error
 message: "defer cancel() occurs before checking err; you may be deferring the wrong cancel (shadowing/reassign bug)."
 YAML
@@ -6676,14 +6676,32 @@ def logical_statement(lines, line_no):
 def context_around(lines, line_no, before=8, after=18):
     idx = line_no - 1
     start = idx
+    blank_gap = 0
     while start > 0 and idx - start < before:
-        if not strip_line_comments(lines[start - 1]).strip():
+        previous = strip_line_comments(lines[start - 1]).strip()
+        if not previous:
+            blank_gap += 1
+            if blank_gap > 2:
+                break
+            start -= 1
+            continue
+        if previous.startswith(('const ', 'func ', 'type ', 'var ')) and start - 1 != idx:
             break
+        blank_gap = 0
         start -= 1
     end = idx
+    blank_gap = 0
     while end + 1 < len(lines) and end - idx < after:
-        if not strip_line_comments(lines[end + 1]).strip():
+        following = strip_line_comments(lines[end + 1]).strip()
+        if not following:
+            blank_gap += 1
+            if blank_gap > 2:
+                break
+            end += 1
+            continue
+        if following.startswith(('const ', 'func ', 'type ', 'var ')):
             break
+        blank_gap = 0
         end += 1
     parts = []
     for current in range(start, end + 1):
