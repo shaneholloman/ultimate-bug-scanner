@@ -150,7 +150,8 @@ The script runs UBS twice against the Python buggy fixtures, verifies that the r
 - The tracked golden coverage matrix in `test-suite/goldens/rule_coverage.json` still matches the manifest's paired security fixtures.
 - Every paired security fixture has both a buggy and clean manifest case, and every manifest path exists.
 - Rust, TypeScript/JavaScript, and Go ast-grep rule packs all emit valid SARIF through the real module CLIs.
-- The canonical Rust/TypeScript/Go SARIF evidence in `test-suite/goldens/ast_grep_rule_pack_sarif.json` still matches the emitted rule IDs, result counts, and driver rule list shape.
+- The canonical Rust/TypeScript/Go SARIF evidence in `test-suite/goldens/ast_grep_rule_pack_sarif.json` still matches the emitted rule IDs, result counts, driver rule list shape, and per-rule ast-grep YAML inventory.
+- Every generated Rust, TypeScript/JavaScript, and Go ast-grep YAML rule parses when run directly through `ast-grep scan --rule` against its language fixture.
 - Curated request-body and route-param taint fixtures remain stable under benign comment/whitespace transforms.
 - Clean request-body, SQL, redirect, and SSRF fixtures stay clean across deterministic fuzz variants, with a per-case timeout so scanner hangs fail quickly.
 
@@ -164,7 +165,7 @@ UPDATE_GOLDENS=1 uv run python quality/rule_quality_harness.py --skip-runtime
 UPDATE_GOLDENS=1 uv run python quality/rule_quality_harness.py
 ```
 
-The default runtime scope keeps `run_all.sh` quick by running Rust/TypeScript/Go ast-grep rule-pack validity checks plus request-body and route-param metamorphic/fuzz checks. Use `--runtime-scope=campaign` for the recent Rust/TypeScript/Go detector campaign, or `--runtime-scope=all` to execute every paired security fixture in the golden. The coverage golden also freezes the case ids in each runtime and robustness scope, so narrowing campaign/all/metamorphic/fuzz coverage requires an intentional golden diff. `UPDATE_GOLDENS=1 ... --skip-runtime` updates only the coverage matrix; run without `--skip-runtime` when reviewing and updating the SARIF evidence golden. Only update goldens after reviewing the diffs and confirming the rule coverage or SARIF evidence change is intentional.
+The default runtime scope keeps `run_all.sh` quick by running Rust/TypeScript/Go ast-grep rule-pack validity checks plus request-body and route-param metamorphic/fuzz checks. Use `--runtime-scope=campaign` for the recent Rust/TypeScript/Go detector campaign, or `--runtime-scope=all` to execute every paired security fixture in the golden. The coverage golden also freezes the case ids in each runtime and robustness scope, so narrowing campaign/all/metamorphic/fuzz coverage requires an intentional golden diff. `UPDATE_GOLDENS=1 ... --skip-runtime` updates only the coverage matrix; run without `--skip-runtime` when reviewing and updating the SARIF/per-rule rule-pack evidence golden. Only update goldens after reviewing the diffs and confirming the rule coverage or rule-pack evidence change is intentional.
 
 ### Scan Individual Buggy Files
 

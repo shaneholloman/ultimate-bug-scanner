@@ -77,6 +77,7 @@ DETAIL_LIMIT=3
 MAX_DETAILED=250
 JOBS="${JOBS:-0}"
 USER_RULE_DIR=""
+DUMP_RULES_DIR=""
 DISABLE_PIPEFAIL_DURING_SCAN=1
 LIST_RULES=0
 AST_JSON=""
@@ -189,6 +190,7 @@ Options:
   --skip=CSV               Skip categories by number (e.g. --skip=2,7,11)
   --fail-on-warning        Exit non-zero on warnings or critical
   --rules=DIR              Additional ast-grep rules directory (merged)
+  --dump-rules=DIR         Persist generated ast-grep rules to DIR for test validation
   --go-tools               Also run gofmt -s -l, go vet, and govulncheck (if available)
   --test-pkgs=PKGS         Package pattern for tests/vet (default: ./...)
   --only-changed           Scan only files changed vs git merge-base (if in git repo)
@@ -223,6 +225,7 @@ while [[ $# -gt 0 ]]; do
     --skip=*)     SKIP_CATEGORIES="${1#*=}"; shift;;
     --fail-on-warning) FAIL_ON_WARNING=1; shift;;
     --rules=*)    USER_RULE_DIR="${1#*=}"; shift;;
+    --dump-rules=*) DUMP_RULES_DIR="${1#*=}"; shift;;
     --go-tools)   RUN_GO_TOOLS=1; shift;;
     --test-pkgs=*) GOTEST_PKGS="${1#*=}"; shift;;
     --only-changed) ONLY_CHANGED=1; shift;;
@@ -4544,6 +4547,10 @@ if check_ast_grep; then
   diag "${GREEN}${CHECK} ast-grep available (${AST_GREP_CMD[*]}) - full AST analysis enabled${RESET}"
   write_ast_rules || true
   write_ast_rules_v7_extras || true
+  if [[ -n "$DUMP_RULES_DIR" ]]; then
+    mkdir -p "$DUMP_RULES_DIR"
+    cp -R "$AST_RULE_DIR"/. "$DUMP_RULES_DIR"/ 2>/dev/null || true
+  fi
   if [[ "$LIST_RULES" -eq 1 ]]; then
     ( set +o pipefail; awk 'BEGIN{FS=":"}/^id:[[:space:]]*/{gsub(/^[[:space:]]*id:[[:space:]]*/,"");print;}' "$AST_RULE_DIR"/*.yml 2>/dev/null || true ) | sort -u
     exit 0

@@ -74,6 +74,7 @@ REPORT_JSON=""
 UBS_VERSION="4.7"
 JSON_FINDINGS_TMP=""
 USER_RULE_DIR=""
+DUMP_RULES_DIR=""
 DISABLE_PIPEFAIL_DURING_SCAN=1
 AST_RULE_RESULTS_JSON=""
 AST_RULE_DIR=""
@@ -219,6 +220,7 @@ Options:
   --skip=CSV               Skip categories by number (e.g. --skip=2,7,11)
   --fail-on-warning        Exit non-zero on warnings or critical
   --rules=DIR              Additional ast-grep rules directory (merged)
+  --dump-rules=DIR         Persist generated ast-grep rules to DIR for test validation
   --report-json=FILE       Also write a machine-readable JSON summary to FILE
   --max-samples=N          Maximum samples per finding (default: 3)
   -h, --help               Show help
@@ -243,6 +245,7 @@ while [[ $# -gt 0 ]]; do
     --skip=*)     SKIP_CATEGORIES="${1#*=}"; shift;;
     --fail-on-warning) FAIL_ON_WARNING=1; shift;;
     --rules=*)    USER_RULE_DIR="${1#*=}"; shift;;
+    --dump-rules=*) DUMP_RULES_DIR="${1#*=}"; shift;;
     --report-json=*) REPORT_JSON="${1#*=}"; shift;;
     --max-samples=*) MAX_JSON_SAMPLES="${1#*=}"; shift;;
     -h|--help)    print_usage; exit 0;;
@@ -3277,6 +3280,11 @@ rule:
 severity: warning
 message: "?? and ternary have ambiguous precedence; add parentheses: ($A ?? $B) ? ... or $A ?? ($B ? ...)"
 YAML
+
+  if [[ -n "$DUMP_RULES_DIR" ]]; then
+    mkdir -p "$DUMP_RULES_DIR"
+    cp -R "$AST_RULE_DIR"/. "$DUMP_RULES_DIR"/ 2>/dev/null || true
+  fi
 }
 
 ensure_ast_rule_results() {

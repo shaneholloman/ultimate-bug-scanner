@@ -473,6 +473,7 @@ AST_GREP_SARIF_CHECKS = (
         "label": "js-rule-pack",
         "module": "ubs-js.sh",
         "args": ("--format=sarif",),
+        "dump_args": ("--dump-rules={rules_dir}",),
         "fixture": "test-suite/js/buggy/security.js",
         "expected_rule_ids": ("js.eval-call", "js.innerHTML-assign"),
     },
@@ -480,6 +481,7 @@ AST_GREP_SARIF_CHECKS = (
         "label": "go-rule-pack",
         "module": "ubs-golang.sh",
         "args": ("--format=sarif",),
+        "dump_args": ("--dump-rules={rules_dir}",),
         "fixture": "test-suite/golang/buggy/security_sql.go",
         "expected_rule_ids": ("go.exec-sh-c",),
     },
@@ -487,10 +489,59 @@ AST_GREP_SARIF_CHECKS = (
         "label": "rust-rule-pack",
         "module": "ubs-rust.sh",
         "args": ("--no-cargo", "--format=sarif"),
+        "dump_args": ("--no-cargo", "--dump-rules={rules_dir}"),
         "fixture": "test-suite/rust/buggy/buggy_unwrap.rs",
         "expected_rule_ids": ("rust.unwrap-call",),
     },
 )
+
+
+def safe_artifact_label(label: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", label)
+
+
+def read_yaml_scalar(text: str, key: str) -> str:
+    match = re.search(rf"(?m)^\s*{re.escape(key)}:\s*(.+?)\s*$", text)
+    if not match:
+        raise AssertionError(f"generated ast-grep rule is missing {key!r}")
+    value = match.group(1).strip()
+    if (value.startswith('"') and value.endswith('"')) or (
+        value.startswith("'") and value.endswith("'")
+    ):
+        return value[1:-1]
+    return value
+
+
+def ast_grep_command() -> list[str]:
+    for candidate in ("ast-grep", "sg"):
+        path = shutil.which(candidate)
+        if path:
+            return [path]
+    raise AssertionError("ast-grep CLI is required for per-rule validation")
+
+
+def count_json_stream_objects(stdout: str, label: str) -> int:
+    count = 0
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        try:
+            JSON_DECODER.decode(line)
+        except json.JSONDecodeError as exc:
+            raise AssertionError(f"{label} emitted invalid JSON stream output: {exc}") from exc
+        count += 1
+    return count
+
+
+def is_ast_grep_diagnostic_stderr(stderr: str) -> bool:
+    stripped = stderr.strip()
+    if not stripped:
+        return True
+    return (
+        "error(s) found in code" in stripped
+        and "Scan succeeded" in stripped
+        and "Cannot parse rule" not in stripped
+    )
 
 
 def run_single_ast_grep_rule_pack_check(spec: dict[str, Any], timeout: int) -> dict[str, Any]:
@@ -590,6 +641,123 @@ def run_single_ast_grep_rule_pack_check(spec: dict[str, Any], timeout: int) -> d
     return summary
 
 
+def run_single_ast_grep_rule_inventory_check(
+    spec: dict[str, Any],
+    timeout: int,
+    ast_grep_cmd: list[str],
+) -> dict[str, Any]:
+    label = f"ast-grep-{spec['label']}-rules"
+    rules_dir = RUNTIME_ROOT / str(os.getpid()) / safe_artifact_label(label)
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    dump_args = tuple(
+        arg.format(rules_dir=str(rules_dir))
+        for arg in spec.get("dump_args", ())
+    )
+    cmd = [
+        str(REPO_ROOT / "modules" / spec["module"]),
+        *dump_args,
+        spec["fixture"],
+    ]
+    env = os.environ.copy()
+    env.update({"NO_COLOR": "1", "UBS_ENABLE_AUTO_UPDATE": "0"})
+    start = time.monotonic()
+    try:
+        proc = subprocess.run(  # nosec B603 - fixed repo-local command and fixture.
+            cmd,
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError(f"{label} timed out while dumping rules after {timeout}s") from exc
+    proc.duration_seconds = round(time.monotonic() - start, 3)  # type: ignore[attr-defined]
+
+    if proc.returncode not in (0, 1):
+        write_runtime_artifact(label, proc, None)
+        raise AssertionError(
+            f"{label} failed while dumping rules; stderr is captured under "
+            f"test-suite/artifacts/rule_quality/{label}/"
+        )
+
+    rule_paths = sorted([*rules_dir.glob("*.yml"), *rules_dir.glob("*.yaml")])
+    if not rule_paths:
+        write_runtime_artifact(label, proc, None)
+        raise AssertionError(f"{label} did not dump any ast-grep YAML rules")
+
+    fixture_path = REPO_ROOT / spec["fixture"]
+    rules: list[dict[str, Any]] = []
+    for rule_path in rule_paths:
+        rule_text = rule_path.read_text(encoding="utf-8")
+        rule_id = read_yaml_scalar(rule_text, "id")
+        language = read_yaml_scalar(rule_text, "language")
+        rule_label = f"{label}-{safe_artifact_label(rule_id)}"
+        scan_cmd = [
+            *ast_grep_cmd,
+            "scan",
+            "--rule",
+            str(rule_path),
+            str(fixture_path),
+            "--json=stream",
+        ]
+        start = time.monotonic()
+        try:
+            scan_proc = subprocess.run(  # nosec B603 - validates checked-in generated rule YAML.
+                scan_cmd,
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError(f"{rule_label} timed out after {timeout}s") from exc
+        scan_proc.duration_seconds = round(time.monotonic() - start, 3)  # type: ignore[attr-defined]
+        if scan_proc.returncode not in (0, 1):
+            write_runtime_artifact(
+                rule_label,
+                scan_proc,
+                {"rule_file": rule_path.name, "rule_id": rule_id},
+            )
+            raise AssertionError(
+                f"{rule_label} failed ast-grep validation; stderr is captured under "
+                f"test-suite/artifacts/rule_quality/{rule_label}/"
+            )
+        match_count = count_json_stream_objects(scan_proc.stdout, rule_label)
+        if not is_ast_grep_diagnostic_stderr(scan_proc.stderr):
+            write_runtime_artifact(
+                rule_label,
+                scan_proc,
+                {
+                    "match_count": match_count,
+                    "rule_file": rule_path.name,
+                    "rule_id": rule_id,
+                },
+            )
+            raise AssertionError(f"{rule_label} emitted stderr during ast-grep validation")
+        rules.append(
+            {
+                "file": rule_path.name,
+                "id": rule_id,
+                "language": language,
+                "match_count": match_count,
+            }
+        )
+
+    summary = {
+        "dump_args": list(spec.get("dump_args", ())),
+        "fixture": spec["fixture"],
+        "module": spec["module"],
+        "rule_count": len(rules),
+        "rules": rules,
+    }
+    write_runtime_artifact(label, proc, summary)
+    return summary
+
+
 def run_ast_grep_rule_pack_check(timeout: int, update_golden: bool) -> None:
     checks = [
         {
@@ -598,15 +766,28 @@ def run_ast_grep_rule_pack_check(timeout: int, update_golden: bool) -> None:
         }
         for spec in AST_GREP_SARIF_CHECKS
     ]
+    ast_grep_cmd = ast_grep_command()
+    per_rule_validation = [
+        {
+            "label": spec["label"],
+            **run_single_ast_grep_rule_inventory_check(spec, timeout, ast_grep_cmd),
+        }
+        for spec in AST_GREP_SARIF_CHECKS
+    ]
     update_or_check_ast_grep_sarif_golden(
         {
-            "version": 1,
-            "scope": "Rust, TypeScript/JavaScript, and Go ast-grep SARIF evidence",
+            "version": 2,
+            "scope": "Rust, TypeScript/JavaScript, and Go ast-grep SARIF evidence plus per-rule parser validation",
             "checks": checks,
+            "per_rule_validation": per_rule_validation,
         },
         update_golden,
     )
-    print(f"[ast-grep-rule-pack] PASS ({len(AST_GREP_SARIF_CHECKS)} SARIF checks)")
+    validated_rules = sum(item["rule_count"] for item in per_rule_validation)
+    print(
+        "[ast-grep-rule-pack] PASS "
+        f"({len(AST_GREP_SARIF_CHECKS)} SARIF checks, {validated_rules} rule files)"
+    )
 
 
 def run_runtime_pair_checks(
@@ -700,7 +881,7 @@ def materialize_variant(
     rng: random.Random | None = None,
 ) -> Path:
     original = REPO_ROOT / case["path"]
-    safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label)
+    safe_label = safe_artifact_label(label)
     out_dir = RUNTIME_ROOT / str(os.getpid()) / safe_label
     out_dir.mkdir(parents=True, exist_ok=True)
     if original.is_file():
