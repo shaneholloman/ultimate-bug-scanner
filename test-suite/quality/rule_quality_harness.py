@@ -24,12 +24,18 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = REPO_ROOT / "test-suite"
 GOLDEN_PATH = TEST_ROOT / "goldens" / "rule_coverage.json"
 AST_GREP_SARIF_GOLDEN_PATH = TEST_ROOT / "goldens" / "ast_grep_rule_pack_sarif.json"
-RUNTIME_ROOT = Path(
-    os.environ.get(
-        "UBS_RULE_QUALITY_TMP",
-        str(REPO_ROOT / "rule-quality-variants"),
-    )
-)
+
+
+def default_runtime_root() -> str:
+    base = os.environ.get("TMPDIR")
+    if not base and Path("/data/tmp").is_dir():
+        base = "/data/tmp"
+    if not base:
+        base = "/tmp"
+    return str(Path(base) / "ubs-rule-quality-variants")
+
+
+RUNTIME_ROOT = Path(os.environ.get("UBS_RULE_QUALITY_TMP", default_runtime_root()))
 
 SECURITY_COVERAGE_LANGUAGES = {
     "cpp",
@@ -43,6 +49,7 @@ SECURITY_COVERAGE_LANGUAGES = {
     "rust",
     "swift",
 }
+CAMPAIGN_COVERAGE_LANGUAGES = {"golang", "js", "rust"}
 SMOKE_CASE_IDS = (
     "cpp-open-redirect-buggy",
     "cpp-open-redirect-clean",
@@ -269,8 +276,30 @@ def build_rule_coverage(manifest: dict[str, Any]) -> dict[str, Any]:
         "languages": by_language,
         "pairs": pairs,
         "runtime_scopes": runtime_scopes_from_pairs(pairs),
-        "robustness_scopes": robustness_scopes_from_constants(),
+        "robustness_scopes": robustness_scopes_from_pairs(pairs),
     }
+
+
+def pair_case_ids_for_languages(
+    pairs: list[dict[str, Any]],
+    languages: set[str],
+) -> list[str]:
+    case_ids: list[str] = []
+    for pair in pairs:
+        if pair["language"] in languages:
+            case_ids.extend([pair["buggy_case"], pair["clean_case"]])
+    return case_ids
+
+
+def clean_case_ids_for_languages(
+    pairs: list[dict[str, Any]],
+    languages: set[str],
+) -> list[str]:
+    return [
+        pair["clean_case"]
+        for pair in pairs
+        if pair["language"] in languages
+    ]
 
 
 def runtime_scopes_from_pairs(pairs: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -279,7 +308,7 @@ def runtime_scopes_from_pairs(pairs: list[dict[str, Any]]) -> dict[str, list[str
     for pair in pairs:
         case_ids = [pair["buggy_case"], pair["clean_case"]]
         all_cases.extend(case_ids)
-        if pair["language"] in SECURITY_COVERAGE_LANGUAGES:
+        if pair["language"] in CAMPAIGN_COVERAGE_LANGUAGES:
             campaign.extend(case_ids)
     return {
         "smoke": list(SMOKE_CASE_IDS),
@@ -288,10 +317,16 @@ def runtime_scopes_from_pairs(pairs: list[dict[str, Any]]) -> dict[str, list[str
     }
 
 
-def robustness_scopes_from_constants() -> dict[str, list[str]]:
+def robustness_scopes_from_pairs(pairs: list[dict[str, Any]]) -> dict[str, dict[str, list[str]]]:
     return {
-        "metamorphic": list(METAMORPHIC_CASE_IDS),
-        "clean_fuzz": list(CLEAN_FUZZ_CASE_IDS),
+        "smoke": {
+            "metamorphic": list(METAMORPHIC_CASE_IDS),
+            "clean_fuzz": list(CLEAN_FUZZ_CASE_IDS),
+        },
+        "campaign": {
+            "metamorphic": pair_case_ids_for_languages(pairs, CAMPAIGN_COVERAGE_LANGUAGES),
+            "clean_fuzz": clean_case_ids_for_languages(pairs, CAMPAIGN_COVERAGE_LANGUAGES),
+        },
     }
 
 
@@ -369,6 +404,27 @@ def runtime_case_ids_for_scope(coverage: dict[str, Any], scope: str) -> tuple[st
     return tuple(case_ids)
 
 
+def robustness_case_ids_for_scope(
+    coverage: dict[str, Any],
+    scope: str,
+    check_kind: str,
+) -> tuple[str, ...]:
+    robustness_scopes = coverage.get("robustness_scopes", {})
+    if not isinstance(robustness_scopes, dict) or scope not in robustness_scopes:
+        raise AssertionError(f"robustness scope {scope!r} is missing from coverage golden")
+    scope_cases = robustness_scopes[scope]
+    if not isinstance(scope_cases, dict) or check_kind not in scope_cases:
+        raise AssertionError(
+            f"robustness scope {scope!r} is missing {check_kind!r} case ids"
+        )
+    case_ids = scope_cases[check_kind]
+    if not isinstance(case_ids, list) or not all(isinstance(case_id, str) for case_id in case_ids):
+        raise AssertionError(
+            f"robustness scope {scope!r} {check_kind!r} must be a list of case ids"
+        )
+    return tuple(case_ids)
+
+
 def command_for_case(
     manifest: dict[str, Any],
     case: dict[str, Any],
@@ -379,9 +435,14 @@ def command_for_case(
     args = [*defaults.get("args", []), *case.get("args", [])]
     if path_override is not None:
         try:
-            case_path = os.path.relpath(path_override, REPO_ROOT)
+            path_override.relative_to(REPO_ROOT)
         except ValueError:
-            case_path = str(path_override)
+            if path_override.is_file() and ubs_bin == "../ubs":
+                case_path = str(path_override.parent)
+            else:
+                case_path = str(path_override)
+        else:
+            case_path = os.path.relpath(path_override, REPO_ROOT)
     else:
         case_path = case["path"]
     return [str((TEST_ROOT / ubs_bin).resolve()), *args, case_path]
@@ -510,6 +571,23 @@ AST_GREP_SARIF_CHECKS = (
 
 def safe_artifact_label(label: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", label)
+
+
+def path_is_inside(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def copy_variant_metadata(out_dir: Path, original: Path) -> None:
+    if original.suffix != ".go":
+        return
+    for name in ("go.mod", "go.sum", "go.work", "go.work.sum"):
+        source = REPO_ROOT / name
+        if source.is_file():
+            shutil.copy2(source, out_dir / name)
 
 
 def read_yaml_scalar(text: str, key: str) -> str:
@@ -940,7 +1018,7 @@ def source_with_benign_comments(
 ) -> str:
     prefix = comment_prefix_for(path)
     lines = source.splitlines()
-    if rng is not None and lines:
+    if rng is not None and lines and path.suffix not in {".jsx", ".tsx"}:
         insertion_count = min(4, max(1, len(lines) // 8))
         for index in sorted(rng.sample(range(len(lines) + 1), insertion_count), reverse=True):
             lines.insert(index, f"{prefix} UBS rule-quality benign fuzz marker")
@@ -961,7 +1039,18 @@ def materialize_variant(
     out_dir = RUNTIME_ROOT / str(os.getpid()) / safe_label
     out_dir.mkdir(parents=True, exist_ok=True)
     if original.is_file():
-        out_path = out_dir / original.name
+        if path_is_inside(RUNTIME_ROOT, REPO_ROOT):
+            out_path = out_dir / original.name
+            returned_path = out_path
+        else:
+            try:
+                relative_path = original.relative_to(REPO_ROOT)
+            except ValueError:
+                relative_path = Path(original.name)
+            out_path = out_dir / relative_path
+            returned_path = out_dir
+            copy_variant_metadata(out_dir, original)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(
             source_with_benign_comments(
                 original.read_text(encoding="utf-8"),
@@ -970,7 +1059,7 @@ def materialize_variant(
             ),
             encoding="utf-8",
         )
-        return out_path
+        return returned_path
     if not original.is_dir():
         raise AssertionError(f"cannot materialize variant for missing path: {case['path']}")
 
@@ -996,9 +1085,14 @@ def materialize_variant(
     return out_path
 
 
-def run_metamorphic_checks(manifest: dict[str, Any], timeout: int) -> None:
+def run_metamorphic_checks(
+    manifest: dict[str, Any],
+    case_ids: tuple[str, ...],
+    timeout: int,
+    scope: str,
+) -> None:
     cases = case_by_id(manifest)
-    for case_id in METAMORPHIC_CASE_IDS:
+    for case_id in case_ids:
         case = cases[case_id]
         transformed_path = materialize_variant(case, f"metamorphic-{case_id}")
         _, original_summary = run_real_case(
@@ -1012,13 +1106,19 @@ def run_metamorphic_checks(manifest: dict[str, Any], timeout: int) -> None:
                 f"{case_id} changed under benign comment transform: "
                 f"{original_summary} != {transformed_summary}"
             )
-    print("[metamorphic] PASS")
+    print(f"[metamorphic-{scope}] PASS ({len(case_ids)} real fixture transforms)")
 
 
-def run_fuzz_smoke(manifest: dict[str, Any], timeout: int, iterations: int) -> None:
+def run_fuzz_smoke(
+    manifest: dict[str, Any],
+    case_ids: tuple[str, ...],
+    timeout: int,
+    iterations: int,
+    scope: str,
+) -> None:
     cases = case_by_id(manifest)
     rng = random.Random(0xBEEF)  # nosec B311 - deterministic fuzzing, not cryptography.
-    for case_id in CLEAN_FUZZ_CASE_IDS:
+    for case_id in case_ids:
         case = cases[case_id]
         for iteration in range(iterations):
             transformed_path = materialize_variant(case, f"fuzz-{case_id}-{iteration}", rng)
@@ -1029,7 +1129,10 @@ def run_fuzz_smoke(manifest: dict[str, Any], timeout: int, iterations: int) -> N
                 timeout,
                 transformed_path,
             )
-    print("[fuzz-smoke] PASS")
+    print(
+        f"[fuzz-{scope}] PASS "
+        f"({len(case_ids)} clean fixture transforms x {iterations} iteration(s))"
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -1042,7 +1145,13 @@ def main(argv: list[str]) -> int:
         "--runtime-scope",
         choices=("smoke", "campaign", "all"),
         default=os.environ.get("UBS_RULE_RUNTIME_SCOPE", "smoke"),
-        help="real fixture runtime breadth: smoke=request-body MRs, campaign=recent Rust/TS/Go campaign rules, all=every paired security fixture",
+        help="real fixture runtime breadth: smoke=default fast slice, campaign=Rust/TypeScript/Go security pairs, all=every paired security fixture",
+    )
+    parser.add_argument(
+        "--robustness-scope",
+        choices=("smoke", "campaign"),
+        default=os.environ.get("UBS_RULE_ROBUSTNESS_SCOPE", "smoke"),
+        help="metamorphic/fuzz breadth: smoke=default fast slice, campaign=Rust/TypeScript/Go security pairs",
     )
     parser.add_argument("--skip-runtime", action="store_true")
     parser.add_argument("--update-goldens", action="store_true")
@@ -1057,8 +1166,29 @@ def main(argv: list[str]) -> int:
     if not args.skip_runtime:
         run_ast_grep_rule_pack_check(args.case_timeout, update_golden)
         run_runtime_pair_checks(manifest, coverage, args.runtime_scope, args.case_timeout)
-        run_metamorphic_checks(manifest, args.case_timeout)
-        run_fuzz_smoke(manifest, args.case_timeout, args.fuzz_iterations)
+        metamorphic_case_ids = robustness_case_ids_for_scope(
+            coverage,
+            args.robustness_scope,
+            "metamorphic",
+        )
+        clean_fuzz_case_ids = robustness_case_ids_for_scope(
+            coverage,
+            args.robustness_scope,
+            "clean_fuzz",
+        )
+        run_metamorphic_checks(
+            manifest,
+            metamorphic_case_ids,
+            args.case_timeout,
+            args.robustness_scope,
+        )
+        run_fuzz_smoke(
+            manifest,
+            clean_fuzz_case_ids,
+            args.case_timeout,
+            args.fuzz_iterations,
+            args.robustness_scope,
+        )
 
     return 0
 
