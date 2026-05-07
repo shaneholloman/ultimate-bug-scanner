@@ -75,6 +75,7 @@ UBS_VERSION="4.7"
 JSON_FINDINGS_TMP=""
 USER_RULE_DIR=""
 DUMP_RULES_DIR=""
+LIST_RULES=0
 DISABLE_PIPEFAIL_DURING_SCAN=1
 AST_RULE_RESULTS_JSON=""
 AST_RULE_DIR=""
@@ -221,6 +222,7 @@ Options:
   --fail-on-warning        Exit non-zero on warnings or critical
   --rules=DIR              Additional ast-grep rules directory (merged)
   --dump-rules=DIR         Persist generated ast-grep rules to DIR for test validation
+  --list-rules             List generated ast-grep rule ids, then exit
   --report-json=FILE       Also write a machine-readable JSON summary to FILE
   --max-samples=N          Maximum samples per finding (default: 3)
   -h, --help               Show help
@@ -246,6 +248,7 @@ while [[ $# -gt 0 ]]; do
     --fail-on-warning) FAIL_ON_WARNING=1; shift;;
     --rules=*)    USER_RULE_DIR="${1#*=}"; shift;;
     --dump-rules=*) DUMP_RULES_DIR="${1#*=}"; shift;;
+    --list-rules) LIST_RULES=1; shift;;
     --report-json=*) REPORT_JSON="${1#*=}"; shift;;
     --max-samples=*) MAX_JSON_SAMPLES="${1#*=}"; shift;;
     -h|--help)    print_usage; exit 0;;
@@ -3288,6 +3291,11 @@ YAML
   fi
 }
 
+list_generated_ast_rule_ids() {
+  local rules_dir="$1"
+  ( set +o pipefail; awk 'BEGIN{FS=":"}/^id:[[:space:]]*/{gsub(/^[[:space:]]*id:[[:space:]]*/,"");print;}' "$rules_dir"/*.yml 2>/dev/null || true ) | sort -u
+}
+
 ensure_ast_rule_results() {
   [[ "$HAS_AST_GREP" -eq 1 && -n "$AST_RULE_DIR" ]] || return 1
   if [[ -n "$AST_RULE_RESULTS_JSON" && -f "$AST_RULE_RESULTS_JSON" ]]; then
@@ -3346,6 +3354,16 @@ should_skip() {
 # ────────────────────────────────────────────────────────────────────────────
 # Main Scan Logic
 # ────────────────────────────────────────────────────────────────────────────
+
+if [[ "$LIST_RULES" -eq 1 ]]; then
+  if ! check_ast_grep; then
+    echo "ERROR: --list-rules requires ast-grep." >&2
+    exit 2
+  fi
+  write_ast_rules || exit 2
+  list_generated_ast_rule_ids "$AST_RULE_DIR"
+  exit 0
+fi
 
 maybe_clear
 

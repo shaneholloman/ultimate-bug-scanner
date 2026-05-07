@@ -4405,6 +4405,11 @@ run_ast_rules_machine() {
   fi
 }
 
+list_generated_ast_rule_ids() {
+  local rules_dir="$1"
+  ( set +o pipefail; awk 'BEGIN{FS=":"}/^id:[[:space:]]*/{gsub(/^[[:space:]]*id:[[:space:]]*/,"");print;}' "$rules_dir"/*.yml 2>/dev/null || true ) | sort -u
+}
+
 # ────────────────────────────────────────────────────────────────────────────
 # Category skipping helper (return 0 to run category)
 # ────────────────────────────────────────────────────────────────────────────
@@ -4533,6 +4538,21 @@ PY
 # Main Scan Logic
 # ────────────────────────────────────────────────────────────────────────────
 
+if [[ "$LIST_RULES" -eq 1 ]]; then
+  if ! check_ast_grep; then
+    echo "ERROR: --list-rules requires ast-grep." >&2
+    exit 2
+  fi
+  write_ast_rules || exit 2
+  write_ast_rules_v7_extras || true
+  if [[ -n "$DUMP_RULES_DIR" ]]; then
+    mkdir -p "$DUMP_RULES_DIR"
+    cp -R "$AST_RULE_DIR"/. "$DUMP_RULES_DIR"/ 2>/dev/null || true
+  fi
+  list_generated_ast_rule_ids "$AST_RULE_DIR"
+  exit 0
+fi
+
 maybe_clear
 print_banner
 
@@ -4553,10 +4573,6 @@ if check_ast_grep; then
   if [[ -n "$DUMP_RULES_DIR" ]]; then
     mkdir -p "$DUMP_RULES_DIR"
     cp -R "$AST_RULE_DIR"/. "$DUMP_RULES_DIR"/ 2>/dev/null || true
-  fi
-  if [[ "$LIST_RULES" -eq 1 ]]; then
-    ( set +o pipefail; awk 'BEGIN{FS=":"}/^id:[[:space:]]*/{gsub(/^[[:space:]]*id:[[:space:]]*/,"");print;}' "$AST_RULE_DIR"/*.yml 2>/dev/null || true ) | sort -u
-    exit 0
   fi
   ensure_ast_scan_json || true
 else

@@ -21,6 +21,57 @@ echo "STEP 2: Running test suite..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
+echo "Checking generated AST rule inventory CLIs..."
+check_rule_list() {
+  local module="$1"
+  local prefix_regex="$2"
+  local min_count="$3"
+  shift 3
+  local out
+  out="$(mktemp)"
+  if ! "../modules/$module" --list-rules >"$out"; then
+    echo "❌ $module --list-rules failed" >&2
+    rm -f "$out"
+    exit 1
+  fi
+  local count
+  count="$(wc -l <"$out" | awk '{print $1+0}')"
+  if [[ "$count" -lt "$min_count" ]]; then
+    echo "❌ $module --list-rules returned $count rule ids; expected at least $min_count" >&2
+    rm -f "$out"
+    exit 1
+  fi
+  if grep -Ev "^(${prefix_regex})\\.[A-Za-z0-9_.-]+$" "$out" >/dev/null; then
+    echo "❌ $module --list-rules emitted non-rule output:" >&2
+    grep -Env "^(${prefix_regex})\\.[A-Za-z0-9_.-]+$" "$out" >&2 || true
+    rm -f "$out"
+    exit 1
+  fi
+  local expected
+  for expected in "$@"; do
+    if ! grep -Fx "$expected" "$out" >/dev/null; then
+      echo "❌ $module --list-rules missing expected id: $expected" >&2
+      rm -f "$out"
+      exit 1
+    fi
+  done
+  rm -f "$out"
+}
+
+check_rule_list "ubs-js.sh" "js|ts|react|node|security" 30 \
+  "js.eval-call" \
+  "ts.non-null-assertion-chain" \
+  "js.async.dangling-promise"
+check_rule_list "ubs-golang.sh" "go" 60 \
+  "go.exec-sh-c" \
+  "go.sql.rows-err-not-checked" \
+  "go.http-client-without-timeout"
+check_rule_list "ubs-rust.sh" "rust" 70 \
+  "rust.unwrap-call" \
+  "rust.unwrap-unchecked" \
+  "rust.tokio-spawn-no-handle"
+echo ""
+
 if command -v uv >/dev/null 2>&1; then
   uv run python quality/rule_quality_harness.py
   uv run python ./run_manifest.py "$@"

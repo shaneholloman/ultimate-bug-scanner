@@ -115,6 +115,7 @@ SUMMARY_JSON=""
 EMIT_FINDINGS_JSON=""
 LIST_CATEGORIES=0
 DUMP_RULES_DIR=""
+LIST_RULES=0
 STRICT_GITIGNORE=0
 EXCLUDE_TESTS=0
 
@@ -129,6 +130,7 @@ Options:
   -v, --verbose              More code samples per finding (DETAIL=10)
   -q, --quiet                Reduce non-essential output
   --list-categories          Print category index and exit
+  --list-rules               List generated ast-grep rule ids, then exit
   --dump-rules=DIR           Persist generated ast-grep rules to DIR
   --format=FMT               Output format: text|json|sarif (default: text)
   --ci                       CI mode (stable timestamps, no screen clear)
@@ -165,6 +167,7 @@ while [[ $# -gt 0 ]]; do
     -v|--verbose) VERBOSE=1; DETAIL_LIMIT=10; shift;;
     -q|--quiet)   VERBOSE=0; DETAIL_LIMIT=1; QUIET=1; shift;;
     --list-categories) LIST_CATEGORIES=1; shift;;
+    --list-rules) LIST_RULES=1; shift;;
     --dump-rules=*) DUMP_RULES_DIR="${1#*=}"; shift;;
     --format=*)   FORMAT="${1#*=}"; shift;;
     --ci)         CI_MODE=1; shift;;
@@ -6947,6 +6950,11 @@ YAML
   if [[ -n "$DUMP_RULES_DIR" ]]; then cp -R "$AST_RULE_DIR"/. "$DUMP_RULES_DIR"/ 2>/dev/null || true; fi
 }
 
+list_generated_ast_rule_ids() {
+  local rules_dir="$1"
+  ( set +o pipefail; awk 'BEGIN{FS=":"}/^id:[[:space:]]*/{gsub(/^[[:space:]]*id:[[:space:]]*/,"");print;}' "$rules_dir"/*.yml 2>/dev/null || true ) | sort -u
+}
+
 run_ast_rules() {
   [[ "$HAS_AST_GREP" -eq 1 && -n "$AST_CONFIG_FILE" && -f "$AST_CONFIG_FILE" ]] || return 1
   local -a outfmt=(--json=stream)
@@ -7010,6 +7018,16 @@ count_warnings_errors() {
 # ────────────────────────────────────────────────────────────────────────────
 # Startup banner
 # ────────────────────────────────────────────────────────────────────────────
+if [[ "$LIST_RULES" -eq 1 ]]; then
+  if ! check_ast_grep; then
+    echo "ERROR: --list-rules requires ast-grep." >&2
+    exit 2
+  fi
+  write_ast_rules || exit 2
+  list_generated_ast_rule_ids "$AST_RULE_DIR"
+  exit 0
+fi
+
 if [[ "$FORMAT" == "text" && "$QUIET" -eq 0 ]]; then
   maybe_clear
   echo -e "${BOLD}${CYAN}"
