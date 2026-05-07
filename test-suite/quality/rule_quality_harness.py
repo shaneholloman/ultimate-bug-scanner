@@ -50,6 +50,23 @@ SECURITY_COVERAGE_LANGUAGES = {
     "swift",
 }
 CAMPAIGN_COVERAGE_LANGUAGES = {"golang", "js", "rust"}
+CAMPAIGN_BEHAVIOR_TAGS = {
+    "async",
+    "collections",
+    "macros",
+    "parsing",
+    "perf",
+    "react",
+    "resource",
+    "strings",
+    "type-narrowing",
+    "unsafe",
+}
+CAMPAIGN_BEHAVIOR_EXCLUDED_TAGS = {
+    "regression",
+    "security",
+    "skip",
+}
 SMOKE_CASE_IDS = (
     "cpp-open-redirect-buggy",
     "cpp-open-redirect-clean",
@@ -271,12 +288,12 @@ def build_rule_coverage(manifest: dict[str, Any]) -> dict[str, Any]:
         }
 
     return {
-        "version": 1,
-        "scope": "security fixture pairs for every UBS-supported language module",
+        "version": 2,
+        "scope": "security fixture pairs for every UBS-supported language module plus Rust, TypeScript/JavaScript, and Go campaign behavior-rule scopes",
         "languages": by_language,
         "pairs": pairs,
-        "runtime_scopes": runtime_scopes_from_pairs(pairs),
-        "robustness_scopes": robustness_scopes_from_pairs(pairs),
+        "runtime_scopes": runtime_scopes_from_pairs(pairs, cases),
+        "robustness_scopes": robustness_scopes_from_pairs(pairs, cases),
     }
 
 
@@ -302,7 +319,40 @@ def clean_case_ids_for_languages(
     ]
 
 
-def runtime_scopes_from_pairs(pairs: list[dict[str, Any]]) -> dict[str, list[str]]:
+def unique_case_ids(case_ids: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for case_id in case_ids:
+        if case_id in seen:
+            continue
+        seen.add(case_id)
+        unique.append(case_id)
+    return unique
+
+
+def campaign_behavior_case_ids(
+    cases: list[dict[str, Any]],
+    sides: set[str] | None = None,
+) -> list[str]:
+    selected: list[str] = []
+    for case in cases:
+        tags = set(case.get("tags", []))
+        if case.get("language") not in CAMPAIGN_COVERAGE_LANGUAGES:
+            continue
+        if not tags.intersection(CAMPAIGN_BEHAVIOR_TAGS):
+            continue
+        if tags.intersection(CAMPAIGN_BEHAVIOR_EXCLUDED_TAGS):
+            continue
+        if sides is not None and not tags.intersection(sides):
+            continue
+        selected.append(case["id"])
+    return selected
+
+
+def runtime_scopes_from_pairs(
+    pairs: list[dict[str, Any]],
+    cases: list[dict[str, Any]],
+) -> dict[str, list[str]]:
     campaign: list[str] = []
     all_cases: list[str] = []
     for pair in pairs:
@@ -310,22 +360,30 @@ def runtime_scopes_from_pairs(pairs: list[dict[str, Any]]) -> dict[str, list[str
         all_cases.extend(case_ids)
         if pair["language"] in CAMPAIGN_COVERAGE_LANGUAGES:
             campaign.extend(case_ids)
+    campaign.extend(campaign_behavior_case_ids(cases))
     return {
         "smoke": list(SMOKE_CASE_IDS),
-        "campaign": campaign,
+        "campaign": unique_case_ids(campaign),
         "all": all_cases,
     }
 
 
-def robustness_scopes_from_pairs(pairs: list[dict[str, Any]]) -> dict[str, dict[str, list[str]]]:
+def robustness_scopes_from_pairs(
+    pairs: list[dict[str, Any]],
+    cases: list[dict[str, Any]],
+) -> dict[str, dict[str, list[str]]]:
+    campaign_metamorphic = pair_case_ids_for_languages(pairs, CAMPAIGN_COVERAGE_LANGUAGES)
+    campaign_metamorphic.extend(campaign_behavior_case_ids(cases))
+    campaign_clean_fuzz = clean_case_ids_for_languages(pairs, CAMPAIGN_COVERAGE_LANGUAGES)
+    campaign_clean_fuzz.extend(campaign_behavior_case_ids(cases, {"clean"}))
     return {
         "smoke": {
             "metamorphic": list(METAMORPHIC_CASE_IDS),
             "clean_fuzz": list(CLEAN_FUZZ_CASE_IDS),
         },
         "campaign": {
-            "metamorphic": pair_case_ids_for_languages(pairs, CAMPAIGN_COVERAGE_LANGUAGES),
-            "clean_fuzz": clean_case_ids_for_languages(pairs, CAMPAIGN_COVERAGE_LANGUAGES),
+            "metamorphic": unique_case_ids(campaign_metamorphic),
+            "clean_fuzz": unique_case_ids(campaign_clean_fuzz),
         },
     }
 
@@ -1145,13 +1203,13 @@ def main(argv: list[str]) -> int:
         "--runtime-scope",
         choices=("smoke", "campaign", "all"),
         default=os.environ.get("UBS_RULE_RUNTIME_SCOPE", "smoke"),
-        help="real fixture runtime breadth: smoke=default fast slice, campaign=Rust/TypeScript/Go security pairs, all=every paired security fixture",
+        help="real fixture runtime breadth: smoke=default fast slice, campaign=Rust/TypeScript/Go security and behavior-rule cases, all=every paired security fixture",
     )
     parser.add_argument(
         "--robustness-scope",
         choices=("smoke", "campaign"),
         default=os.environ.get("UBS_RULE_ROBUSTNESS_SCOPE", "smoke"),
-        help="metamorphic/fuzz breadth: smoke=default fast slice, campaign=Rust/TypeScript/Go security pairs",
+        help="metamorphic/fuzz breadth: smoke=default fast slice, campaign=Rust/TypeScript/Go security and behavior-rule cases",
     )
     parser.add_argument("--skip-runtime", action="store_true")
     parser.add_argument("--update-goldens", action="store_true")
