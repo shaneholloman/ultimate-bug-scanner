@@ -4599,6 +4599,73 @@ collect_samples_temp_file_race() {
   printf ']'
 }
 
+rust_tls_indirect_matches() {
+  [[ "$have_python3" -eq 1 ]] || return 1
+  python3 - "$PROJECT_DIR" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+base = root if root.is_dir() else root.parent
+skip_dirs = {".git", "target", ".cargo", "node_modules"}
+true_assignment_re = re.compile(
+    r"\b(?:const|static|let)\s+(?:mut\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+    r"(?:\s*:\s*bool)?\s*=\s*true\s*;"
+)
+danger_call_re = re.compile(
+    r"\.danger_accept_invalid_(?:certs|hostnames)\s*\(\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\)"
+)
+
+def should_skip(path: Path) -> bool:
+    return any(part in skip_dirs for part in path.parts)
+
+def iter_files(path: Path):
+    if path.is_file():
+        if path.suffix == ".rs":
+            yield path
+        return
+    for candidate in path.rglob("*.rs"):
+        if candidate.is_file() and not should_skip(candidate):
+            yield candidate
+
+def code_line(line: str) -> str:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("//"):
+        return ""
+    return re.sub(r"//.*", "", line)
+
+def relpath(path: Path) -> str:
+    try:
+        return str(path.relative_to(base))
+    except ValueError:
+        return str(path)
+
+for path in iter_files(root):
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        continue
+    true_names = set()
+    for raw in lines:
+        line = code_line(raw)
+        if not line or "ubs:ignore" in line:
+            continue
+        match = true_assignment_re.search(line)
+        if match:
+            true_names.add(match.group("name"))
+    if not true_names:
+        continue
+    for idx, raw in enumerate(lines, start=1):
+        line = code_line(raw)
+        if not line or "ubs:ignore" in line:
+            continue
+        match = danger_call_re.search(line)
+        if match and match.group("name") in true_names:
+            print(f"{relpath(path)}:{idx}:{line.strip()}")
+PY
+}
+
 rust_security_randomness_matches() {
   [[ "$have_python3" -eq 1 ]] || return 1
   python3 - "$PROJECT_DIR" <<'PY'
@@ -7530,6 +7597,7 @@ tls_insecure=$(( $(ast_search 'reqwest::ClientBuilder::new().danger_accept_inval
   + $(ast_search 'reqwest::ClientBuilder::new().danger_accept_invalid_hostnames(true)' || echo 0) \
   + $("${GREP_RN[@]}" -e "danger_accept_invalid_certs\(\s*true\s*\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true) \
   + $("${GREP_RN[@]}" -e "danger_accept_invalid_hostnames\(\s*true\s*\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true) \
+  + $(rust_tls_indirect_matches | count_lines || true) \
   + $("${GREP_RN[@]}" -e "SslVerifyMode::NONE" "$PROJECT_DIR" 2>/dev/null | count_lines || true) \
   + $("${GREP_RN[@]}" -e "TlsConnector::builder\(\)\\.danger_accept_invalid_certs\(true\)" "$PROJECT_DIR" 2>/dev/null | count_lines || true) ))
 if [ "$tls_insecure" -gt 0 ]; then print_finding "critical" "$tls_insecure" "TLS certificate or hostname verification disabled"; add_finding "critical" "$tls_insecure" "TLS certificate or hostname verification disabled" "" "${CATEGORY_NAME[8]}"; fi

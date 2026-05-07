@@ -12,7 +12,7 @@
 | `buggy/open_redirect.rs` | Request/header/host redirect targets sent to redirects or Location headers |
 | `buggy/header_injection.rs` | Request/header values sent to non-Location response headers without CR/LF validation |
 | `buggy/ssrf.rs` | Request/header/env/CLI URL values sent through outbound HTTP clients |
-| `buggy/tls_verification.rs` | TLS certificate or hostname verification disabled |
+| `buggy/tls_verification.rs` | TLS certificate or hostname verification disabled directly or through true constants |
 | `buggy/sql_injection.rs` | Request-derived values interpolated into raw SQL strings that reach execution sinks |
 | `buggy/cors_credentials.rs` | Credentialed wildcard or reflected-origin CORS policies |
 | `buggy/math_precision.rs` | Float equality for money |

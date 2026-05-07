@@ -2,6 +2,8 @@ use native_tls::TlsConnector;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use reqwest::ClientBuilder;
 
+const ACCEPT_INVALID_CERTS: bool = true;
+
 fn reqwest_accepts_invalid_certificates() -> reqwest::Result<reqwest::Client> {
     ClientBuilder::new()
         .danger_accept_invalid_certs(true)
@@ -11,6 +13,19 @@ fn reqwest_accepts_invalid_certificates() -> reqwest::Result<reqwest::Client> {
 fn reqwest_accepts_invalid_hostnames() -> reqwest::Result<reqwest::Client> {
     ClientBuilder::new()
         .danger_accept_invalid_hostnames(true)
+        .build()
+}
+
+fn reqwest_accepts_invalid_certificates_from_constant() -> reqwest::Result<reqwest::Client> {
+    ClientBuilder::new()
+        .danger_accept_invalid_certs(ACCEPT_INVALID_CERTS)
+        .build()
+}
+
+fn reqwest_accepts_invalid_hostnames_from_local() -> reqwest::Result<reqwest::Client> {
+    let accept_invalid_hostnames = true;
+    ClientBuilder::new()
+        .danger_accept_invalid_hostnames(accept_invalid_hostnames)
         .build()
 }
 

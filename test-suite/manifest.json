@@ -3847,7 +3847,7 @@
     },
     {
       "id": "js-typescript-tls-verification-buggy",
-      "description": "TypeScript HTTP/TLS clients should not disable certificate verification.",
+      "description": "TypeScript HTTP/TLS clients should not disable certificate verification directly or through local false/zero constants.",
       "path": "test-suite/js/security/tls-verification-buggy.ts",
       "language": "js",
       "tags": [
@@ -5354,7 +5354,7 @@
     },
     {
       "id": "golang-tls-verification-buggy",
-      "description": "Go HTTP/TLS clients should not disable certificate verification with InsecureSkipVerify.",
+      "description": "Go HTTP/TLS clients should not disable certificate verification with literal or constant-driven InsecureSkipVerify.",
       "path": "test-suite/golang/security/tls_verification_buggy.go",
       "language": "golang",
       "tags": [
@@ -7551,7 +7551,7 @@
     },
     {
       "id": "rust-tls-verification-buggy",
-      "description": "Rust HTTP/TLS clients should not disable certificate or hostname verification.",
+      "description": "Rust HTTP/TLS clients should not disable certificate or hostname verification directly or through local true constants.",
       "path": "test-suite/rust/buggy/tls_verification.rs",
       "language": "rust",
       "tags": [

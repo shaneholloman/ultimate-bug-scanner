@@ -7011,6 +7011,80 @@ PY
   )
 }
 
+count_indirect_tls_insecure_skip() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf '0\n'
+    return
+  fi
+  python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+skip_dirs = {'.git', 'vendor', 'node_modules', '.cache', 'bin', 'build', 'dist'}
+true_assignment_re = re.compile(
+    r'\b(?:const|var)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)'
+    r'(?:\s+bool)?\s*=\s*true\b'
+)
+short_true_assignment_re = re.compile(r'\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*:=\s*true\b')
+insecure_field_re = re.compile(
+    r'\bInsecureSkipVerify\s*:\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b'
+    r'|\.\s*InsecureSkipVerify\s*=\s*(?P<assign>[A-Za-z_][A-Za-z0-9_]*)\b'
+)
+
+def should_skip(path: Path) -> bool:
+    return any(part in skip_dirs for part in path.parts)
+
+def iter_files(root: Path):
+    if root.is_file():
+        if root.suffix.lower() == '.go':
+            yield root
+        return
+    for path in root.rglob('*.go'):
+        if path.is_file() and not should_skip(path):
+            yield path
+
+def code_line(line: str) -> str:
+    stripped = line.strip()
+    if not stripped or stripped.startswith('//'):
+        return ''
+    return re.sub(r'//.*', '', line)
+
+def true_vars(lines):
+    names = set()
+    for raw in lines:
+        line = code_line(raw)
+        if not line or 'ubs:ignore' in line:
+            continue
+        for regex in (true_assignment_re, short_true_assignment_re):
+            match = regex.search(line)
+            if match:
+                names.add(match.group('name'))
+    return names
+
+count = 0
+for path in iter_files(root):
+    try:
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+    except OSError:
+        continue
+    names = true_vars(lines)
+    if not names:
+        continue
+    for raw in lines:
+        line = code_line(raw)
+        if 'ubs:ignore' in line or 'InsecureSkipVerify' not in line:
+            continue
+        for match in insecure_field_re.finditer(line):
+            name = match.group('name') or match.group('assign')
+            if name in names:
+                count += 1
+                break
+print(count)
+PY
+}
+
 # ═══════════════════════════════════════════════════════════════════════════
 # CATEGORY 9: CRYPTOGRAPHY & SECURITY
 # ═══════════════════════════════════════════════════════════════════════════
@@ -7036,6 +7110,13 @@ count=$([[ "$HAS_AST_GREP" -eq 1 && -f "$AST_JSON" ]] && ast_count "go.tls-insec
 if [ "$count" -eq 0 ] && [[ "$HAS_RG" -eq 1 ]]; then
   count=$(rg --no-config --no-messages -g '*.go' -n "InsecureSkipVerify:[[:space:]]*true" "$PROJECT_DIR" 2>/dev/null | wc_num)
 fi
+if [[ "$HAS_RG" -eq 1 ]]; then
+  assignment_count=$(rg --no-config --no-messages -g '*.go' -n "\.InsecureSkipVerify[[:space:]]*=[[:space:]]*true" "$PROJECT_DIR" 2>/dev/null | wc_num)
+  count=$((count + assignment_count))
+fi
+indirect_count=$(count_indirect_tls_insecure_skip || echo 0)
+indirect_count=$(printf '%s\n' "${indirect_count:-0}" | awk 'END{print $0+0}')
+count=$((count + indirect_count))
 if [ "$count" -gt 0 ]; then print_finding "warning" "$count" "InsecureSkipVerify enabled"; fi
 
 print_subheader "exec shell interpreter (command injection risk)"

@@ -14,7 +14,7 @@
 | `security/header_injection_clean.go` | Response header injection | CR/LF stripping, `mime.FormatMediaType`, and reject-on-newline guards before response headers |
 | `security/open_redirect_buggy.go` | Open redirect security | request query/header/framework redirect targets reaching `http.Redirect`, framework redirects, and `Location` headers |
 | `security/open_redirect_clean.go` | Open redirect security | redirect targets routed through same-origin/allow-list validation helpers before redirect sinks |
-| `security/tls_verification_buggy.go` | TLS verification security | `tls.Config{InsecureSkipVerify: true}` reaching HTTP/TLS clients |
+| `security/tls_verification_buggy.go` | TLS verification security | `tls.Config{InsecureSkipVerify: true}` directly or via true constants reaching HTTP/TLS clients |
 | `security/tls_verification_clean.go` | TLS verification security | TLS clients using normal verification with `MinVersion`, `ServerName`, and root CAs |
 | `security/archive_extraction_buggy.go` | Archive extraction security | tar/zip entry names written with `filepath.Join` without containment checks |
 | `security/archive_extraction_clean.go` | Archive extraction security | `filepath.Rel`/absolute-path validation before tar/zip writes |

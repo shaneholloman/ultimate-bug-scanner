@@ -8276,6 +8276,11 @@ env_tls_zero_re = re.compile(
     r'[\'"`]NODE_TLS_REJECT_UNAUTHORIZED[\'"`]\s*:\s*(?:[\'"`]0[\'"`]|0\b)'
     r')'
 )
+false_like_assignment_re = re.compile(
+    r'\b(?:export\s+)?(?:const|let|var)\s+'
+    r'(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\s*(?::[^=]+)?=\s*'
+    r'(?:false\b|0\b|[\'"`]0[\'"`])'
+)
 
 def code_line(source_line):
     stripped = source_line.strip()
@@ -8303,6 +8308,30 @@ def statement_from(lines, idx, max_lines=14):
             break
     return ' '.join(parts) if saw_code else ""
 
+def collect_false_like_vars(lines):
+    names = set()
+    for raw in lines:
+        line = code_line(raw)
+        if not line or 'ubs:ignore' in line:
+            continue
+        match = false_like_assignment_re.search(line)
+        if match:
+            names.add(match.group('name'))
+    return names
+
+def uses_false_like_tls_var(statement, false_like_vars):
+    for name in false_like_vars:
+        escaped = re.escape(name)
+        if re.search(rf'\brejectUnauthorized\s*:\s*{escaped}\b', statement):
+            return True
+        if name == 'rejectUnauthorized' and re.search(r'(?:^|[{,])\s*rejectUnauthorized\s*(?:[,}])', statement):
+            return True
+        if re.search(rf'\bNODE_TLS_REJECT_UNAUTHORIZED\b\s*[:=]\s*{escaped}\b', statement):
+            return True
+        if re.search(rf'[\'"`]NODE_TLS_REJECT_UNAUTHORIZED[\'"`]\s*:\s*{escaped}\b', statement):
+            return True
+    return False
+
 issues = []
 if root.is_file():
     candidates = [root]
@@ -8322,6 +8351,7 @@ for path in candidates:
         lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
     except Exception:
         continue
+    false_like_vars = collect_false_like_vars(lines)
     seen_lines = set()
     for idx, line in enumerate(lines):
         stripped = code_line(line).strip()
@@ -8330,7 +8360,11 @@ for path in candidates:
         statement = statement_from(lines, idx)
         if not statement or 'ubs:ignore' in statement:
             continue
-        if not (reject_unauthorized_false_re.search(statement) or env_tls_zero_re.search(statement)):
+        if not (
+            reject_unauthorized_false_re.search(statement)
+            or env_tls_zero_re.search(statement)
+            or uses_false_like_tls_var(statement, false_like_vars)
+        ):
             continue
         if idx in seen_lines:
             continue

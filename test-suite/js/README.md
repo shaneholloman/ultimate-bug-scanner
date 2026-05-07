@@ -30,7 +30,7 @@
 - `security/random-security-*.ts` covers TypeScript token/session/OTP generation that accidentally uses `Math.random()`.
 - `security/sql-injection-*.ts` covers TypeScript SQL execution sinks fed by request-derived interpolated SQL strings, including Prisma raw unsafe APIs.
 - `security/ssrf-fetch-*.ts` covers TypeScript/Node outbound HTTP clients fed by request/query/header/host-derived URLs without allowlist validation.
-- `security/tls-verification-*.ts` covers TypeScript/Node HTTP/TLS clients that disable certificate verification.
+- `security/tls-verification-*.ts` covers TypeScript/Node HTTP/TLS clients that disable certificate verification directly or through local false/zero constants.
 - `security/archive-extraction-*.ts` covers TypeScript/Node archive extraction that writes entry paths into destination paths without containment validation.
 - `security/post-message-*.ts` covers TypeScript cross-origin messaging leaks from wildcard `postMessage` target origins.
 - `security/target-blank-*.tsx` covers TypeScript/React reverse-tabnabbing protection for JSX `target="_blank"` links.

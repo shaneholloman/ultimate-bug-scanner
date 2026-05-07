@@ -20,6 +20,12 @@ export function connectToInternalService(host: string): tls.TLSSocket {
   });
 }
 
+const rejectUnauthorized = false;
+
+export const indirectUnsafeAgent = new https.Agent({
+  rejectUnauthorized,
+});
+
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 export const testEnv = {
@@ -30,4 +36,10 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0 as any;
 
 export const numericTestEnv = {
   NODE_TLS_REJECT_UNAUTHORIZED: 0,
+};
+
+const disabledNodeTls = "0";
+
+export const indirectTestEnv = {
+  NODE_TLS_REJECT_UNAUTHORIZED: disabledNodeTls,
 };
