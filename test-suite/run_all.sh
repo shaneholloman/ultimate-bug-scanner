@@ -27,35 +27,42 @@ check_rule_list() {
   local prefix_regex="$2"
   local min_count="$3"
   shift 3
-  local out
-  out="$(mktemp)"
-  if ! "../modules/$module" --list-rules >"$out"; then
+  local artifact_dir dump_dir dumped_ids out
+  artifact_dir="$ROOT_DIR/artifacts/rule_inventory/${module%.sh}-$$"
+  dump_dir="$artifact_dir/dump"
+  dumped_ids="$artifact_dir/dumped-rule-ids.txt"
+  out="$artifact_dir/list-rule-ids.txt"
+  mkdir -p "$dump_dir"
+  if ! "../modules/$module" --dump-rules="$dump_dir" --list-rules >"$out"; then
     echo "❌ $module --list-rules failed" >&2
-    rm -f "$out"
     exit 1
   fi
+  while IFS= read -r -d '' rule_file; do
+    awk 'BEGIN{FS=":"}/^id:[[:space:]]*/{gsub(/^[[:space:]]*id:[[:space:]]*/,"");print;}' "$rule_file"
+  done < <(find "$dump_dir" -maxdepth 1 -type f -name '*.yml' -print0) | sort -u >"$dumped_ids"
   local count
   count="$(wc -l <"$out" | awk '{print $1+0}')"
   if [[ "$count" -lt "$min_count" ]]; then
     echo "❌ $module --list-rules returned $count rule ids; expected at least $min_count" >&2
-    rm -f "$out"
     exit 1
   fi
   if grep -Ev "^(${prefix_regex})\\.[A-Za-z0-9_.-]+$" "$out" >/dev/null; then
     echo "❌ $module --list-rules emitted non-rule output:" >&2
     grep -Env "^(${prefix_regex})\\.[A-Za-z0-9_.-]+$" "$out" >&2 || true
-    rm -f "$out"
+    exit 1
+  fi
+  if ! cmp -s "$out" "$dumped_ids"; then
+    echo "❌ $module --list-rules output differs from dumped YAML rule ids:" >&2
+    diff -u "$dumped_ids" "$out" >&2 || true
     exit 1
   fi
   local expected
   for expected in "$@"; do
     if ! grep -Fx "$expected" "$out" >/dev/null; then
       echo "❌ $module --list-rules missing expected id: $expected" >&2
-      rm -f "$out"
       exit 1
     fi
   done
-  rm -f "$out"
 }
 
 check_rule_list "ubs-js.sh" "js|ts|react|node|security" 30 \
