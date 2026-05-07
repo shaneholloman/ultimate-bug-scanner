@@ -4,6 +4,25 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
+DEFAULT_TMPDIR=""
+if [[ -d /data/tmp && -w /data/tmp ]]; then
+  DEFAULT_TMPDIR="/data/tmp/ubs-test-suite"
+elif [[ -d /var/tmp && -w /var/tmp ]]; then
+  DEFAULT_TMPDIR="/var/tmp/ubs-test-suite"
+fi
+if [[ -z "${TMPDIR:-}" || ! -d "$TMPDIR" || ! -w "$TMPDIR" ]]; then
+  if [[ -n "$DEFAULT_TMPDIR" ]]; then
+    mkdir -p "$DEFAULT_TMPDIR"
+    export TMPDIR="$DEFAULT_TMPDIR"
+  else
+    unset TMPDIR TMP TEMP
+  fi
+fi
+if [[ -n "${TMPDIR:-}" ]]; then
+  export TMP="${TMP:-$TMPDIR}"
+  export TEMP="${TEMP:-$TMPDIR}"
+fi
+
 # CRITICAL: Verify checksums BEFORE running tests
 # This prevents deploying broken code where modules don't match checksums
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

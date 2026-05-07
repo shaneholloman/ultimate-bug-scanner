@@ -169,6 +169,8 @@ UPDATE_GOLDENS=1 uv run python quality/rule_quality_harness.py
 
 The default runtime scope keeps `run_all.sh` quick by running Rust/TypeScript/Go ast-grep rule-pack validity checks plus request-body and route-param metamorphic/fuzz checks. Use `--runtime-scope=campaign` for the recent Rust/TypeScript/Go detector campaign, or `--runtime-scope=all` to execute every paired security fixture in the golden. The coverage golden also freezes the case ids in each runtime and robustness scope, so narrowing campaign/all/metamorphic/fuzz coverage requires an intentional golden diff. `UPDATE_GOLDENS=1 ... --skip-runtime` updates only the coverage matrix; run without `--skip-runtime` when reviewing and updating the focused SARIF, corpus SARIF, per-rule rule-pack, and generated-rule corpus-coverage evidence golden. Only update goldens after reviewing the diffs and confirming the rule coverage or rule-pack evidence change is intentional.
 
+`run_all.sh` defaults `TMPDIR`, `TMP`, and `TEMP` to `/data/tmp/ubs-test-suite/` when `/data/tmp` is available, or `/var/tmp/ubs-test-suite/` otherwise, when no usable `TMPDIR` is already set. Generated scanner temp files therefore do not depend on a healthy system `/tmp` mount or an ignored in-repo artifact path on normal Linux development hosts. Set `TMPDIR` explicitly to override that location.
+
 ### Scan Individual Buggy Files
 
 ```bash
