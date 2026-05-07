@@ -300,14 +300,20 @@ def build_rule_coverage(manifest: dict[str, Any]) -> dict[str, Any]:
     runtime_scopes = runtime_scopes_from_pairs(pairs, cases)
     robustness_scopes = robustness_scopes_from_pairs(pairs, cases)
     return {
-        "version": 3,
+        "version": 4,
         "scope": "security fixture pairs for every UBS-supported language module plus Rust, TypeScript/JavaScript, and Go campaign behavior-rule scopes",
+        "all_language_expectation_strength_scopes": expectation_strength_scopes_from_runtime(
+            runtime_scopes,
+            cases,
+            SECURITY_COVERAGE_LANGUAGES,
+        ),
         "clean_fuzz_budget_scopes": clean_fuzz_budget_scopes_from_robustness(
             robustness_scopes,
         ),
         "expectation_strength_scopes": expectation_strength_scopes_from_runtime(
             runtime_scopes,
             cases,
+            CAMPAIGN_COVERAGE_LANGUAGES,
         ),
         "languages": by_language,
         "metamorphic_transform_scopes": metamorphic_transform_scopes_from_robustness(
@@ -506,6 +512,7 @@ def expectation_side(case: dict[str, Any]) -> str:
 def expectation_strength_scopes_from_runtime(
     runtime_scopes: dict[str, list[str]],
     cases: list[dict[str, Any]],
+    languages: set[str],
 ) -> dict[str, dict[str, Any]]:
     cases_by_id = {case["id"]: case for case in cases}
     strength_scopes: dict[str, dict[str, Any]] = {}
@@ -513,7 +520,7 @@ def expectation_strength_scopes_from_runtime(
         scoped_cases = [
             cases_by_id[case_id]
             for case_id in case_ids
-            if cases_by_id[case_id].get("language") in CAMPAIGN_COVERAGE_LANGUAGES
+            if cases_by_id[case_id].get("language") in languages
         ]
         weak_cases: list[dict[str, Any]] = []
         for case in scoped_cases:

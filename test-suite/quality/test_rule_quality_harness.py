@@ -43,5 +43,54 @@ class RuleInventoryCoverageInvariantTest(unittest.TestCase):
             )
 
 
+class ExpectationStrengthScopeTest(unittest.TestCase):
+    def test_language_filter_separates_target_and_all_supported_debt(self) -> None:
+        runtime_scopes = {"all": ["js-clean", "python-clean"]}
+        cases = [
+            {
+                "expect": {
+                    "exit_code": "zero",
+                    "forbid_substrings": ["JS warning text"],
+                    "totals": {"critical": {"max": 0}, "warning": {"max": 0}},
+                },
+                "id": "js-clean",
+                "language": "js",
+                "path": "test-suite/js/clean/example.js",
+                "tags": ["js", "clean"],
+            },
+            {
+                "expect": {
+                    "exit_code": "zero",
+                    "totals": {"critical": {"max": 0}, "warning": {"max": 2}},
+                },
+                "id": "python-clean",
+                "language": "python",
+                "path": "test-suite/python/clean/example.py",
+                "tags": ["python", "clean"],
+            },
+        ]
+
+        target = rule_quality_harness.expectation_strength_scopes_from_runtime(
+            runtime_scopes,
+            cases,
+            {"js"},
+        )
+        all_supported = rule_quality_harness.expectation_strength_scopes_from_runtime(
+            runtime_scopes,
+            cases,
+            {"js", "python"},
+        )
+
+        self.assertEqual(target["all"]["weak_case_count"], 0)
+        self.assertEqual(all_supported["all"]["weak_case_count"], 1)
+        self.assertEqual(
+            all_supported["all"]["weak_cases"][0]["reasons"],
+            [
+                "clean_missing_forbid_substrings",
+                "clean_not_strict_zero_critical_warning",
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

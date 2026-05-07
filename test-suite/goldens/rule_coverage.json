@@ -1,4 +1,88 @@
 {
+  "all_language_expectation_strength_scopes": {
+    "all": {
+      "buggy_cases_with_required_substrings": 138,
+      "case_count": 276,
+      "clean_cases_with_forbidden_substrings": 133,
+      "strict_zero_clean_cases": 134,
+      "weak_case_count": 6,
+      "weak_cases": [
+        {
+          "id": "elixir-security-command-clean",
+          "language": "elixir",
+          "path": "test-suite/elixir/clean/command_execution.ex",
+          "reasons": [
+            "clean_missing_forbid_substrings"
+          ],
+          "side": "clean"
+        },
+        {
+          "id": "kotlin-archive-extraction-clean",
+          "language": "java",
+          "path": "test-suite/kotlin/archive_extraction_clean",
+          "reasons": [
+            "clean_not_strict_zero_critical_warning"
+          ],
+          "side": "clean"
+        },
+        {
+          "id": "kotlin-security-command-clean",
+          "language": "java",
+          "path": "test-suite/kotlin/security_clean",
+          "reasons": [
+            "clean_missing_forbid_substrings",
+            "clean_not_strict_zero_critical_warning"
+          ],
+          "side": "clean"
+        },
+        {
+          "id": "python-taint-clean",
+          "language": "python",
+          "path": "test-suite/python/clean/taint_analysis.py",
+          "reasons": [
+            "clean_missing_forbid_substrings",
+            "clean_not_strict_zero_critical_warning"
+          ],
+          "side": "clean"
+        },
+        {
+          "id": "ruby-taint-clean",
+          "language": "ruby",
+          "path": "test-suite/ruby/security_clean",
+          "reasons": [
+            "clean_missing_forbid_substrings"
+          ],
+          "side": "clean"
+        },
+        {
+          "id": "swift-security-process-clean",
+          "language": "swift",
+          "path": "test-suite/swift/clean/process_shell.swift",
+          "reasons": [
+            "clean_missing_forbid_substrings",
+            "clean_not_strict_zero_critical_warning"
+          ],
+          "side": "clean"
+        }
+      ]
+    },
+    "campaign": {
+      "buggy_cases_with_required_substrings": 87,
+      "case_count": 173,
+      "clean_cases_with_forbidden_substrings": 86,
+      "strict_zero_clean_cases": 86,
+      "weak_case_count": 0,
+      "weak_cases": []
+    },
+    "smoke": {
+      "buggy_cases_with_required_substrings": 11,
+      "case_count": 22,
+      "clean_cases_with_forbidden_substrings": 11,
+      "strict_zero_clean_cases": 11,
+      "weak_case_count": 0,
+      "weak_cases": []
+    }
+  },
   "clean_fuzz_budget_scopes": {
     "campaign": {
       "case_count": 86,
@@ -3309,5 +3393,5 @@
     "strict_zero_case_count": 3,
     "warning_budget_total": 10
   },
-  "version": 3
+  "version": 4
 }
