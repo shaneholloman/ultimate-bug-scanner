@@ -8,6 +8,45 @@ import rule_quality_harness
 
 
 class RuleInventoryCoverageInvariantTest(unittest.TestCase):
+    def test_builds_inventory_coverage_from_corpus_and_dumped_rules(self) -> None:
+        coverage = rule_quality_harness.build_rule_inventory_coverage(
+            [
+                {
+                    "label": "js-rule-pack",
+                    "result_rule_ids": [
+                        "js.corpus-only",
+                        "js.eval-call",
+                        "js.innerHTML-assign",
+                    ],
+                }
+            ],
+            [
+                {
+                    "label": "js-rule-pack",
+                    "rules": [
+                        {"id": "js.dump-only"},
+                        {"id": "js.eval-call"},
+                        {"id": "js.innerHTML-assign"},
+                    ],
+                }
+            ],
+        )
+
+        self.assertEqual(
+            coverage,
+            [
+                {
+                    "label": "js-rule-pack",
+                    "corpus_result_rule_ids_without_generated_rule": ["js.corpus-only"],
+                    "covered_generated_rule_count": 2,
+                    "covered_generated_rule_ids": ["js.eval-call", "js.innerHTML-assign"],
+                    "generated_rule_count": 3,
+                    "uncovered_generated_rule_count": 1,
+                    "uncovered_generated_rule_ids": ["js.dump-only"],
+                }
+            ],
+        )
+
     def test_accepts_fully_covered_rule_inventory(self) -> None:
         rule_quality_harness.assert_rule_inventory_fully_covered(
             [
@@ -42,6 +81,34 @@ class RuleInventoryCoverageInvariantTest(unittest.TestCase):
                     }
                 ]
             )
+
+
+class AstGrepRulePackHelperTest(unittest.TestCase):
+    def test_counts_ast_grep_json_stream_objects(self) -> None:
+        count = rule_quality_harness.count_json_stream_objects(
+            '{"ruleId":"go.exec-sh-c"}\n\n{"ruleId":"rust.unwrap-call"}\n',
+            "fixture",
+        )
+
+        self.assertEqual(count, 2)
+
+    def test_rejects_invalid_ast_grep_json_stream_output(self) -> None:
+        with self.assertRaisesRegex(AssertionError, "emitted invalid JSON stream output"):
+            rule_quality_harness.count_json_stream_objects(
+                '{"ruleId":"ts.non-null-assertion-chain"}\nnot json\n',
+                "fixture",
+            )
+
+    def test_accepts_only_expected_ast_grep_diagnostic_stderr(self) -> None:
+        self.assertTrue(rule_quality_harness.is_ast_grep_diagnostic_stderr(""))
+        self.assertTrue(
+            rule_quality_harness.is_ast_grep_diagnostic_stderr(
+                "error(s) found in code\nScan succeeded"
+            )
+        )
+        self.assertFalse(
+            rule_quality_harness.is_ast_grep_diagnostic_stderr("Cannot parse rule")
+        )
 
 
 class RunManifestExpectationTest(unittest.TestCase):
