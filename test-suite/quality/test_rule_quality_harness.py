@@ -43,6 +43,85 @@ class RuleInventoryCoverageInvariantTest(unittest.TestCase):
             )
 
 
+class RunManifestExpectationTest(unittest.TestCase):
+    def test_extract_json_summary_skips_jsonl_findings(self) -> None:
+        stdout = "\n".join(
+            [
+                '{"ruleId":"js.eval-call","severity":"critical","message":"eval"}',
+                '{"project":"fixture","totals":{"files":1,"critical":2,"warning":3,"info":4}}',
+                "trailing text",
+            ]
+        )
+
+        summary = rule_quality_harness.extract_json_from_stdout(stdout)
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["totals"]["critical"], 2)
+        self.assertEqual(summary["totals"]["warning"], 3)
+
+    def test_parse_toon_summary_sums_scanner_totals(self) -> None:
+        stdout = "\n".join(
+            [
+                "scanners[",
+                "  scanner: js",
+                "  critical: 1",
+                "  warning: 2",
+                "  info: 3",
+                "  files: 4",
+                "  scanner: rust",
+                "  critical: 5",
+                "  warning: 6",
+                "  info: 7",
+                "  files: 8",
+                "]",
+                "findings[",
+                "]",
+            ]
+        )
+
+        summary = rule_quality_harness.parse_toon_summary(stdout, "fixture")
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(
+            summary["totals"],
+            {"critical": 6, "warning": 8, "info": 10, "files": 12},
+        )
+
+    def test_check_expectations_derives_fail_on_warning_exit(self) -> None:
+        errors = rule_quality_harness.check_expectations(
+            {"exit_code": "zero"},
+            exit_code=0,
+            summary={"totals": {"critical": 0, "warning": 1, "info": 0, "files": 1}},
+            stdout="",
+            stderr="",
+            fail_on_warning=True,
+        )
+
+        self.assertIn("expected exit 0 but derived 1", errors)
+
+    def test_check_expectations_enforces_substrings_and_totals(self) -> None:
+        errors = rule_quality_harness.check_expectations(
+            {
+                "totals": {
+                    "critical": {"min": 1},
+                    "warning": {"max": 0},
+                },
+                "require_substrings": ["must appear"],
+                "forbid_substrings": ["must not appear"],
+            },
+            exit_code=0,
+            summary={"totals": {"critical": 0, "warning": 2, "info": 0, "files": 1}},
+            stdout="must not appear",
+            stderr="",
+            fail_on_warning=False,
+        )
+
+        self.assertIn("critical count 0 < min 1", errors)
+        self.assertIn("warning count 2 > max 0", errors)
+        self.assertIn("missing substring 'must appear' in stdout", errors)
+        self.assertIn("forbidden substring 'must not appear' present in stdout", errors)
+
+
 class ScopeConstructionTest(unittest.TestCase):
     @staticmethod
     def case(case_id: str, language: str, tags: list[str]) -> dict[str, object]:
