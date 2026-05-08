@@ -148,6 +148,16 @@ from run_manifest import (  # noqa: E402
 )
 
 
+def enable_line_buffered_stdout() -> None:
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(line_buffering=True)
+
+
+def log_progress(message: str) -> None:
+    print(message, flush=True)
+
+
 def load_manifest() -> dict[str, Any]:
     path = TEST_ROOT / "manifest.json"
     try:
@@ -585,7 +595,7 @@ def update_or_check_golden(current: dict[str, Any], update: bool) -> None:
     if update:
         GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
         GOLDEN_PATH.write_text(rendered, encoding="utf-8")
-        print(f"[coverage-golden] updated {GOLDEN_PATH.relative_to(REPO_ROOT)}")
+        log_progress(f"[coverage-golden] updated {GOLDEN_PATH.relative_to(REPO_ROOT)}")
         return
 
     try:
@@ -601,7 +611,7 @@ def update_or_check_golden(current: dict[str, Any], update: bool) -> None:
             "rule coverage golden changed; review coverage drift and rerun with "
             "UPDATE_GOLDENS=1 if the new coverage is intentional"
         )
-    print("[coverage-golden] PASS")
+    log_progress("[coverage-golden] PASS")
 
 
 def update_or_check_ast_grep_sarif_golden(current: dict[str, Any], update: bool) -> None:
@@ -609,7 +619,7 @@ def update_or_check_ast_grep_sarif_golden(current: dict[str, Any], update: bool)
     if update:
         AST_GREP_SARIF_GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
         AST_GREP_SARIF_GOLDEN_PATH.write_text(rendered, encoding="utf-8")
-        print(
+        log_progress(
             "[ast-grep-sarif-golden] updated "
             f"{AST_GREP_SARIF_GOLDEN_PATH.relative_to(REPO_ROOT)}"
         )
@@ -637,7 +647,7 @@ def update_or_check_ast_grep_sarif_golden(current: dict[str, Any], update: bool)
             "ast-grep SARIF evidence golden changed; review rule-pack result drift and rerun "
             "with UPDATE_GOLDENS=1 if the new evidence is intentional"
         )
-    print("[ast-grep-sarif-golden] PASS")
+    log_progress("[ast-grep-sarif-golden] PASS")
 
 
 def case_by_id(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1167,6 +1177,7 @@ def assert_rule_inventory_fully_covered(
 
 
 def run_ast_grep_rule_pack_check(timeout: int, update_golden: bool) -> None:
+    log_progress("[ast-grep-rule-pack] checking focused SARIF fixtures")
     checks = [
         {
             "label": spec["label"],
@@ -1174,6 +1185,7 @@ def run_ast_grep_rule_pack_check(timeout: int, update_golden: bool) -> None:
         }
         for spec in AST_GREP_SARIF_CHECKS
     ]
+    log_progress("[ast-grep-rule-pack] checking language corpus SARIF evidence")
     corpus_checks = [
         {
             "label": spec["label"],
@@ -1182,6 +1194,7 @@ def run_ast_grep_rule_pack_check(timeout: int, update_golden: bool) -> None:
         for spec in AST_GREP_SARIF_CHECKS
     ]
     ast_grep_cmd = ast_grep_command()
+    log_progress("[ast-grep-rule-pack] validating dumped ast-grep YAML rules")
     per_rule_validation = [
         {
             "label": spec["label"],
@@ -1210,7 +1223,7 @@ def run_ast_grep_rule_pack_check(timeout: int, update_golden: bool) -> None:
     covered_generated_rules = sum(
         item["covered_generated_rule_count"] for item in rule_inventory_coverage
     )
-    print(
+    log_progress(
         "[ast-grep-rule-pack] PASS "
         f"({len(AST_GREP_SARIF_CHECKS)} SARIF checks, "
         f"{corpus_results} corpus SARIF results, "
@@ -1229,8 +1242,9 @@ def run_runtime_pair_checks(
     cases = case_by_id(manifest)
     case_ids = runtime_case_ids_for_scope(coverage, scope)
     for case_id in case_ids:
+        log_progress(f"[runtime-{scope}] running {case_id}")
         run_real_case(manifest, cases[case_id], f"runtime-{scope}-{case_id}", timeout)
-    print(f"[runtime-{scope}] PASS ({len(case_ids)} real fixture scans)")
+    log_progress(f"[runtime-{scope}] PASS ({len(case_ids)} real fixture scans)")
 
 
 def comment_prefix_for(path: Path) -> str:
@@ -1405,11 +1419,13 @@ def run_metamorphic_checks(
     transform_count = 0
     for case_id in case_ids:
         case = cases[case_id]
+        log_progress(f"[metamorphic-{scope}] running {case_id} original")
         _, original_summary = run_real_case(
             manifest, case, f"metamorphic-{case_id}-original", timeout
         )
         for transform in metamorphic_transforms_for_case(case):
             transform_count += 1
+            log_progress(f"[metamorphic-{scope}] running {case_id} {transform}")
             transformed_path = materialize_variant(
                 case,
                 f"metamorphic-{case_id}-{transform}",
@@ -1427,7 +1443,7 @@ def run_metamorphic_checks(
                     f"{case_id} changed under benign {transform} transform: "
                     f"{original_summary} != {transformed_summary}"
                 )
-    print(
+    log_progress(
         f"[metamorphic-{scope}] PASS "
         f"({len(case_ids)} real fixture(s), {transform_count} transformed scan(s))"
     )
@@ -1445,6 +1461,7 @@ def run_fuzz_smoke(
     for case_id in case_ids:
         case = cases[case_id]
         for iteration in range(iterations):
+            log_progress(f"[fuzz-{scope}] running {case_id} iteration {iteration}")
             transformed_path = materialize_variant(
                 case,
                 f"fuzz-{case_id}-{iteration}",
@@ -1457,7 +1474,7 @@ def run_fuzz_smoke(
                 timeout,
                 transformed_path,
             )
-    print(
+    log_progress(
         f"[fuzz-{scope}] PASS "
         f"({len(case_ids)} clean fixture transforms x {iterations} iteration(s))"
     )
@@ -1466,6 +1483,7 @@ def run_fuzz_smoke(
 def main(argv: list[str]) -> int:
     import argparse
 
+    enable_line_buffered_stdout()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case-timeout", type=int, default=60)
     parser.add_argument("--fuzz-iterations", type=int, default=DEFAULT_FUZZ_ITERATIONS)
@@ -1489,7 +1507,7 @@ def main(argv: list[str]) -> int:
     manifest = load_manifest()
     coverage = build_rule_coverage(manifest)
     update_or_check_golden(coverage, update_golden)
-    print("[manifest-audit] PASS")
+    log_progress("[manifest-audit] PASS")
 
     if not args.skip_runtime:
         run_ast_grep_rule_pack_check(args.case_timeout, update_golden)

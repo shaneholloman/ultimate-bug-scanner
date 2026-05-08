@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
 """Unit checks for the rule-quality harness invariants."""
 
+import contextlib
+import io
 import unittest
 from pathlib import Path
 
 import rule_quality_harness
+
+
+class ProgressOutputTest(unittest.TestCase):
+    def test_log_progress_writes_one_line(self) -> None:
+        buffer = io.StringIO()
+
+        with contextlib.redirect_stdout(buffer):
+            rule_quality_harness.log_progress("[phase] running case")
+
+        self.assertEqual(buffer.getvalue(), "[phase] running case\n")
 
 
 class RuleInventoryCoverageInvariantTest(unittest.TestCase):
