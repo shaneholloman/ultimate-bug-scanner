@@ -54,6 +54,32 @@ def missing_selected_case_ids(
     return sorted(selected_ids - available_ids)
 
 
+def invalid_case_id_labels(cases: Sequence[Dict[str, Any]]) -> List[str]:
+    return [
+        f"manifest case #{index + 1}"
+        for index, case in enumerate(cases)
+        if not isinstance(case.get("id"), str) or not case["id"].strip()
+    ]
+
+
+def disabled_case_ids(
+    cases: Sequence[Dict[str, Any]],
+    selected_ids: set[str],
+) -> List[str]:
+    selected_scope = selected_ids or {
+        case["id"]
+        for case in cases
+        if isinstance(case.get("id"), str)
+    }
+    return sorted(
+        case["id"]
+        for case in cases
+        if isinstance(case.get("id"), str)
+        and case["id"] in selected_scope
+        and not bool(case.get("enabled", True))
+    )
+
+
 def is_nonnegative_int(value: Any) -> bool:
     return type(value) is int and value >= 0
 
@@ -280,11 +306,22 @@ def main() -> None:
             print(f"{entry.get('id')}: {status} :: {entry.get('description','').strip()}")
         return
 
+    invalid_case_ids = invalid_case_id_labels(cases)
+    if invalid_case_ids:
+        for case_label in invalid_case_ids:
+            print(f"[{case_label}] FAIL\n  - manifest case lacks a non-empty id", file=sys.stderr)
+        sys.exit(1)
+
     selected_ids = set(args.cases or [])
     missing_case_ids = missing_selected_case_ids(cases, selected_ids)
     if missing_case_ids:
         for case_id in missing_case_ids:
             print(f"[{case_id}] FAIL\n  - no such manifest case id", file=sys.stderr)
+        sys.exit(1)
+    disabled_ids = disabled_case_ids(cases, selected_ids)
+    if disabled_ids:
+        for case_id in disabled_ids:
+            print(f"[{case_id}] FAIL\n  - manifest case is disabled/skipped", file=sys.stderr)
         sys.exit(1)
 
     manifest_dir = args.manifest.parent

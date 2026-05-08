@@ -362,6 +362,40 @@ class RunManifestExpectationTest(unittest.TestCase):
 
         self.assertEqual(missing, [])
 
+    def test_invalid_case_id_labels_rejects_missing_or_blank_ids(self) -> None:
+        invalid = rule_quality_harness.invalid_case_id_labels(
+            [
+                {"id": "rust-sql-injection-buggy"},
+                {"id": ""},
+                {"description": "missing id"},
+                {"id": "   "},
+            ]
+        )
+
+        self.assertEqual(
+            invalid,
+            ["manifest case #2", "manifest case #3", "manifest case #4"],
+        )
+
+    def test_disabled_case_ids_fail_only_selected_scope(self) -> None:
+        cases = [
+            {"id": "js-typescript-sql-injection-buggy", "enabled": False},
+            {"id": "golang-ssrf-clean", "enabled": False},
+            {"id": "rust-request-body-limit-clean"},
+        ]
+
+        self.assertEqual(
+            rule_quality_harness.disabled_case_ids(
+                cases,
+                {"rust-request-body-limit-clean"},
+            ),
+            [],
+        )
+        self.assertEqual(
+            rule_quality_harness.disabled_case_ids(cases, set()),
+            ["golang-ssrf-clean", "js-typescript-sql-injection-buggy"],
+        )
+
 
 class CommandConstructionTest(unittest.TestCase):
     @staticmethod
