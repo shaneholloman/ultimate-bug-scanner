@@ -113,6 +113,64 @@ class ScopeConstructionTest(unittest.TestCase):
         )
 
 
+class TargetCleanBaselineBudgetTest(unittest.TestCase):
+    @staticmethod
+    def baseline_case(
+        case_id: str,
+        warning_max: int = 0,
+        forbid_substrings: list[str] | None = None,
+    ) -> dict[str, object]:
+        expect: dict[str, object] = {
+            "exit_code": "zero",
+            "totals": {
+                "critical": {"max": 0},
+                "warning": {"max": warning_max},
+            },
+        }
+        if forbid_substrings is not None:
+            expect["forbid_substrings"] = forbid_substrings
+        return {
+            "expect": expect,
+            "id": case_id,
+            "language": case_id.split("-", 1)[0],
+            "path": f"test-suite/{case_id}",
+            "tags": ["clean"],
+        }
+
+    def test_rejects_missing_target_clean_baseline_case(self) -> None:
+        cases = [
+            self.baseline_case(case_id)
+            for case_id in rule_quality_harness.TARGET_CLEAN_BASELINE_CASE_IDS[:-1]
+        ]
+
+        with self.assertRaisesRegex(AssertionError, "rust-clean"):
+            rule_quality_harness.target_clean_baseline_budgets(cases)
+
+    def test_records_target_clean_warning_budget_and_forbid_counts(self) -> None:
+        cases = [
+            self.baseline_case(
+                case_id,
+                warning_max=2 if case_id == "js-module-clean" else 0,
+                forbid_substrings=["danger", "panic"] if case_id == "rust-clean" else [],
+            )
+            for case_id in rule_quality_harness.TARGET_CLEAN_BASELINE_CASE_IDS
+        ]
+
+        budget = rule_quality_harness.target_clean_baseline_budgets(cases)
+
+        self.assertEqual(
+            budget["case_count"],
+            len(rule_quality_harness.TARGET_CLEAN_BASELINE_CASE_IDS),
+        )
+        self.assertEqual(
+            budget["strict_zero_case_count"],
+            len(rule_quality_harness.TARGET_CLEAN_BASELINE_CASE_IDS) - 1,
+        )
+        self.assertEqual(budget["warning_budget_total"], 2)
+        rust_case = next(case for case in budget["cases"] if case["id"] == "rust-clean")
+        self.assertEqual(rust_case["forbid_substring_count"], 2)
+
+
 class ExpectationStrengthScopeTest(unittest.TestCase):
     def test_language_filter_separates_target_and_all_supported_debt(self) -> None:
         runtime_scopes = {"all": ["js-clean", "python-clean"]}
