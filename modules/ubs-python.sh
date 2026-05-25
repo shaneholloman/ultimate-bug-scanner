@@ -10063,8 +10063,8 @@ fi
 
 print_subheader "await inside loops (performance)"
 count=$("${GREP_RN[@]}" -e "for[[:space:]]+.*:|while[[:space:]]+.*:" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -A3 -w "await" || true) | (grep -cw "await" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  (grep -A3 -w "await" || true) | (grep -w "await" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 3 ]; then
   print_finding "info" "$count" "await inside loops" "Consider asyncio.gather"
 fi
@@ -10072,8 +10072,8 @@ fi
 print_subheader "Blocking calls in async def"
 count=$("${GREP_RN[@]}" -e "async[[:space:]]+def[[:space:]]" "$PROJECT_DIR" 2>/dev/null | \
   (grep -A6 -E "time\.sleep\(|requests\.[a-z]+\(.*\)|subprocess\.run\(|open\(" || true) | \
-  (grep -c -E "time\.sleep|requests\.|subprocess\.run|open\(" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  (grep -E "time\.sleep|requests\.|subprocess\.run|open\(" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 0 ]; then
   print_finding "warning" "$count" "Blocking calls inside async functions" "Use async equivalents"
 fi
@@ -10106,8 +10106,8 @@ fi
 
 print_subheader "raise e (loses traceback)"
 count=$("${GREP_RN[@]}" -e "^[[:space:]]*except[[:space:]].*as[[:space:]]+[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*$" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -A2 -E "raise[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$" || true) | (grep -c -E "raise[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  (grep -A2 -E "raise[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$" || true) | (grep -E "raise[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 0 ]; then
   print_finding "warning" "$count" "Use 'raise' not 'raise e' to preserve traceback"
 fi
@@ -10521,8 +10521,8 @@ fi
 
 print_subheader "Nested function declarations"
 count=$("${GREP_RN[@]}" -e "def[[:space:]]+[A-Za-z_][A-Za-z0-9_]*\(" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -A2 -E "^[[:space:]]+def[[:space:]]" || true) | (grep -cw "def" || true))
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  (grep -A2 -E "^[[:space:]]+def[[:space:]]" || true) | (grep -w "def" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 10 ]; then
   print_finding "info" "$count" "Nested functions - verify closures and lifetimes"
 fi
@@ -10620,8 +10620,8 @@ print_category "Detects: return/break in finally, nested ternary, unreachable co
 
 print_subheader "return/break/continue inside finally"
 count=$("${GREP_RN[@]}" -e "finally:[[:space:]]*$" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -A3 -E "return|break|continue" || true) | (grep -c -E "return|break|continue" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  (grep -A3 -E "return|break|continue" || true) | (grep -E "return|break|continue" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 0 ]; then
   print_finding "warning" "$count" "Control transfer in finally" "It may swallow exceptions"
 fi
@@ -10685,16 +10685,16 @@ print_category "Detects: string concat in loops, regex compile in loops, I/O in 
   "Performance anti-patterns reduce throughput and increase latency."
 
 print_subheader "String concatenation in loops"
-count=$("${GREP_RN[@]}" -e "for[[:space:]]+.*:|while[[:space:]]+.*:" "$PROJECT_DIR" 2>/dev/null | (grep -A3 "+=" || true) | (grep -cw "+=" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+count=$("${GREP_RN[@]}" -e "for[[:space:]]+.*:|while[[:space:]]+.*:" "$PROJECT_DIR" 2>/dev/null | (grep -A3 "+=" || true) | (grep -w "+=" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 8 ]; then
   print_finding "info" "$count" "String concatenation in loops" "Use list-join pattern"
 fi
 
 print_subheader "re.compile inside loops"
 count=$("${GREP_RN[@]}" -e "for[[:space:]]+.*:|while[[:space:]]+.*:" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -A3 -E "re\.compile\(" || true) | (grep -cw "re\.compile" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  (grep -A3 -E "re\.compile\(" || true) | (grep -w "re\.compile" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 0 ]; then
   print_finding "info" "$count" "Regex compiled in loop" "Precompile outside loop"
 fi
@@ -10702,8 +10702,8 @@ fi
 print_subheader "I/O heavy ops in loops"
 count=$("${GREP_RN[@]}" -e "for|while" "$PROJECT_DIR" 2>/dev/null | \
   (grep -A5 -E "open\(|read\(|write\(|requests\." || true) | \
-  (grep -c -E "open\(|read\(|write\(|requests\." || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  (grep -E "open\(|read\(|write\(|requests\." || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 5 ]; then
   print_finding "warning" "$count" "I/O in loops" "Batch or buffer where possible"
 fi

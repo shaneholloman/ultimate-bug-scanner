@@ -5015,11 +5015,12 @@ if [ "$count" -eq 0 ]; then
     ( set +o pipefail;
       "${GREP_RN[@]}" -e "for[[:space:]]*.*\{" "$PROJECT_DIR" 2>/dev/null \
         | (grep -A8 -E "time\.After\(" || true) \
-        | (grep -c -E "time\.After\(" || true)
-    ) | awk 'END{print ($1+0)}'
+        | (grep -E "time\.After\(" || true) \
+        | count_lines
+    )
   )
 fi
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+count=${count:-0}
 if [ "$count" -gt 0 ]; then print_finding "info" "$count" "time.After allocations in loops - prefer reusable timer"; fi
 fi
 

@@ -3587,8 +3587,8 @@ str_bytes=$(( $(ast_search 'new String($B)' || echo 0) + $(ast_search '$S.getByt
 if [ "$str_bytes" -gt 0 ]; then print_finding "info" "$str_bytes" "Charset not specified in String/bytes conversion"; fi
 
 print_subheader "Files.readAllBytes / large reads inside loops"
-read_all_bytes_loop=$("${GREP_RN[@]}" -e "for[[:space:]]*\(|while[[:space:]]*\(" "$PROJECT_DIR" 2>/dev/null | (grep -A4 -F "Files.readAllBytes(" || true) | (grep -c -F "Files.readAllBytes(" || true))
-read_all_bytes_loop=$(echo "$read_all_bytes_loop" | awk 'END{print $0+0}')
+read_all_bytes_loop=$("${GREP_RN[@]}" -e "for[[:space:]]*\(|while[[:space:]]*\(" "$PROJECT_DIR" 2>/dev/null | (grep -A4 -F "Files.readAllBytes(" || true) | (grep -F "Files.readAllBytes(" || true) | count_lines)
+read_all_bytes_loop=${read_all_bytes_loop:-0}
 if [ "$read_all_bytes_loop" -gt 0 ]; then print_finding "warning" "$read_all_bytes_loop" "Files.readAllBytes in loop - consider streaming"; fi
 
 print_subheader "Try-with-resources coverage"
@@ -3676,8 +3676,8 @@ legacy=$(( $(ast_search 'new java.util.Vector($$)' || echo 0) + $(ast_search 'ne
 if [ "$legacy" -gt 0 ]; then print_finding "info" "$legacy" "Vector/Hashtable detected"; fi
 
 print_subheader "Collection modification during foreach (heuristic)"
-mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -c -F ".remove(" || true))
-mod_foreach=$(echo "$mod_foreach" | awk 'END{print $0+0}')
+mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -F ".remove(" || true) | count_lines)
+mod_foreach=${mod_foreach:-0}
 if [ "$mod_foreach" -gt 0 ]; then print_finding "warning" "$mod_foreach" "Possible modification of collection during iteration"; fi
 fi
 
@@ -3719,8 +3719,8 @@ par_for_each=$(( $(ast_search '$SRC.parallel().forEach($$)' || echo 0) + $("${GR
 if [ "$par_for_each" -gt 0 ]; then print_finding "info" "$par_for_each" "parallel forEach detected - ensure thread-safe side effects"; fi
 
 print_subheader "String concatenation in loops"
-str_plus_loop=$("${GREP_RN[@]}" -e "for\s*\(|while\s*\(" "$PROJECT_DIR" 2>/dev/null | (grep -A3 "\+=\"" || true) | (grep -cw "\+=\"" || true))
-str_plus_loop=$(echo "$str_plus_loop" | awk 'END{print $0+0}')
+str_plus_loop=$("${GREP_RN[@]}" -e "for\s*\(|while\s*\(" "$PROJECT_DIR" 2>/dev/null | (grep -A3 "\+=\"" || true) | (grep -w "\+=\"" || true) | count_lines)
+str_plus_loop=${str_plus_loop:-0}
 if [ "$str_plus_loop" -gt 0 ]; then print_finding "info" "$str_plus_loop" "String '+=' in loops - prefer StringBuilder"; fi
 fi
 
@@ -4108,8 +4108,8 @@ legacy=$(( $(ast_search 'new java.util.Vector($$)' || echo 0) + $(ast_search 'ne
 if [ "$legacy" -gt 0 ]; then print_finding "info" "$legacy" "Vector/Hashtable detected"; fi
 
 print_subheader "Collection modification during foreach (heuristic)"
-mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -c -F ".remove(" || true))
-mod_foreach=$(echo "$mod_foreach" | awk 'END{print $0+0}')
+mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -F ".remove(" || true) | count_lines)
+mod_foreach=${mod_foreach:-0}
 if [ "$mod_foreach" -gt 0 ]; then print_finding "warning" "$mod_foreach" "Possible modification of collection during iteration"; fi
 fi
 
@@ -4364,8 +4364,8 @@ legacy=$(( $(ast_search 'new java.util.Vector($$)' || echo 0) + $(ast_search 'ne
 if [ "$legacy" -gt 0 ]; then print_finding "info" "$legacy" "Vector/Hashtable detected"; fi
 
 print_subheader "Collection modification during foreach (heuristic)"
-mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -c -F ".remove(" || true))
-mod_foreach=$(echo "$mod_foreach" | awk 'END{print $0+0}')
+mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -F ".remove(" || true) | count_lines)
+mod_foreach=${mod_foreach:-0}
 if [ "$mod_foreach" -gt 0 ]; then print_finding "warning" "$mod_foreach" "Possible modification of collection during iteration"; fi
 fi
 
@@ -4620,8 +4620,8 @@ legacy=$(( $(ast_search 'new java.util.Vector($$)' || echo 0) + $(ast_search 'ne
 if [ "$legacy" -gt 0 ]; then print_finding "info" "$legacy" "Vector/Hashtable detected"; fi
 
 print_subheader "Collection modification during foreach (heuristic)"
-mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -c -F ".remove(" || true))
-mod_foreach=$(echo "$mod_foreach" | awk 'END{print $0+0}')
+mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -F ".remove(" || true) | count_lines)
+mod_foreach=${mod_foreach:-0}
 if [ "$mod_foreach" -gt 0 ]; then print_finding "warning" "$mod_foreach" "Possible modification of collection during iteration"; fi
 fi
 
@@ -4876,8 +4876,8 @@ legacy=$(( $(ast_search 'new java.util.Vector($$)' || echo 0) + $(ast_search 'ne
 if [ "$legacy" -gt 0 ]; then print_finding "info" "$legacy" "Vector/Hashtable detected"; fi
 
 print_subheader "Collection modification during foreach (heuristic)"
-mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -c -F ".remove(" || true))
-mod_foreach=$(echo "$mod_foreach" | awk 'END{print $0+0}')
+mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -F ".remove(" || true) | count_lines)
+mod_foreach=${mod_foreach:-0}
 if [ "$mod_foreach" -gt 0 ]; then print_finding "warning" "$mod_foreach" "Possible modification of collection during iteration"; fi
 fi
 
@@ -5132,8 +5132,8 @@ legacy=$(( $(ast_search 'new java.util.Vector($$)' || echo 0) + $(ast_search 'ne
 if [ "$legacy" -gt 0 ]; then print_finding "info" "$legacy" "Vector/Hashtable detected"; fi
 
 print_subheader "Collection modification during foreach (heuristic)"
-mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -c -F ".remove(" || true))
-mod_foreach=$(echo "$mod_foreach" | awk 'END{print $0+0}')
+mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -F ".remove(" || true) | count_lines)
+mod_foreach=${mod_foreach:-0}
 if [ "$mod_foreach" -gt 0 ]; then print_finding "warning" "$mod_foreach" "Possible modification of collection during iteration"; fi
 fi
 
@@ -5388,8 +5388,8 @@ legacy=$(( $(ast_search 'new java.util.Vector($$)' || echo 0) + $(ast_search 'ne
 if [ "$legacy" -gt 0 ]; then print_finding "info" "$legacy" "Vector/Hashtable detected"; fi
 
 print_subheader "Collection modification during foreach (heuristic)"
-mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -c -F ".remove(" || true))
-mod_foreach=$(echo "$mod_foreach" | awk 'END{print $0+0}')
+mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -F ".remove(" || true) | count_lines)
+mod_foreach=${mod_foreach:-0}
 if [ "$mod_foreach" -gt 0 ]; then print_finding "warning" "$mod_foreach" "Possible modification of collection during iteration"; fi
 fi
 
@@ -5644,8 +5644,8 @@ legacy=$(( $(ast_search 'new java.util.Vector($$)' || echo 0) + $(ast_search 'ne
 if [ "$legacy" -gt 0 ]; then print_finding "info" "$legacy" "Vector/Hashtable detected"; fi
 
 print_subheader "Collection modification during foreach (heuristic)"
-mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -c -F ".remove(" || true))
-mod_foreach=$(echo "$mod_foreach" | awk 'END{print $0+0}')
+mod_foreach=$("${GREP_RN[@]}" -e "for\s*\([^)]+:[^)]+\)\s*\{" "$PROJECT_DIR" 2>/dev/null | (grep -A3 -F ".remove(" || true) | (grep -F ".remove(" || true) | count_lines)
+mod_foreach=${mod_foreach:-0}
 if [ "$mod_foreach" -gt 0 ]; then print_finding "warning" "$mod_foreach" "Possible modification of collection during iteration"; fi
 fi
 

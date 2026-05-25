@@ -43,16 +43,16 @@ MODULE_PATH_TEMPLATE_LATEST="$REPO_RAW_LATEST/modules/ubs-%s.sh"
 
 # Known-good module digests (sha256) for supply-chain verification.
 declare -A MODULE_CHECKSUMS=(
-  [cpp]='c6183e672185b19acea67f22dd9b50e38c9e557e99e5db09c08402335888af81'
+  [cpp]='f054b77189ac66e81fa5c918d4605430272ccb67d9c875f126673182fda85805'
   [csharp]='aa49faa22bf85a0cb3da4a667e1ab2d2b8960473ec2f8694aac3dffe9f8861f6'
   [elixir]='a231939f444a0f8dc8db97122d08898f589d8cd0dbca4e44197bb16f01b6cae9'
-  [golang]='99f28ef16d5e37ee4539c3059993aba8928afdaf03f0a6cde44646859cecad48'
-  [java]='c8613365ae9d08513aedd74f37cd2014e04dcb1877db07f41507a805974d28a6'
-  [js]='f90641345a2a615a6b40491f301072d198f5dbf21079120be0d6846b76a6b564'
-  [python]='e600de58099956c9e329d4d2f1e87629637e41c121404d6343b1828b8407b221'
+  [golang]='080807d72d3f639c45efc7a98e0aeaafb78842cc60382a19f4195823e5f6d0cc'
+  [java]='9d6df2d271d7c20caa97248a82ba71d4c14970dd31fc30b0b82c7902269af4a2'
+  [js]='d472bc608e90ca35f32000253a71c7c001507c56603d5a3d231de59804521551'
+  [python]='e61c1b4885519572f8aead605fe7be5df066a5160edbbb42b6e1a3bf75f94fde'
   [ruby]='0973251abcd905bb6892ede0448657f460aca67f821ccc97e60645be2a1c5447'
   [rust]='db2fb354aab93d716342dc821775afd2483b896051898fc6db6ae83a191601ad'
-  [swift]='a2d74c4e23bc7e2e748ea9ac5c3846a7954580e2bd0dfefc9a211fb4d5b8c8a4'
+  [swift]='0aa08730cd2bcaa406821dfe4c6bdb55cd00b625bf65ecc1a1033fb8ddc4c2fc'
 )
 
 # Helper assets used by some modules (AST correlation and type narrowing).

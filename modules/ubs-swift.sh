@@ -3967,8 +3967,8 @@ count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
 tick
 
  print_subheader "NSRegularExpression init near loops (heuristic)"
- count=$("${GREP_RN[@]}" -e 'for[[:space:]]+.+[[:space:]]+in[[:space:]]+.+\{' "$PROJECT_DIR" 2>/dev/null | (grep -A10 -F "NSRegularExpression(" || true) | (grep -c -F "NSRegularExpression(" || true))
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+ count=$("${GREP_RN[@]}" -e 'for[[:space:]]+.+[[:space:]]+in[[:space:]]+.+\{' "$PROJECT_DIR" 2>/dev/null | (grep -A10 -F "NSRegularExpression(" || true) | (grep -F "NSRegularExpression(" || true) | count_lines)
+count=${count:-0}
  if [[ "${count:-0}" -gt 0 ]]; then print_finding "info" "$count" "Regex compiled inside/near loop"; else print_finding "good" "No NSRegularExpression-in-loop patterns"; fi
  tick
 

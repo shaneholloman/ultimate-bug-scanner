@@ -828,7 +828,7 @@ run_hooks_dependency_checks() {
     if command -v rg >/dev/null 2>&1; then
       # Use ripgrep multiline mode to detect hooks with empty deps across lines
       hooks_count=$(rg --multiline --multiline-dotall -e 'use(Effect|Callback|Memo|LayoutEffect)\s*\(.*?\[\s*\]' "$PROJECT_DIR" 2>/dev/null | \
-        grep -c 'use' || echo 0)
+        (grep 'use' || true) | count_lines || echo 0)
     else
       # Fallback to grep: look for empty dependency arrays (simple single-line pattern)
       hooks_count=$("${GREP_RN[@]}" -e '},\s*\[\s*\]\s*\)' "$PROJECT_DIR" 2>/dev/null | count_lines || echo 0)
@@ -3740,8 +3740,8 @@ fi
 
 print_subheader "Mutation of array during iteration"
 count=$("${GREP_RN[@]}" -e "forEach|for[[:space:]]*\(|for[[:space:]]+of|map|filter" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -A3 -E "push|splice|shift|unshift|pop" || true) | (grep -c -E "push|splice|shift|unshift|pop" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  (grep -A3 -E "push|splice|shift|unshift|pop" || true) | (grep -E "push|splice|shift|unshift|pop" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 5 ]; then
   print_finding "warning" "$count" "Possible array mutation during iteration" "Can cause skipped/duplicate elements"
 fi
@@ -8937,16 +8937,16 @@ fi
 
 print_subheader "Nested callbacks (callback hell)"
 count=$("${GREP_RN[@]}" -e "function" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -A10 "function" || true) | (grep -c "function" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  (grep -A10 "function" || true) | (grep "function" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 40 ]; then
   print_finding "info" "$count" "Many callback-style functions detected" "Review for unnecessary nesting; prefer async/await or Promises"
 fi
 
 print_subheader "Function declarations inside blocks"
 count=$("${GREP_RN[@]}" -e "if|for|while" "$PROJECT_DIR" 2>/dev/null | \
-  (grep -A2 "function " || true) | (grep -cw "function" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  (grep -A2 "function " || true) | (grep -w "function" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 5 ]; then
   print_finding "warning" "$count" "Function declarations in blocks - use function expressions" "Hoisting is inconsistent"
 fi
@@ -9231,15 +9231,15 @@ fi
 print_subheader "Synchronous operations in loops"
 count=$("${GREP_RN[@]}" -e "for|while" "$PROJECT_DIR" 2>/dev/null | \
   (grep -A5 -E "querySelector|getElementById|innerHTML|appendChild" || true) | \
-  (grep -c -E "querySelector|getElementById|innerHTML|appendChild" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  (grep -E "querySelector|getElementById|innerHTML|appendChild" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 5 ]; then
   print_finding "warning" "$count" "DOM operations in loops - cache selectors" "Cache element references before loops"
 fi
 
 print_subheader "String concatenation in loops"
-count=$("${GREP_RN[@]}" -e "for|while" "$PROJECT_DIR" 2>/dev/null | (grep -A3 "+=" || true) | (grep -cw "+=" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+count=$("${GREP_RN[@]}" -e "for|while" "$PROJECT_DIR" 2>/dev/null | (grep -A3 "+=" || true) | (grep -w "+=" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 8 ]; then
   print_finding "info" "$count" "String concatenation in loops" "Prefer array.join for large strings"
 fi
@@ -9636,8 +9636,8 @@ print_finding "info" "$dom_count" "DOM queries found" "Ensure all queries have n
 
 print_subheader "Uncached DOM queries in loops"
 count=$( ("${GREP_RN[@]}" -e "for|while" "$PROJECT_DIR" 2>/dev/null || true) \
-  | (grep -A5 -E "querySelector|getElementById" || true) | (grep -c -E "querySelector|getElementById" || true) )
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  | (grep -A5 -E "querySelector|getElementById" || true) | (grep -E "querySelector|getElementById" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 5 ]; then
   print_finding "warning" "$count" "DOM queries inside loops" "Cache selectors outside loops"
 fi

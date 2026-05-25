@@ -3362,15 +3362,15 @@ print_category "Detects: tight-loop string concatenation, many small allocations
   "Performance bugs degrade latency and throughput"
 
 print_subheader "String concatenation in tight loops (+=)"
-count=$("${GREP_RN[@]}" -e "for|while" "${TARGETS[@]}" 2>/dev/null | (grep -A3 "\\+=" || true) | (grep -cw "\\+=" || true))
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+count=$("${GREP_RN[@]}" -e "for|while" "${TARGETS[@]}" 2>/dev/null | (grep -A3 "\\+=" || true) | (grep -w "\\+=" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 8 ]; then print_finding "info" "$count" "String += in loops - consider reserve/ostringstream/fmt::memory_buffer"; fi
 
 print_subheader "I/O in loops (heuristic)"
 count=$("${GREP_RN[@]}" -e "for|while" "${TARGETS[@]}" 2>/dev/null \
   | (grep -A5 -E "std::cout|std::cerr|printf|fprintf|std::printf" || true) \
-  | (grep -c -E "cout|cerr|printf" || true))
-count=$(printf '%s\n' "$count" | awk 'END{print $0+0}')
+  | (grep -E "cout|cerr|printf" || true) | count_lines)
+count=${count:-0}
 if [ "$count" -gt 5 ]; then print_finding "info" "$count" "I/O inside loops - buffer or batch"; fi
 fi
 
