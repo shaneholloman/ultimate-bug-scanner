@@ -2985,8 +2985,19 @@ setup_git_hook() {
     return 0
   fi
 
+  # Resolve the directory git actually runs hooks from. This is NOT always
+  # "${git_dir}/hooks": in a linked worktree `--git-dir` is the per-worktree
+  # dir (.git/worktrees/<name>) whereas hooks execute from the common dir, and
+  # a user may point core.hooksPath elsewhere. `git rev-parse --git-path hooks`
+  # resolves both cases so the hook lands where git will actually execute it.
+  local hooks_dir=""
+  hooks_dir="$(git rev-parse --git-path hooks 2>/dev/null)" || hooks_dir=""
+  if [ -z "$hooks_dir" ]; then
+    hooks_dir="${git_dir}/hooks"
+  fi
+
   if dry_run_enabled; then
-    log_dry_run "Would configure git pre-commit hook at ${git_dir}/hooks/pre-commit."
+    log_dry_run "Would configure git pre-commit hook at ${hooks_dir}/pre-commit."
     return 0
   fi
 
@@ -2995,7 +3006,6 @@ setup_git_hook() {
   # Ensure the hooks directory exists before writing into it. Freshly created
   # or unusually-laid-out git dirs may not have hooks/ yet; without this the
   # heredoc redirection below fails with "No such file or directory".
-  local hooks_dir="${git_dir}/hooks"
   if ! mkdir -p "$hooks_dir" 2>/dev/null; then
     warn "Could not create git hooks directory ($hooks_dir) — skipping pre-commit hook setup."
     return 0
