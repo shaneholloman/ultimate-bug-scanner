@@ -8,6 +8,19 @@ Repository: <https://github.com/Dicklesworthstone/ultimate_bug_scanner>
 
 ---
 
+## [v5.3.4] - 2026-07-06 [Release]
+
+### Fixes
+
+- **#60 — each language module is now bounded by a per-module `timeout` and its process group is reaped, eliminating whole-scan hangs.** A single misbehaving module (e.g. a `ripgrep`/helper subprocess that stalled or spawned children) could previously wedge the entire scan indefinitely. The meta-runner now runs every language module under `timeout`, tears down the module's full process group on exit, and reports a distinct `MODULE_TIMEOUT` result instead of blocking forever, so one slow language can no longer take down the run.
+- **#58 — `install.sh` no longer aborts the install when the pre-commit hook cannot be set up outside a real git repo**, and the hook is now written to git's real hooks directory (honoring worktrees and `core.hooksPath`) rather than a hardcoded `.git/hooks` path.
+
+### Housekeeping
+
+- `VERSION`, `UBS_VERSION` (in `ubs`), and the README version badge bumped to `5.3.4`; `SHA256SUMS` refreshed against the bumped `ubs` bytes.
+
+---
+
 ## [v5.3.2] - 2026-05-24
 
 ### Fixes
