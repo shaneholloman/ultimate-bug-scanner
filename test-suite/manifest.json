@@ -3327,6 +3327,97 @@
       }
     },
     {
+      "id": "python-assert-security-tests-dir-buggy",
+      "description": "Security asserts in production modules must keep firing even when the scanned directory also contains a tests/ subtree (#64).",
+      "path": "test-suite/python/security/assert_tests_dir_buggy",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "assert",
+        "buggy",
+        "issue-64"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "Security-sensitive assert stripped by -O"
+        ]
+      }
+    },
+    {
+      "id": "python-assert-security-tests-dir-clean",
+      "description": "Pytest-style security asserts under tests/ (and conftest.py) are the expected idiom and must not be flagged as stripped-by--O criticals (#64).",
+      "path": "test-suite/python/security/assert_tests_dir_clean",
+      "language": "python",
+      "tags": [
+        "python",
+        "security",
+        "assert",
+        "clean",
+        "issue-64"
+      ],
+      "args": [
+        "--only=python",
+        "--fail-on-warning",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      ],
+      "expect": {
+        "exit_code": "zero",
+        "totals": {
+          "critical": {
+            "max": 0
+          },
+          "warning": {
+            "max": 0
+          }
+        },
+        "forbid_substrings": [
+          "Security-sensitive assert stripped by -O"
+        ]
+      }
+    },
+    {
+      "id": "python-json-findings-parity",
+      "description": "--format=json must include per-finding detail (title + samples) for the python scanner, not just totals (#64).",
+      "path": "test-suite/python/security/constant_time_compare_buggy.py",
+      "language": "python",
+      "tags": [
+        "python",
+        "json",
+        "findings",
+        "issue-64"
+      ],
+      "args": [
+        "--only=python",
+        "--skip=1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23",
+        "--format=json"
+      ],
+      "expect": {
+        "exit_code": "nonzero",
+        "totals": {
+          "critical": {
+            "min": 1
+          }
+        },
+        "require_substrings": [
+          "\"findings\"",
+          "Secret, signature, or token compared with ==/!=",
+          "\"samples\""
+        ]
+      }
+    },
+    {
       "id": "python-random-security-buggy",
       "description": "Python security tokens, sessions, OTPs, and keys should not be generated with the non-cryptographic random module.",
       "path": "test-suite/python/security/random_security_buggy.py",

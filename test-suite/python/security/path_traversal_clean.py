@@ -65,3 +65,20 @@ def raw_header_open():
 def django_meta_download(request):
     name = request.META.get("HTTP_X_FILE_PATH")
     return validate_path(name).read_bytes()
+
+
+def manually_guarded_read():
+    # Issue #64 regression: an explicit hand-rolled traversal guard right
+    # before the sink must count as validation.
+    filename = request.args["name"]
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise ValueError("invalid filename")
+    with open(UPLOAD_ROOT / filename, "rb") as fh:
+        return fh.read()
+
+
+def basename_reduced_read():
+    import os
+
+    name = os.path.basename(request.args["report"])
+    return (UPLOAD_ROOT / name).read_bytes()

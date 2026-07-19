@@ -1,10 +1,10 @@
 {
   "all_language_expectation_strength_scopes": {
     "all": {
-      "buggy_cases_with_required_substrings": 142,
-      "case_count": 284,
-      "clean_cases_with_forbidden_substrings": 141,
-      "strict_zero_clean_cases": 141,
+      "buggy_cases_with_required_substrings": 143,
+      "case_count": 286,
+      "clean_cases_with_forbidden_substrings": 142,
+      "strict_zero_clean_cases": 142,
       "weak_case_count": 1,
       "weak_cases": [
         {
@@ -38,9 +38,9 @@
   },
   "clean_fuzz_budget_scopes": {
     "all": {
-      "case_count": 172,
+      "case_count": 173,
       "default_iterations": 3,
-      "default_transformed_scan_count": 516
+      "default_transformed_scan_count": 519
     },
     "campaign": {
       "case_count": 90,
@@ -117,10 +117,10 @@
       "strict_zero_clean_cases": 27
     },
     "python": {
-      "buggy_cases_with_required_substrings": 34,
-      "clean_cases_with_forbidden_substrings": 33,
-      "security_pairs": 34,
-      "strict_zero_clean_cases": 33
+      "buggy_cases_with_required_substrings": 35,
+      "clean_cases_with_forbidden_substrings": 34,
+      "security_pairs": 35,
+      "strict_zero_clean_cases": 34
     },
     "ruby": {
       "buggy_cases_with_required_substrings": 7,
@@ -305,6 +305,8 @@
           "python-archive-extraction-clean",
           "python-assert-security-buggy",
           "python-assert-security-clean",
+          "python-assert-security-tests-dir-buggy",
+          "python-assert-security-tests-dir-clean",
           "python-command-injection-buggy",
           "python-command-injection-clean",
           "python-constant-time-compare-buggy",
@@ -675,8 +677,8 @@
           "rust-type-narrowing-clean"
         ]
       },
-      "case_count": 345,
-      "transformed_scan_count": 526
+      "case_count": 347,
+      "transformed_scan_count": 528
     },
     "campaign": {
       "by_transform": {
@@ -2239,6 +2241,20 @@
       "slug": "assert_security"
     },
     {
+      "buggy_case": "python-assert-security-tests-dir-buggy",
+      "buggy_min_critical": 1,
+      "buggy_min_warning": 0,
+      "buggy_path": "test-suite/python/security/assert_tests_dir_buggy",
+      "buggy_require_count": 1,
+      "clean_case": "python-assert-security-tests-dir-clean",
+      "clean_forbid_count": 1,
+      "clean_max_critical": 0,
+      "clean_max_warning": 0,
+      "clean_path": "test-suite/python/security/assert_tests_dir_clean",
+      "language": "python",
+      "slug": "assert_tests_dir"
+    },
+    {
       "buggy_case": "python-command-injection-buggy",
       "buggy_min_critical": 1,
       "buggy_min_warning": 0,
@@ -3190,6 +3206,7 @@
         "js-typescript-window-open-noopener-clean",
         "python-archive-extraction-clean",
         "python-assert-security-clean",
+        "python-assert-security-tests-dir-clean",
         "python-command-injection-clean",
         "python-constant-time-compare-clean",
         "python-cookie-security-clean",
@@ -3444,6 +3461,8 @@
         "python-archive-extraction-clean",
         "python-assert-security-buggy",
         "python-assert-security-clean",
+        "python-assert-security-tests-dir-buggy",
+        "python-assert-security-tests-dir-clean",
         "python-command-injection-buggy",
         "python-command-injection-clean",
         "python-constant-time-compare-buggy",
@@ -4130,6 +4149,8 @@
       "python-archive-extraction-clean",
       "python-assert-security-buggy",
       "python-assert-security-clean",
+      "python-assert-security-tests-dir-buggy",
+      "python-assert-security-tests-dir-clean",
       "python-command-injection-buggy",
       "python-command-injection-clean",
       "python-constant-time-compare-buggy",

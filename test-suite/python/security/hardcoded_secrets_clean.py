@@ -48,3 +48,16 @@ display_config = {
     "THEME_VARIANT": os.getenv("THEME_VARIANT", "dark"),
     "PUBLIC_BASE_URL": os.getenv("PUBLIC_BASE_URL", "https://example.com"),
 }
+
+
+# Issue #64 regressions: secret-ish names describing non-secret metadata.
+oauth_client = dict(
+    token_uri="https://oauth2.googleapis.com/token",
+    auth_uri="https://accounts.google.com/o/oauth2/auth",
+)
+
+token_metadata = {
+    # Prose under a secret-ish key is not a credential literal.
+    "token": "issued after the OAuth flow completes",
+    "token_url": "https://example.org/oauth/token",
+}

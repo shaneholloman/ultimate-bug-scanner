@@ -49,7 +49,7 @@ declare -A MODULE_CHECKSUMS=(
   [golang]='a2507466d961932e821465de17ca10571f8be010909fb29db1d032e25a604f77'
   [java]='9d6df2d271d7c20caa97248a82ba71d4c14970dd31fc30b0b82c7902269af4a2'
   [js]='d410c8e412907be541fd748ea16234dcdaa1b7d70d8a0215beadc75c81a0587d'
-  [python]='e61c1b4885519572f8aead605fe7be5df066a5160edbbb42b6e1a3bf75f94fde'
+  [python]='396d03c96ceeb0b2fec894b4077c20d46342e7a1a62bf98ae5a2c6aa8c7173a5'
   [ruby]='0973251abcd905bb6892ede0448657f460aca67f821ccc97e60645be2a1c5447'
   [rust]='26249823d0ddd77ef86aed424dbe587ee53cb3e30c186810a5292d0dae325740'
   [swift]='abb8b2e29fa7aa735db056757e6daa4c4b6d618e3251448ed3e9855cf491e9c0'
@@ -2916,7 +2916,7 @@ run_lang(){
     json|jsonl|toon)
       prepare_metrics_dir "$metrics_dir"
       local -a report_args=()
-      if [[ "$lang" == "js" ]]; then
+      if [[ "$lang" == "js" || "$lang" == "python" ]]; then
         report_args=(--report-json="$out_findings")
       elif [[ "$lang" == "csharp" ]]; then
         report_args=(--emit-findings-json="$out_findings")

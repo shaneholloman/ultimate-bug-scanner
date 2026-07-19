@@ -119,6 +119,11 @@ UV_TOOLS=${UV_TOOLS:-"ruff,bandit,pip-audit"}      # subset via --uv-tools=
 UV_TIMEOUT="${UV_TIMEOUT:-1200}"      # generous time budget per tool
 ENABLE_EXTRA_TOOLS=1                  # mypy/safety/detect-secrets if present
 SUMMARY_JSON=""
+# Version stamp for machine-readable reports (repo VERSION file when available).
+UBS_PY_VERSION="$(cat "$(dirname "${BASH_SOURCE[0]:-$0}")/../VERSION" 2>/dev/null || echo unknown)"
+REPORT_JSON=""                        # --report-json=FILE: machine-readable findings report (#64)
+JSON_FINDINGS_TMP=""                  # scratch JSONL of findings while the scan runs
+MAX_JSON_SAMPLES=3                    # code samples captured per finding in the JSON report
 TIMEOUT_CMD=""                        # resolved later
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 AST_PASSTHROUGH=0
@@ -198,6 +203,8 @@ Options:
   --no-uv                 Disable uv-powered extra analyzers
   --uv-tools=CSV          Which uv tools to run (default: $UV_TOOLS)
   --summary-json=FILE     Also write machine-readable summary JSON
+  --report-json=FILE      Also write a machine-readable JSON findings report to FILE
+  --max-samples=N         Cap code samples per finding in the JSON report (default: 3)
   --max-detailed=N        Cap number of detailed code samples (default: $MAX_DETAILED)
   -h, --help              Show help
 Env:
@@ -229,6 +236,8 @@ while [[ $# -gt 0 ]]; do
     --no-uv)      ENABLE_UV_TOOLS=0; shift;;
     --uv-tools=*) UV_TOOLS="${1#*=}"; shift;;
     --summary-json=*) SUMMARY_JSON="${1#*=}"; shift;;
+    --report-json=*) REPORT_JSON="${1#*=}"; shift;;
+    --max-samples=*) MAX_JSON_SAMPLES="${1#*=}"; shift;;
     --max-detailed=*) MAX_DETAILED="${1#*=}"; shift;;
     -h|--help)    print_usage; exit 0;;
     *)
@@ -285,6 +294,13 @@ if [[ -n "${OUTPUT_FILE}" && "$FORMAT" == "text" && "$FORCE_COLOR" -eq 0 && "$NO
   USE_COLOR=0
 fi
 init_colors
+
+# Scratch findings log for --report-json (#64): print_finding/print_code_sample
+# append JSONL records here; the final report is assembled at the end of the run.
+if [[ -n "$REPORT_JSON" ]]; then
+  JSON_FINDINGS_TMP="$(mktemp 2>/dev/null || mktemp -t ubs-findings.XXXXXX)"
+  : > "$JSON_FINDINGS_TMP"
+fi
 
 # OUTPUT_FILE handling:
 # - text: tee full report (stdout+stderr) into OUTPUT_FILE
@@ -436,6 +452,41 @@ bump_category_count() {
   CAT_COUNTS["$CURRENT_CATEGORY"]=$(( ${CAT_COUNTS["$CURRENT_CATEGORY"]:-0} + (delta+0) ))
 }
 
+# Append a finding record to the JSONL scratch log for --report-json (#64).
+record_json_finding() {
+  [[ -n "$REPORT_JSON" && -n "$JSON_FINDINGS_TMP" ]] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$JSON_FINDINGS_TMP" "$1" "$2" "$3" "${4:-}" <<'PY' 2>/dev/null || true
+import json, sys
+tmp, severity, count, title = sys.argv[1:5]
+description = sys.argv[5] if len(sys.argv) > 5 else ""
+try:
+    count_val = int(count)
+except ValueError:
+    count_val = 0
+with open(tmp, 'a', encoding='utf-8') as fh:
+    fh.write(json.dumps({"type": "finding", "severity": severity, "count": count_val,
+                         "title": title, "description": description}, ensure_ascii=False) + '\n')
+PY
+}
+
+# Append a code-sample record (attached to the most recent finding) (#64).
+record_json_sample() {
+  [[ -n "$REPORT_JSON" && -n "$JSON_FINDINGS_TMP" ]] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$JSON_FINDINGS_TMP" "$1" "$2" "$3" <<'PY' 2>/dev/null || true
+import json, sys
+tmp, file_path, line_no, code = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+try:
+    line_val = int(line_no)
+except ValueError:
+    line_val = 0
+with open(tmp, 'a', encoding='utf-8') as fh:
+    fh.write(json.dumps({"type": "sample", "file": file_path, "line": line_val,
+                         "code": code}, ensure_ascii=False) + '\n')
+PY
+}
+
 print_finding() {
   local severity=$1
   case $severity in
@@ -445,16 +496,19 @@ print_finding() {
       #   print_finding good <count> "Message" ["Details..."]
       if [[ "${2:-}" =~ ^[0-9]+$ && -n "${3:-}" ]]; then
         local count=$2; local title=$3; local description="${4:-}"
+        record_json_finding good "$count" "$title" "$description"
         say "  ${GREEN}${CHECK} OK${RESET} ${DIM}$title${RESET} ${WHITE}($count)${RESET}"
         [ -n "$description" ] && say "    ${DIM}$description${RESET}" || true
       else
         local title=$2
+        record_json_finding good 0 "$title" ""
         say "  ${GREEN}${CHECK} OK${RESET} ${DIM}$title${RESET}"
       fi
       ;;
     *)
       local raw_count=$2; local title=$3; local description="${4:-}"
       local count; count=$(printf '%s\n' "$raw_count" | awk 'END{print $0+0}')
+      record_json_finding "$severity" "$count" "$title" "$description"
       case $severity in
         critical)
           CRITICAL_COUNT=$((CRITICAL_COUNT + count))
@@ -484,6 +538,7 @@ print_finding() {
 
 print_code_sample() {
   local file=$1; local line=$2; local code=$3
+  record_json_sample "$file" "$line" "$code"
   [[ "$QUIET" -eq 1 ]] && return 0
   # Use printf to avoid echo -e interpreting user code (e.g., "-n", "\t", "\c")
   printf '%b%s%b\n' "$GRAY" "      $file:$line" "$RESET"
@@ -4146,7 +4201,10 @@ class ConstantTimeCompareAnalyzer(ast.NodeVisitor):
         if isinstance(node, ast.Name):
             return node.id in self.sensitive_names or name_is_sensitive(node.id)
         if isinstance(node, ast.Attribute):
-            return name_is_sensitive(node.attr) or name_is_sensitive(call_name(node))
+            # Judge only the attribute being compared. Including the receiver
+            # made ORM column comparisons like `Token.user_id == user_uuid`
+            # look sensitive purely because of the model class name (#64).
+            return name_is_sensitive(node.attr)
         if isinstance(node, ast.Subscript):
             key = const_string(node.slice)
             return name_is_sensitive(key or '') or self.expr_is_sensitive(node.value)
@@ -4207,7 +4265,14 @@ class ConstantTimeCompareAnalyzer(ast.NodeVisitor):
     def visit_Compare(self, node):
         if any(isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops):
             values = [node.left] + list(node.comparators)
-            if any(self.expr_is_sensitive(value) for value in values):
+            # Comparing against a number, boolean, or None (e.g.
+            # `total_tokens == 0`) can never leak secret material through
+            # timing; only string/bytes comparisons are timing-sensitive (#64).
+            non_secret_literal = any(
+                isinstance(value, ast.Constant) and not isinstance(value.value, (str, bytes))
+                for value in values
+            )
+            if not non_secret_literal and any(self.expr_is_sensitive(value) for value in values):
                 self.remember_issue(node.lineno)
         self.generic_visit(node)
 
@@ -4264,6 +4329,10 @@ from pathlib import Path
 ROOT = Path(sys.argv[1]).resolve()
 BASE_DIR = ROOT if ROOT.is_dir() else ROOT.parent
 SKIP_DIRS = {'.git', '.venv', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.cache', 'build', 'dist'}
+# Test code uses assert as its primary idiom (pytest), and tests never run
+# under `python -O` in a way that weakens production security checks, so
+# test dirs/files are excluded from this rule by default (#64).
+TEST_DIR_NAMES = {'tests', 'test'}
 SECURITY_RE = re.compile(
     r'(auth|authori[sz]e|permission|perm|privilege|role|admin|staff|superuser|owner|tenant|account|session|csrf|xsrf|token|secret|api_?key|signature|password|passwd|jwt|bearer|credential|scope|acl|access|login|authenticated|has_?perm|can_)',
     re.IGNORECASE,
@@ -4272,13 +4341,25 @@ SECURITY_RE = re.compile(
 def should_skip(path: Path) -> bool:
     return any(part in SKIP_DIRS for part in path.parts)
 
+def is_test_path(path: Path) -> bool:
+    parts = [part.lower() for part in path.parts[:-1]]
+    if any(part in TEST_DIR_NAMES for part in parts):
+        return True
+    name = path.name.lower()
+    return name.startswith('test_') or name.endswith('_test.py') or name == 'conftest.py'
+
 def iter_files(root: Path):
     if root.is_file():
         if root.suffix.lower() in {'.py', '.pyi'}:
             yield root
         return
     for path in root.rglob('*'):
-        if path.is_file() and path.suffix.lower() in {'.py', '.pyi'} and not should_skip(path):
+        if (
+            path.is_file()
+            and path.suffix.lower() in {'.py', '.pyi'}
+            and not should_skip(path)
+            and not is_test_path(path.relative_to(root))
+        ):
             yield path
 
 def call_name(node):
@@ -5913,8 +5994,18 @@ UPLOAD_SOURCE_RE = re.compile(
 SAFE_VALIDATOR_RE = re.compile(
     r'\b(?:safe_join|secure_filename|validate_path|validate_file|validate_filename|'
     r'safe_path|safe_filename|sanitize_path|sanitize_filename|allowed_path|allowed_file|'
-    r'is_safe_path|is_safe_file|commonpath|relative_to|is_relative_to)\b',
+    r'is_safe_path|is_safe_file|commonpath|relative_to|is_relative_to|basename)\b',
     re.IGNORECASE,
+)
+# Hand-rolled traversal guards that reject '..', '/' or '\' in the value, or
+# check containment/prefixes explicitly. A handler that already rejects
+# traversal sequences right before the sink is not an open path sink (#64).
+MANUAL_GUARD_RE = re.compile(
+    r'["\'](?:\.\.|/|\\\\)["\']\s*(?:not\s+)?in\b'
+    r'|\bstartswith\s*\('
+    r'|\bnormpath\s*\('
+    r'|\brealpath\s*\('
+    r'|\.resolve\s*\('
 )
 PATH_METHODS = {'open', 'read_text', 'read_bytes', 'write_text', 'write_bytes'}
 PATH_FUNCTION_SINKS = {
@@ -6007,7 +6098,7 @@ class PathTraversalAnalyzer(ast.NodeVisitor):
             return False
         start = max(0, line_no - 12)
         context = '\n'.join(self.lines[start:line_no])
-        if not SAFE_VALIDATOR_RE.search(context):
+        if not (SAFE_VALIDATOR_RE.search(context) or MANUAL_GUARD_RE.search(context)):
             return False
         return any(re.search(rf'\b{re.escape(name)}\b', context) for name in names)
 
@@ -9026,10 +9117,13 @@ language: python
 rule:
   pattern: open($$$)
   not:
+    # A with_item ancestor means the handle is context-managed: covers
+    # `with open(...) as f:` and wrappers like `contextlib.closing(open(...))`.
+    # The old multi-line `inside: pattern:` never matched, so this rule fired
+    # on every `with open(...) as f:` too (#64).
     inside:
-      pattern: |
-        with open($$$) as $F:
-          $BODY
+      kind: with_item
+      stopBy: end
 severity: warning
 message: "open() outside of a 'with' block; risk of leaking file handles"
 YAML
@@ -10265,8 +10359,19 @@ def normalize_name(name: str) -> str:
     text = re.sub(r'[^A-Za-z0-9]+', '_', text)
     return text.lower().strip('_')
 
+# Names that mention a secret-ish word but denote non-secret metadata about
+# it: `token_uri` / `token_url` are OAuth endpoint locations, `api_key_id` is
+# an identifier, `token_count` a metric, and so on (#64).
+NON_SECRET_SUFFIX_RE = re.compile(
+    r'(?:^|_)(?:url|uri|endpoint|host|hostname|domain|path|file|filename|dir|'
+    r'name|type|kind|label|prefix|suffix|header|field|param|hint|display|'
+    r'id|count|len|length|size|ttl|timeout|expiry|expires|lifetime|max_age)$'
+)
+
 def is_sensitive_name(name: str) -> bool:
     normalized = normalize_name(name)
+    if NON_SECRET_SUFFIX_RE.search(normalized):
+        return False
     spaced = normalized.replace('_', ' ')
     return bool(SECRET_WORD_RE.search(normalized) or SECRET_WORD_RE.search(spaced) or SECRET_PHRASE_RE.search(spaced))
 
@@ -10285,6 +10390,14 @@ def looks_like_secret_literal(value: str) -> bool:
     if 'example.' in lowered or lowered.startswith(('example_', 'sample_', 'dummy_')):
         return False
     if not re.search(r'[A-Za-z0-9]', compact):
+        return False
+    # URLs are endpoint configuration, not secret material, even when the
+    # surrounding name mentions tokens (e.g. an OAuth token endpoint) (#64).
+    if '://' in compact:
+        return False
+    # Real credentials are single opaque strings; anything with internal
+    # whitespace is prose (descriptions, messages), not a secret literal.
+    if any(ch.isspace() for ch in compact):
         return False
     return True
 
@@ -11163,6 +11276,50 @@ PY
 if [[ -n "$SUMMARY_JSON" ]]; then
   emit_summary_json > "$SUMMARY_JSON" 2>/dev/null || true
   say "${DIM}Summary JSON written to: ${SUMMARY_JSON}${RESET}"
+fi
+
+# Optional machine-friendly findings report (#64): mirrors the JS module's
+# --report-json so the meta-runner can attach per-finding detail (with code
+# samples) to the combined --format=json output.
+if [[ -n "$REPORT_JSON" ]]; then
+  python3 - "$JSON_FINDINGS_TMP" "$REPORT_JSON" "$TOTAL_FILES" "$CRITICAL_COUNT" "$WARNING_COUNT" "$INFO_COUNT" "$UBS_PY_VERSION" "$MAX_JSON_SAMPLES" <<'PY' 2>/dev/null || true
+import json, sys, time
+src, out, files, crit, warn, info, ver, max_samples = sys.argv[1:9]
+try:
+    sample_cap = max(0, int(max_samples))
+except ValueError:
+    sample_cap = 3
+findings = []
+try:
+    with open(src, 'r', encoding='utf-8') as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if obj.get('type') == 'sample':
+                if findings:
+                    samples = findings[-1].setdefault('samples', [])
+                    if len(samples) < sample_cap:
+                        samples.append({'file': obj.get('file', ''),
+                                        'line': obj.get('line', 0),
+                                        'code': obj.get('code', '')})
+                continue
+            obj.pop('type', None)
+            findings.append(obj)
+except FileNotFoundError:
+    pass
+payload = {"version": ver,
+           "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "files": int(files), "critical": int(crit), "warning": int(warn),
+           "info": int(info), "findings": findings}
+open(out, 'w', encoding='utf-8').write(json.dumps(payload, ensure_ascii=False, indent=2))
+PY
+  say "${GREEN}${CHECK} JSON report saved to: ${CYAN}$REPORT_JSON${RESET}"
+  [[ -n "$JSON_FINDINGS_TMP" ]] && rm -f "$JSON_FINDINGS_TMP" 2>/dev/null || true
 fi
 
 # --format=json: emit machine-readable summary JSON to original stdout

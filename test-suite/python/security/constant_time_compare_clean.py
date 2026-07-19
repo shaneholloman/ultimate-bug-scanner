@@ -32,3 +32,17 @@ def token_length_check(token):
 
 def public_identifier_check(user_id, expected_id):
     return user_id == expected_id
+
+
+# Issue #64 regressions: non-secret comparisons that must stay clean.
+def orm_column_filter(session, Token, user_uuid):
+    # SQLAlchemy ORM expression: the receiver class name (Token) must not
+    # make a non-secret column comparison look timing-sensitive.
+    return session.query(Token).filter(Token.user_id == user_uuid).all()
+
+
+def token_budget_check(total_tokens):
+    # Comparing a count against a number can never leak secret material.
+    if total_tokens == 0:
+        return "empty"
+    return "has budget"
